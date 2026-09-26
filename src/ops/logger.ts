@@ -24,7 +24,14 @@ const PII_KEYS = ['text', 'caption', 'first_name', 'last_name', 'username'];
  * `*.<SECRET_KEY>` entries below are kept in `redact.paths` too, as
  * defense-in-depth for any shape `stripSecrets` might miss.
  */
-const SECRET_KEYS = ['TELEGRAM_BOT_TOKEN', 'OPENROUTER_API_KEY', 'TYPESAFE_API_KEY', 'authorization', 'token', 'apiKey'];
+const SECRET_KEYS = [
+  'TELEGRAM_BOT_TOKEN',
+  'OPENROUTER_API_KEY',
+  'TYPESAFE_API_KEY',
+  'authorization',
+  'token',
+  'apiKey',
+];
 
 const redactPaths = [
   ...REDACT_DEPTHS.flatMap((prefix) => PII_KEYS.map((key) => `${prefix}${key}`)),

@@ -33,7 +33,8 @@ describe('logger redaction', () => {
       'incoming',
     );
     const out = lines.join('');
-    for (const s of ['СЕКРЕТ', 'Анна', 'Петрова', 'anna_p', 'TOKEN', 'sk-or-KEY', 'XYZ']) expect(out).not.toContain(s);
+    for (const s of ['СЕКРЕТ', 'Анна', 'Петрова', 'anna_p', 'TOKEN', 'sk-or-KEY', 'XYZ'])
+      expect(out).not.toContain(s);
     expect(out).toContain('"chatId":42');
     expect(out).toContain('[REDACTED]');
   });
