@@ -25,6 +25,19 @@ function formatContext(context: Record<string, unknown>): string {
   return entries.map(([key, value]) => `${escapeHtml(key)}=${escapeHtml(String(value))}`).join(', ');
 }
 
+/** "1ч 02мин 03с" — a short, fixed-order duration for `/admin`'s uptime line. */
+function formatUptime(totalSeconds: number): string {
+  const seconds = Math.max(0, Math.round(totalSeconds));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = seconds % 60;
+  const parts: string[] = [];
+  if (hours > 0) parts.push(`${hours}ч`);
+  if (hours > 0 || minutes > 0) parts.push(`${minutes}мин`);
+  parts.push(`${secs}с`);
+  return parts.join(' ');
+}
+
 export const texts = {
   errors: {
     /**
@@ -52,6 +65,42 @@ export const texts = {
         lines.push(`Повторилось ${repeatCount} ${pluralizeRaz(repeatCount)}.`);
       }
       return lines.join('\n');
+    },
+    /** A short, apologetic reply to the user whose action triggered an error the bot has already reported. */
+    userFacing: 'Что-то пошло не так. Мы уже разбираемся, попробуйте, пожалуйста, ещё раз чуть позже.',
+  },
+  common: {
+    /** Sent when a user without the required role invokes a restricted command or callback. */
+    forbidden: 'У вас нет доступа к этой команде.',
+  },
+  start: {
+    /** `/start`/`/help` response for a recognized superadmin. */
+    superadmin(): string {
+      return [
+        '👋 Здравствуйте! Я — Секретарь школы.',
+        'Слежу за рабочими группами, нахожу поручения и договорённости и веду список задач.',
+        '',
+        'Доступные команды:',
+        '/admin — панель администратора',
+        '/help — эта справка',
+      ].join('\n');
+    },
+    /** `/start`/`/help` response for anyone the bot does not yet recognize (no owner/member concept before phase 1). */
+    stranger(): string {
+      return (
+        'Этот бот работает для сотрудников школы французского языка и настраивается её руководителем. ' +
+        'Если вы сотрудник и должны иметь доступ, обратитесь, пожалуйста, к руководителю школы.'
+      );
+    },
+  },
+  admin: {
+    /** `/admin` panel for a superadmin: build version and elapsed process uptime. */
+    panel(gitSha: string, uptimeSec: number): string {
+      return [
+        '🛠 Панель администратора',
+        `Версия: <code>${escapeHtml(gitSha)}</code>`,
+        `Аптайм: ${formatUptime(uptimeSec)}`,
+      ].join('\n');
     },
   },
 };

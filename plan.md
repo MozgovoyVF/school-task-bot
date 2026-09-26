@@ -95,6 +95,7 @@
 | D28 | Имя участника по умолчанию | `memberships.display_name` по умолчанию — **первое слово** `first_name`. В Telegram в `first_name` часто пишут имя с фамилией, а фамилии в LLM не передаются (SPEC §19.3.2). Owner может поменять имя в `/people`. | принято |
 | D29 | Пояс в сроках (SPEC §10.9) | Время всегда показывается в поясе получателя. Если пояс получателя отличается от пояса автора срока (`tasks.due_tz`), к нему добавляется метка пояса получателя: `пт, 25 сен, 20:00 (МСК+2)`. У all-day сроков метки нет. | принято |
 | D30 | `TickerDeps` → `AppDeps` (Task 0.6/0.8) | `AppDeps` ещё не существует до Task 0.8 (`src/deps.ts`), поэтому `Job`/`createTicker`/`dailyJob` в Task 0.6 типизированы против локального `TickerDeps` (`src/scheduler/ticker.ts`): `{ db: Db; clock: Clock; logger: Logger; errors: ErrorReporter }`. `Job.run` объявлен через method-shorthand (`run(deps: TickerDeps): Promise<void>`), как и в зафиксированном контракте, — у method-shorthand в интерфейсе bivariant-проверка параметров, что упрощает совместимость с будущими job из фаз 3+, типизированными против настоящего `AppDeps`. Когда в Task 0.8 появится реальный `AppDeps` (надмножество `TickerDeps`), нужно заменить `TickerDeps` на `AppDeps` прямо в `ticker.ts`/`daily.ts` (тип-only замена, поведение не меняется). `dailyJob`'s колбэк `run: (deps: TickerDeps) => Promise<void>` — это function-type, а не method-shorthand, поэтому строго контравариантен (`strictFunctionTypes`): функции, явно типизированные под будущий `AppDeps`, не подойдут туда, пока Task 0.8 не поменяет тип параметра на `AppDeps`. | принято |
+| D31 | `Actor`/`Role` локально в `src/bot/context.ts` (Task 0.7/phase 1) | `src/domain/people/permissions.ts` (где по зафиксированному контракту живут настоящие `Actor`/`Role` и `can()`) не существует до фазы 1 (plan.md ~строка 1019). Поэтому в Task 0.7 `Role`/`Actor` объявлены локально в `src/bot/context.ts`, дословно повторяя зафиксированную форму (`Role = 'owner' \| 'member'`; `Actor = { userId, isSuperadmin, role, dmStarted }`), и `BotContext.state.actor` типизирован против них. `src/bot/middleware/context.ts` (упирается только в `config.SUPERADMIN_TG_IDS`) заполняет `actor.userId`/`actor.isSuperadmin`/`actor.dmStarted` по `users`, а `actor.role`, `state.membership`, `state.workspace` остаются `null` — в фазе 0 нет резолюции workspace/membership. Также в `src/bot/handlers/admin.ts` объявлен `AdminHandlersDeps = Pick<Env,'GIT_SHA'> & { clock: Clock }` и в `src/bot/middleware/context.ts` — `ContextMiddlewareDeps`, чтобы не тянуть в них весь `BotDeps`/будущий `AppDeps`. Когда в фазе 1 появится `permissions.ts`, нужно: удалить блок `Role`/`Actor` из `context.ts` и импортировать их оттуда; заменить вычисление `actor.role` в `context.ts` на резолюцию через `can()`/членство; ничего в `bot.ts`, `handlers/`, `views/` менять не нужно — они используют только `Actor`/`BotContext` по имени. | принято |
 
 ## Контрольные точки пользователя (👤)
 
@@ -768,19 +769,19 @@ describe('fingerprint', () => {
   - фабрики апдейтов: `dmText(from: TgUserLike, text)`, `groupText(chat: TgChatLike, from, text, extra?)`, `callback(from, data, message?)`, `botAdded(chat, by)`, `botRemoved(chat, by)`, `editedGroupText(...)`, `forwardedDm(...)`.
 - Harness: `bot.api.config.use(transformer)` записывает вызов и возвращает фейковый ответ (`sendMessage` → `{ message_id: n++ … }`, остальные → `true`). `botInfo` задаётся вручную, `getMe` не вызывается. Сверить через Context7 → grammY (transformers, `handleUpdate`, `botInfo`).
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
   - `/start` от superadmin: в ответе справка superadmin, в `users` у пользователя проставлен `dm_started_at`.
   - `/start` от незнакомца: нейтральный текст `texts.start.stranger` («Этот бот работает для сотрудников школы…»).
   - `/admin` от не-superadmin → `texts.common.forbidden`. От superadmin → версия (`GIT_SHA`) и аптайм.
   - Скрытая команда `/testerror` (только superadmin; кнопок нет, потому что кодек callback появляется в 1.3) → обработчик бросает `new Error('Test error from /testerror')` → `FakeMessenger` получает отчёт для superadmin, пользователь получает `texts.errors.userFacing`. От не-superadmin команда игнорируется.
   - `toMessengerError`: `GrammyError` 403 → `forbidden`; 429 с `retry_after: 5` → `rate_limited`, `retryAfterSec=5`; 400 `message is not modified` → `edit()` не бросает; 400 `chat not found` → `not_found`; `HttpError` → `network`.
-- [ ] **Шаг 2:** FAIL.
-- [ ] **Шаг 3: реализация.**
+- [x] **Шаг 2:** FAIL.
+- [x] **Шаг 3: реализация.**
   - `bot.ts`: `new Bot<BotContext>(token, { botInfo })`; `api.config.use(autoRetry())`, `api.config.use(apiThrottler())`; дальше middleware: errors → context → conversations() → handlers. `bot.catch` направляет ошибки в `deps.errors.report(err, { updateId })`.
   - `context.ts` (фаза 0): upsert пользователя из `ctx.from`, `actor.isSuperadmin` вычисляется по `config.SUPERADMIN_TG_IDS`.
   - Тексты — в `texts/ru.ts` в виде объекта функций, например `texts.start.owner(name)`.
-- [ ] **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(bot): add bot skeleton with start, help, admin and error reporting`.
+- [x] **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(bot): add bot skeleton with start, help, admin and error reporting`.
 
 ### Task 0.8: Composition root, graceful shutdown, Docker
 
