@@ -1,4 +1,23 @@
 services:
+  app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: deps
+    working_dir: /app
+    env_file: ../.env
+    environment:
+      DATABASE_URL: postgres://stb:stb@db:5432/stb
+    ports:
+      - '${HTTP_PORT:-3000}:3000'
+    volumes:
+      - ..:/app
+      - /app/node_modules
+    command: pnpm dev
+    depends_on:
+      db:
+        condition: service_healthy
+
   db:
     image: postgres:17
     environment:

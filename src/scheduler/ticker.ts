@@ -1,29 +1,12 @@
-import type { Db } from '../db/client.js';
-import type { Clock } from '../time/clock.js';
-import type { Logger } from '../ops/logger.js';
-import type { ErrorReporter } from '../ops/errorReporter.js';
+import type { AppDeps } from '../deps.js';
 import { setState } from '../domain/system/appState.js';
 import { TICK_INTERVAL_MS } from '../config/constants.js';
 
 const HEARTBEAT_KEY = 'ticker:heartbeat';
 
-/**
- * The subset of the eventual `AppDeps` (Task 0.8, `src/deps.ts`) that the
- * ticker/job/health-endpoint code actually needs. `AppDeps` is not built yet
- * (this task runs before 0.8), so `Job`/`createTicker` are typed against this
- * narrower shape for now — see the Task 0.6 report for how 0.8 should
- * reconcile it with the real `AppDeps`.
- */
-export interface TickerDeps {
-  db: Db;
-  clock: Clock;
-  logger: Logger;
-  errors: ErrorReporter;
-}
-
 export interface Job {
   name: string;
-  run(deps: TickerDeps): Promise<void>;
+  run(deps: AppDeps): Promise<void>;
 }
 
 export interface Ticker {
@@ -40,7 +23,7 @@ export interface Ticker {
  * chaining rather than `setInterval`: the next tick is only scheduled once
  * the current one has fully finished, so ticks never overlap.
  */
-export function createTicker(deps: TickerDeps, jobs: Job[], opts?: { intervalMs?: number }): Ticker {
+export function createTicker(deps: AppDeps, jobs: Job[], opts?: { intervalMs?: number }): Ticker {
   const intervalMs = opts?.intervalMs ?? TICK_INTERVAL_MS;
 
   let heartbeat: Date | null = null;

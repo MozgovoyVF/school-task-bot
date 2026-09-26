@@ -1,6 +1,7 @@
 import { z } from 'zod';
+import type { AppDeps } from '../deps.js';
 import { getState, setState } from '../domain/system/appState.js';
-import type { Job, TickerDeps } from './ticker.js';
+import type { Job } from './ticker.js';
 
 const DailyStateSchema = z.object({ lastRunDate: z.string() });
 
@@ -26,11 +27,11 @@ function timeHasPassed(now: Date, atUtc: string): boolean {
  * is retried on the next tick — matching the project's recall-first bias
  * (CLAUDE.md §1: a missed job is worse than a late one).
  */
-export function dailyJob(name: string, atUtc: string, run: (deps: TickerDeps) => Promise<void>): Job {
+export function dailyJob(name: string, atUtc: string, run: (deps: AppDeps) => Promise<void>): Job {
   const stateKey = `daily:${name}`;
   return {
     name,
-    async run(deps: TickerDeps) {
+    async run(deps: AppDeps) {
       const now = deps.clock.now();
       if (!timeHasPassed(now, atUtc)) return;
 

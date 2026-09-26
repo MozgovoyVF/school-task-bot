@@ -1,0 +1,42 @@
+services:
+  app:
+    image: ghcr.io/mozgovoyvf/school-task-bot:${APP_TAG:-latest}
+    env_file: ../.env
+    ports:
+      - '127.0.0.1:${HTTP_PORT:-3000}:3000'
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'
+
+  db:
+    image: postgres:17
+    # `env_file` (not top-level `${VAR}` substitution) so POSTGRES_* reliably come from the
+    # repo-root `.env` regardless of the directory `docker compose` happens to be invoked from
+    # (compose's own `${VAR}` substitution only auto-loads a `.env` from its *project* directory,
+    # which isn't necessarily this file's directory or the repo root — `env_file` has no such
+    # ambiguity, it is always resolved relative to this compose file, same as `app`'s above).
+    env_file: ../.env
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # `$$` escapes compose's own substitution, so `pg_isready` reads `POSTGRES_USER`/`POSTGRES_DB`
+      # from the *container's* environment (set via `env_file` above) at healthcheck time instead.
+      test: ['CMD-SHELL', 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'
+
+volumes:
+  pgdata:

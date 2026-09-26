@@ -2,20 +2,30 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { z } from 'zod';
 import { getTestDb, truncateAll } from '../../helpers/db.js';
 import { fixedClock } from '../../helpers/clock.js';
+import { loadEnv } from '../../../src/config/env.js';
 import { createLogger } from '../../../src/ops/logger.js';
 import { getState } from '../../../src/domain/system/appState.js';
 import { createTicker, type Job } from '../../../src/scheduler/ticker.js';
 import { dailyJob } from '../../../src/scheduler/daily.js';
+import { FakeMessenger } from '../../helpers/fakeMessenger.js';
 
 const db = getTestDb();
 beforeEach(() => truncateAll(db));
 
-// No explicit return type here: annotating it as `TickerDeps` would widen `errors`'s vi.fn mocks
+const DEFAULT_TEST_DATABASE_URL = 'postgres://stb:stb@localhost:5433/stb_test';
+
+// No explicit return type here: annotating it as `AppDeps` would widen `errors`'s vi.fn mocks
 // to the interface's method-shorthand signatures, which trips `@typescript-eslint/unbound-method`
-// on `deps.errors.report` below. Left inferred, `deps` still structurally satisfies `TickerDeps`
+// on `deps.errors.report` below. Left inferred, `deps` still structurally satisfies `AppDeps`
 // wherever it's passed (e.g. `createTicker(deps, ...)`).
 function makeDeps(clock: ReturnType<typeof fixedClock> = fixedClock('2026-09-23T12:00:00Z')) {
   return {
+    config: loadEnv({
+      TELEGRAM_BOT_TOKEN: 'test-token:ABC',
+      DATABASE_URL: process.env.TEST_DATABASE_URL ?? DEFAULT_TEST_DATABASE_URL,
+      SUPERADMIN_TG_IDS: '900000001',
+      GIT_SHA: 'test-sha',
+    }),
     db,
     clock,
     logger: createLogger({ level: 'silent' }),
@@ -23,6 +33,9 @@ function makeDeps(clock: ReturnType<typeof fixedClock> = fixedClock('2026-09-23T
       report: vi.fn(() => Promise.resolve()),
       alert: vi.fn(() => Promise.resolve()),
     },
+    messenger: new FakeMessenger(),
+    ai: null,
+    taskHooks: [],
   };
 }
 
