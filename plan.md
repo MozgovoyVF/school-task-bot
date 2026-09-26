@@ -182,8 +182,8 @@ export interface TaskHook { name: string; afterChange(tx: Tx, task: TaskRow | nu
 **Интерфейсы:**
 - Produces: `findForbiddenCyrillic(files: Array<{ path: string; content: string }>): string[]` — пути файлов с кириллицей вне разрешённых (`src/bot/texts/ru.ts`, `src/config/constants.ts`).
 
-- [ ] **Шаг 1 (👤):** проверить `node -v` (ожидается `v24.x`) и `pnpm -v` (ожидается `12.6.0`, установлен через `npm i -g pnpm@12.6.0`). Подтвердить создание публичного репозитория `MozgovoyVF/school-task-bot`.
-- [ ] **Шаг 2: git и начальный коммит в `main`** (выполняет основная сессия до запуска оркестратора: навыку субагентов нужен уже существующий репозиторий)
+- [x] **Шаг 1 (👤):** проверить `node -v` (ожидается `v24.x`) и `pnpm -v` (ожидается `12.6.0`, установлен через `npm i -g pnpm@12.6.0`). Подтвердить создание публичного репозитория `MozgovoyVF/school-task-bot`.
+- [x] **Шаг 2: git и начальный коммит в `main`** (выполняет основная сессия до запуска оркестратора: навыку субагентов нужен уже существующий репозиторий)
 
 ```bash
 git init -b main
