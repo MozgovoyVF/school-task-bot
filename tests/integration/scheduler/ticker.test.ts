@@ -124,12 +124,14 @@ describe('createTicker', () => {
     expect(runs).toBeGreaterThanOrEqual(2);
   });
 
-  it('stop() waits for an in-flight tick to finish before resolving', async () => {
+  it('stop() waits for an in-flight tick to finish before resolving, and a second stop() is a no-op', async () => {
     const deps = makeDeps();
     let finished = false;
+    let runs = 0;
     const job: Job = {
       name: 'slow',
       async run() {
+        runs += 1;
         await delay(50);
         finished = true;
       },
@@ -139,6 +141,10 @@ describe('createTicker', () => {
     ticker.start();
     await delay(5); // let the first tick begin
     await ticker.stop();
+
+    const runsAfterFirstStop = runs;
+    await expect(ticker.stop()).resolves.toBeUndefined();
+    expect(runs).toBe(runsAfterFirstStop); // the second stop() didn't trigger another tick
 
     expect(finished).toBe(true);
   });
