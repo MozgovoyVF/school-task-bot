@@ -1,0 +1,2970 @@
+
+# School Task Bot — план реализации
+
+> **Для агентов-исполнителей:** ОБЯЗАТЕЛЬНЫЙ НАВЫК — `superpowers:subagent-driven-development` (рекомендуется) или `superpowers:executing-plans`. План выполняется задача за задачей. Шаги оформлены чекбоксами (`- [ ]`); выполненный шаг отмечается `- [x]` в том же коммите, что и код.
+
+**Цель:** Telegram-бот «Секретарь школы». Он читает рабочие группы, с помощью LLM находит задачи и договорённости, присылает руководителю карточки-предложения, ведёт задачи, напоминания и утреннюю сводку (SPEC §1).
+
+**Архитектура:** один Node-процесс: grammY (long polling), ticker-планировщик на таблицах Postgres и Fastify `/healthz`. PostgreSQL 17 — единственное хранилище: буфер сообщений, очереди batch и уведомлений, outbox карточек. AI-пайплайн: эвристика → [префильтр] → extractor (OpenRouter, structured output) → zod → разрешение ссылок и сроков → policy → dedup → proposals.
+
+**Стек:** Node.js 24 LTS, TypeScript 5.9 (strict, ESM), pnpm, grammY + runner, conversations v2, auto-retry, transformer-throttler, PostgreSQL 17 + pg_trgm, Drizzle ORM + postgres.js, zod v4, openai SDK → OpenRouter, luxon, Fastify 5, pino, vitest, eslint + prettier, Docker Compose, GitHub Actions + GHCR.
+
+**Спецификация:** `SPEC.md` (v1.0, 2026-09-26). План опирается на спецификацию, ссылки даются в виде «SPEC §9.6». Правила работы агентов — в `CLAUDE.md`.
+
+**Репозиторий:** `github.com/MozgovoyVF/school-task-bot` (публичный). Корень репозитория — текущая папка проекта.
+
+---
+
+## Как пользоваться планом
+
+1. **Фазы строго по порядку** (SPEC §0.1, §22). Фазы 0–3 (MVP) расписаны до уровня задач с интерфейсами и тест-кейсами. Фаза 4 расписана задачами. Фазы 5–7 закрыты гейтами: прототип, отдельная спецификация, отдельное решение.
+2. **Перед началом фазы** исполнитель перечитывает её раздел и соответствующие разделы SPEC и при необходимости уточняет задачи (SPEC §0.2). Правки плана коммитятся отдельно: `docs(plan): …`.
+3. **Git-процесс** (решение пользователя): ветка `phase-<N>-<slug>` на фазу. **После каждой задачи — коммит и `git push` в ветку фазы.** В конце фазы — PR в `main` с зелёным CI. Мерж через `gh pr merge --merge` делается только после подтверждения пользователя.
+4. **Каждая задача** — это один цикл TDD: падающий тест → реализация → зелёный `pnpm lint && pnpm typecheck && pnpm test` → коммит → push.
+5. **Context7 обязателен** (решение пользователя): прежде чем писать код с библиотекой, сверь её API через Context7 (`CLAUDE.md` §5). Библиотечный код в плане — эскиз намерения, а не точная сигнатура. Тест-кейсы и интерфейсы — договорённость между задачами, их не меняют без правки плана.
+6. **Тест-кейсы в задачах** — обязательный минимум. Дополнительные тесты приветствуются.
+7. Шаги с пометкой **👤** выполняет пользователь (аккаунты, деньги, сервер, юрист, iPhone). Агент готовит точную инструкцию и ждёт подтверждения.
+8. **Исполнение через субагентов** (выбор пользователя, с экономией лимитов подписки). Основная сессия запускает одного субагента `stb-orchestrator` (Sonnet, effort `high`) **на одну фазу**. Оркестратор ведёт `superpowers:subagent-driven-development` и для каждой задачи вызывает `stb-implementer` (Sonnet, `high`), затем `stb-reviewer` (Sonnet, `high`). Opus подключается для ревью рискованных задач (1.5, 2.9, 2.10, 2.12, 2.13, 3.1, 3.2, 3.3, 3.12), для раундов исправлений 4–5 и для финального ревью фазы. Описания агентов лежат в `.claude/agents/`, модель и effort там заданы явно, чтобы субагенты не унаследовали дорогие настройки основной сессии. Оркестратор останавливается (`NEEDS_USER`) на шагах 👤, на решениях D6/D7/D11/D12, на мерже и деплое.
+
+## Глобальные ограничения
+
+Каждая задача неявно включает все пункты ниже.
+
+- Node.js **24 LTS**, TypeScript **5.x** (`~5.9.3`; не 7.x), `strict` + `noUncheckedIndexedAccess`, ESM, pnpm (SPEC §4).
+- Без `any`. Исключение допускается только с комментарием-причиной (SPEC §0.4).
+- Все внешние данные проходят через **zod**: env, ответы LLM, HTTP, `callback_data`, `jsonb` (SPEC §0.4).
+- В БД время хранится только в UTC (`timestamptz`), часовые пояса обрабатываются только через **luxon** (SPEC §0.4). Текущее время берётся только из `Clock` (`CLAUDE.md` §8).
+- Все тексты для пользователя лежат в `src/bot/texts/ru.ts`. Они вежливые, короткие, на «вы» (SPEC §0.4, §29).
+- Тексты сообщений пользователей не логируются на уровне `info` и выше (SPEC §0.4, §18).
+- Зависимости берутся только из SPEC §4 и списка dev-инструментов в `CLAUDE.md` §6. Для новых нужен запрос пользователю.
+- Реальные вызовы LLM в тестах и CI запрещены, используются только fixtures (SPEC §0.5).
+- `callback_data` не длиннее 64 байт, формат `v1:<entity>:<action>:<id>[:<arg>]` (SPEC §25).
+- Права проверяются по БД на каждом callback и каждой команде (SPEC §3).
+- Recall важнее precision: «пропуск задачи хуже ложного срабатывания» (SPEC §1.3).
+- Ticker срабатывает каждые **20 с**. Batch по умолчанию: `quietSeconds=180`, `maxMessages=25`, `maxWaitSeconds=600`. Backoff **1, 5, 15 мин**, не более **5 попыток** (SPEC §8).
+- LLM: температура 0. Дневной бюджет `LLM_DAILY_BUDGET_USD` по умолчанию **1.0** (SPEC §9.2).
+- Тексты сообщений хранятся **30 дней** (`retention.messageDays`) (SPEC §19.3).
+- Покрытие `src/domain/**` и `src/ai/pipeline/**` — не ниже **80%** (SPEC §28).
+- Карточка proposal приходит не позднее `quietSeconds + 60 с` после последнего сообщения пачки. RAM не больше **300 МБ**. Стоимость LLM — не больше **$5/мес** при 500 сообщениях в день (SPEC §29).
+- Код, идентификаторы и коммиты — на английском. Интерфейс — на русском (SPEC, шапка).
+- Репозиторий публичный: никаких секретов, реальных ПД, экспортов чатов и дампов (`CLAUDE.md` §10).
+
+## Фокус ревью
+
+Пять классов входных данных и сбоев, которые спецификация подразумевает, но легко упустить. Тест на каждый добавлен в задачу-владельца.
+
+1. **Перезапуск или падение посреди работы** — после ответа LLM до записи, после записи до отправки карточки, посреди рассылки напоминаний. Ожидание: ничего не теряется и не дублируется (кроме допустимой at-least-once пересылки одной карточки). Тесты: 2.10 (транзакция batch, возврат зависших `running`), 2.12 (outbox), 3.3 (`SKIP LOCKED`, `dedupe_key`).
+2. **Устаревшие и чужие кнопки.** Повторное нажатие «Создать», нажатие после передачи владения, кнопки удалённой задачи, Member нажимает кнопку Owner из пересланной карточки. Ожидание: «Уже обработано» или «Недостаточно прав», без дублей и падений. Тесты: 2.13, 3.6, 3.9.
+3. **Часовые пояса и края календаря.** Owner в другом поясе, DST, «до конца недели» в пятницу вечером и в выходные, переход через год, all-day, срок в прошлом, несуществующая дата `2026-02-30`. Тесты: 2.5, 3.1, 3.5.
+4. **Грязный ввод Telegram:** `<`, `&` в тексте (HTML-режим), тексты длиннее 4096 символов в карточках и сводке, подписи медиа, пересылки от скрытых пользователей, форумные темы, миграция group → supergroup, правки сообщений, спецсимволы `%` и `_` в `/search`. Тесты: 1.7, 1.8, 2.11, 3.5, 3.8.
+5. **Мусор от LLM:** невалидный JSON, ссылки, которых не было во входе, больше 20 действий, пустой ответ, таймаут, исполнитель не из списка, дата не того года. Ожидание: без падения и без потери сообщений (они остаются `pending` до успешного анализа). Тесты: 2.4, 2.6, 2.9, 2.10.
+
+## Решения и интерпретации
+
+Технические решения и трактовки неоднозначных мест SPEC. Пункты со статусом **«решаем при подходе к Task X»** пользователь решил обсуждать по ходу работы: перед указанной задачей оркестратор останавливается, возвращает `NEEDS_USER` и продолжает только после ответа. Остальные решения приняты.
+
+| № | Тема | Решение | Статус |
+|---|---|---|---|
+| D1 | Репозиторий | Текущая папка — корень репозитория. GitHub `MozgovoyVF/school-task-bot`, **public** (выбор пользователя, чтобы на бесплатном тарифе работала защита `main`). | принято |
+| D2 | Git | Ветка на фазу. После каждой задачи — commit и push. PR в конце фазы, мерж `--merge` после подтверждения пользователя. | принято |
+| D3 | TypeScript | `~5.9.3`: SPEC §4 требует 5.x, typescript-eslint поддерживает `<6.1`. | принято |
+| D4 | Схема LLM | Локальная zod-схема — дословно из SPEC §9.5. Для провайдера строится отдельная wire-схема: `nullable` вместо `optional`, все поля `required`, `additionalProperties:false`. Если провайдер отвергает `pattern`, эти ограничения из wire-схемы убираются. Результат всегда проверяется локальной схемой. | принято |
+| D5 | Добавления к схеме SPEC §6 (только технические) | `messages.reply_to_quote text null` (SPEC §7.2 требует хранить цитату, но колонки нет) · `analysis_batches.next_attempt_at timestamptz null` (backoff) · `analysis_batches.chat_id` nullable плюс `analysis_batches.kind enum('auto','manual','reanalyze')`: ручные вызовы LLM тоже учитываются в стоимости и бюджете · `proposals.notified_at timestamptz null` (outbox карточек) · `proposals.chat_id` nullable (черновики из DM) · `chats.pending_since timestamptz null` (72 ч) · `tasks.assignee_all boolean default false` (исполнитель «Всем») · `tasks.created_by_user_id` nullable (обезличивание) · `claim_codes.previous_owner_action enum('demote','remove')` · таблица `app_state(key text pk, value jsonb, updated_at)`: heartbeat, отметки ежедневных job, счётчик подряд идущих ошибок LLM, отметки оповещений | принято |
+| D6 | `dedupe_key` уведомлений | `task:{id}:v{version}:{kind}:{recipient}:{fire_date}`: к формату SPEC §13.2 добавлена версия задачи. Без неё перенос срока в пределах того же дня упирается в уже отправленное напоминание. Для сводки: `summary:{workspace}:{recipient}:{date}`, для snooze: `snooze:{task}:{recipient}:{fireAtISO}`. | **решаем при подходе к Task 3.1** |
+| D7 | Планирование уведомлений | Уведомления с моментом отправки в прошлом не создаются. Создаётся только ближайший `overdue`, следующий job добавляет после отправки (цепочка), пока задача не закрыта. Для срока со временем первый `overdue` — ближайшее `overdueTime` строго после срока, возможно в тот же день (буквально по SPEC §13.2). Для all-day — со следующего дня. | **решаем при подходе к Task 3.1** |
+| D8 | `pre_due` для срока со временем | Условие «до срока > 24 ч» проверяется в момент планирования: при создании задачи и при каждом изменении срока. | принято |
+| D9 | Review | Owner продолжает получать напоминания по задаче с `review_pending=true`. Исключается только исполнитель (SPEC §13.2). | принято |
+| D10 | Тихие часы | Проверяются в поясе получателя. `weekdays` — ISO 1..7 (пн..вс). Окна могут переходить через полночь, `dateRanges` включительны. Подавленные `pre_due`, `overdue` и `summary` получают `status='cancelled'` и `last_error='quiet'`, цепочка `overdue` при этом продолжается. Карточки, созданные в тихий период, после его окончания приходят одним сообщением «За время тишины найдено N предложений». | принято |
+| D11 | Истечение proposals | Ежедневная job переводит в `expired` предложения старше `ai.proposalExpiryDays` (7) дней. До этого они видны в `/inbox` и сводке. Фраза SPEC §11.2 «не истекают автоматически» трактуется как «не исчезают раньше срока». | **решаем при подходе к Task 2.15** |
+| D12 | `paused` и `analysis_enabled=false` | Оба выключают сохранение сообщений (SPEC §7.2). Разница: при `paused` бот игнорирует чат полностью, включая `/task`. При `analysis_enabled=false` `/task` продолжает работать. | **решаем при подходе к Task 1.8** |
+| D13 | Бюджет LLM | «Сутки» — календарный день в `DEFAULT_TIMEZONE`. Расход — сумма `analysis_batches.cost_usd` за день, включая ручные вызовы. При превышении ручные команды продолжают работать (SPEC §9.2). | принято |
+| D14 | Superadmin «связанный с workspace» (SPEC §15.1) | В MVP один workspace `default`, superadmin считается связанным с ним. Если workspace два и больше, чат, добавленный superadmin, становится `pending`. | принято |
+| D15 | 72 ч для pending-чата | Отсчёт идёт от `pending_since`. Метка ставится, когда запрос на разрешение отправлен Owner. Пока Owner нет, чат ждёт без таймера. После `/claim` бот рассылает запросы по всем pending-чатам. | принято |
+| D16 | Хранение диалогов | conversations v2 хранит состояние в памяти процесса. Перезапуск прерывает незавершённый диалог, данные proposal и задачи не теряются. Таймаут — 10 мин. | принято |
+| D17 | Формат дат | Собственные массивы: `пн…вс`, `янв, фев, мар, апр, мая, июн, июл, авг, сен, окт, ноя, дек` (без точки, без зависимости от ICU). Пояс показывается как `МСК`, `МСК+2` для поясов РФ и `UTC+1` для остальных. | принято |
+| D18 | Пересылки в DM | Пересланные сообщения от одного пользователя, пришедшие с интервалом до 3 с, собираются в один черновик (буфер в памяти). | принято |
+| D19 | Ручной режим extractor | `/task`, свободный текст и пересылки идут через дополнение промпта `prompts/extractor.single.v1.md` («ровно одна задача», порог не применяется). Если модель не вернула действие, создаётся черновик с названием из первых 80 символов текста. | принято |
+| D20 | Отпечаток ошибки | Тип + сообщение (последовательности цифр заменяются на `#`) + верхний кадр стека. После отправки отчёта счётчик сбрасывается: «повторилось N раз». | принято |
+| D21 | Версия | Build-arg `GIT_SHA` превращается в env `GIT_SHA` (показывается в `/admin`, по умолчанию `dev`). | принято |
+| D22 | Сборка | `tsc` собирает в `dist/`. `rootDir` — корень репозитория, чтобы собирались и `scripts/`, и `eval/`. Запуск: `node dist/src/index.js`. Промпты и миграции копируются в образ как файлы. | принято |
+| D23 | Быстрые сроки в меню | `Сегодня`, `Завтра`, `Пт`, `След. пн` дают all-day срок на эту дату. `Пт` в пятницу означает сегодня, в субботу и воскресенье — следующую пятницу. | принято |
+| D24 | Цвет строки списка | Приоритет значков: 🟣 на проверке > 🔴 просрочено > 🔵 в работе > 🟡 сегодня > ⚪ позже или без срока. | принято |
+| D25 | Уведомление в чате | Метка `notice_sent_at` сбрасывается, когда бота удаляют из чата: при повторном добавлении уведомление публикуется снова. | принято |
+| D26 | Форумные темы | `reply_to_message` на служебное сообщение создания темы не считается ответом. | принято |
+| D27 | Промпт | Файл промпта делится маркером `<!-- DATA -->`: выше — system (инструкции и профиль, стабильный префикс для кеширования), ниже — шаблон user-сообщения с данными. Few-shot идут парами user/assistant между ними. Содержание — черновик SPEC §9.9. Изменение промпта после первого eval — это новый файл версии (`extractor.v2.md`), старый не правится. | принято |
+| D28 | Имя участника по умолчанию | `memberships.display_name` по умолчанию — **первое слово** `first_name`. В Telegram в `first_name` часто пишут имя с фамилией, а фамилии в LLM не передаются (SPEC §19.3.2). Owner может поменять имя в `/people`. | принято |
+| D29 | Пояс в сроках (SPEC §10.9) | Время всегда показывается в поясе получателя. Если пояс получателя отличается от пояса автора срока (`tasks.due_tz`), к нему добавляется метка пояса получателя: `пт, 25 сен, 20:00 (МСК+2)`. У all-day сроков метки нет. | принято |
+
+## Контрольные точки пользователя (👤)
+
+| Когда | Что нужно от пользователя |
+|---|---|
+| До Task 0.1 | Сделать Node 24 активным (`nvm alias default 24`, удалить системный Node 22 из `/usr/local`) и выполнить `corepack enable`. Подключить ключ Context7. |
+| Конец фазы 0 | Создать dev-бота в @BotFather, купить VPS, пройти `docs/DEPLOY.md` (шаги 1–10), подтвердить включение защиты `main`. |
+| Фаза 2 | Создать аккаунт OpenRouter, пополнить баланс, выпустить ключ с лимитом расходов. Создать тестовые группы. Одобрять оценку стоимости перед каждым eval. Решение D11 — перед Task 2.15. |
+| Фаза 3 | Решения D6 и D7 — перед Task 3.1. |
+| Фаза 4 | Юридическое согласование (гейт), создание prod-бота, `/claim` руководителем, добавление в реальные группы. |
+| Фаза 5 | Прототип на iPhone (SPEC §21.2), покупка домена. |
+| Фазы 6–7 | Отдельная спецификация и отдельное решение. |
+
+## Общие контракты (единые имена для всех задач)
+
+Эти типы и сигнатуры используются в нескольких задачах. Изменять их можно только вместе с правкой плана.
+
+```ts
+// src/time/clock.ts
+export interface Clock { now(): Date }
+export const systemClock: Clock = { now: () => new Date() }; // eslint-disable-line no-restricted-syntax -- the single allowed place
+
+// tests/helpers/clock.ts
+export function fixedClock(iso: string): Clock & { set(iso: string): void; advance(ms: number): void };
+
+// src/db/client.ts
+export type Db = PostgresJsDatabase<typeof schema>;
+export type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
+export type DbOrTx = Db | Tx;
+export function createDb(url: string, opts?: { max?: number }): { db: Db; close(): Promise<void> };
+
+// src/domain/messenger.ts  (без импорта grammy)
+export interface Button { text: string; data?: string; url?: string }
+export type Buttons = Button[][];
+export interface SendOptions { buttons?: Buttons; silent?: boolean; replyToMessageId?: number }
+export type MessengerErrorKind = 'forbidden' | 'not_found' | 'rate_limited' | 'bad_request' | 'network' | 'other';
+export class MessengerError extends Error {
+  constructor(readonly kind: MessengerErrorKind, message: string, readonly retryAfterSec?: number) { super(message); }
+}
+export interface Messenger {
+  send(chatId: number, text: string, opts?: SendOptions): Promise<{ messageId: number }>;
+  edit(chatId: number, messageId: number, text: string, opts?: { buttons?: Buttons }): Promise<void>; // "message is not modified" → успех
+  react(chatId: number, messageId: number, emoji: string | null): Promise<void>;
+  leaveChat(chatId: number): Promise<void>;
+}
+
+// src/deps.ts
+export interface AppDeps {
+  config: Env;               // src/config/env.ts
+  db: Db;
+  clock: Clock;
+  logger: Logger;            // pino
+  errors: ErrorReporter;     // src/ops/errorReporter.ts
+  messenger: Messenger;
+  ai: AiProviders | null;    // null: нет OPENROUTER_API_KEY или LLM_MODEL_PRIMARY, анализ выключен с предупреждением
+  taskHooks: TaskHook[];     // заполняется в фазе 3 (напоминания) и 5 (SyncTarget)
+}
+
+// src/scheduler/ticker.ts
+export interface Job { name: string; run(deps: AppDeps): Promise<void> }
+
+// src/domain/people/permissions.ts
+export type Role = 'owner' | 'member';
+export interface Actor { userId: number | null; isSuperadmin: boolean; role: Role | null; dmStarted: boolean }
+
+// src/domain/tasks/service.ts
+export interface TaskChange { type: 'created' | 'updated' | 'status_changed' | 'review_requested' | 'review_accepted' | 'review_returned' | 'deleted'; diff: Record<string, [unknown, unknown]> }
+export interface TaskHook { name: string; afterChange(tx: Tx, task: TaskRow | null, change: TaskChange, deps: Pick<AppDeps, 'clock' | 'config'>): Promise<void> }
+```
+
+Строки таблиц (`WorkspaceRow`, `UserRow`, `MembershipRow`, `ChatRow`, `MessageRow`, `BatchRow`, `ProposalRow`, `TaskRow`, `NotificationRow`) — это `typeof table.$inferSelect` из `src/db/schema/*`.
+
+---
+## Фаза 0 — Каркас (ветка `phase-0-skeleton`)
+
+**Результат фазы:** репозиторий с инструментами, конфигом, схемой БД, логами, отчётами об ошибках, ticker'ом, `/healthz`, ботом с `/start`, `/help` и `/admin`, Docker, CI/CD и инструкцией по деплою. Dev-бот работает на VPS.
+
+**Приёмка (SPEC §22):** `pnpm test` зелёный · dev-бот на VPS отвечает на `/start` · искусственная ошибка приходит superadmin · `docker compose restart` не теряет данных · `/healthz` = 200.
+
+### Task 0.1: Репозиторий и инструменты
+
+**Файлы:**
+- Создать: `.gitignore`, `.editorconfig`, `.nvmrc`, `package.json`, `pnpm-lock.yaml`, `tsconfig.json`, `tsconfig.build.json`, `eslint.config.js`, `.prettierrc.json`, `.prettierignore`, `vitest.config.ts`, `README.md`, `CHANGELOG.md`
+- Создать: `tests/unit/architecture.test.ts`, `tests/helpers/architecture.ts`
+
+**Интерфейсы:**
+- Produces: `findForbiddenCyrillic(files: Array<{ path: string; content: string }>): string[]` — пути файлов с кириллицей вне разрешённых (`src/bot/texts/ru.ts`, `src/config/constants.ts`).
+
+- [ ] **Шаг 1 (👤):** проверить `node -v` (ожидается `v24.x`) и `pnpm -v` (ожидается `12.6.0`, установлен через `npm i -g pnpm@12.6.0`). Подтвердить создание публичного репозитория `MozgovoyVF/school-task-bot`.
+- [ ] **Шаг 2: git и начальный коммит в `main`** (выполняет основная сессия до запуска оркестратора: навыку субагентов нужен уже существующий репозиторий)
+
+```bash
+git init -b main
+```
+
+`.gitignore`:
+```gitignore
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+backups/
+*.dump
+*.sql
+*.sql.gz
+*.age
+exports/
+result.json
+eval/reports/*.local.md
+.deploy/
+.superpowers/
+```
+
+```bash
+git add SPEC.md CLAUDE.md plan.md .gitignore .claude/agents
+git commit -m "docs: add specification, agent guide and implementation plan"
+gh repo create MozgovoyVF/school-task-bot --public --source . --remote origin --push
+git switch -c phase-0-skeleton
+```
+
+- [ ] **Шаг 3: `package.json`.** Версию pnpm сверить с `npm view pnpm version` (на 2026-09-26 — 12.6.0).
+
+```json
+{
+  "name": "school-task-bot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24 <25" },
+  "packageManager": "pnpm@12.6.0",
+  "scripts": {
+    "dev": "tsx watch --env-file=.env src/index.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/src/index.js",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:unit": "vitest run --project unit",
+    "test:int": "vitest run --project integration",
+    "test:watch": "vitest",
+    "coverage": "vitest run --coverage",
+    "db:up": "docker compose -f docker/compose.dev.yml up -d db",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx --env-file=.env src/db/migrate.ts",
+    "eval": "tsx --env-file=.env eval/run.ts",
+    "import-export": "tsx --env-file=.env scripts/import-export.ts",
+    "feedback-report": "tsx --env-file=.env scripts/feedback-report.ts"
+  }
+}
+```
+
+- [ ] **Шаг 4: зависимости.** Сверить версии через Context7 или npm.
+
+```bash
+pnpm add grammy @grammyjs/runner @grammyjs/conversations @grammyjs/auto-retry @grammyjs/transformer-throttler drizzle-orm postgres zod openai luxon fastify pino
+pnpm add -D typescript@~5.9.3 tsx vitest @vitest/coverage-v8 drizzle-kit eslint @eslint/js typescript-eslint eslint-config-prettier prettier @types/node@^24 @types/luxon
+```
+
+Если pnpm предупреждает об отсутствующей peer-зависимости `vite` для vitest, добавить `pnpm add -D vite`.
+
+- [ ] **Шаг 5: `tsconfig.json` и `tsconfig.build.json`**
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2024",
+    "lib": ["ES2024"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "verbatimModuleSyntax": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "rootDir": ".",
+    "outDir": "dist",
+    "sourceMap": true
+  },
+  "include": ["src", "scripts", "eval", "tests", "vitest.config.ts", "drizzle.config.ts"]
+}
+```
+
+```json
+{ "extends": "./tsconfig.json", "include": ["src", "scripts", "eval"], "exclude": ["tests", "**/*.test.ts"] }
+```
+
+- [ ] **Шаг 6: `eslint.config.js`** (flat config; синтаксис сверить через Context7 → typescript-eslint)
+
+```js
+import js from '@eslint/js';
+import tseslint from 'typescript-eslint';
+import prettier from 'eslint-config-prettier';
+
+const noClock = [
+  { selector: "NewExpression[callee.name='Date'][arguments.length=0]", message: 'Use clock.now() (src/time/clock.ts)' },
+  { selector: "CallExpression[callee.object.name='Date'][callee.property.name='now']", message: 'Use clock.now()' },
+  { selector: "CallExpression[callee.object.name='DateTime'][callee.property.name='now']", message: 'Use clock.now()' },
+];
+
+export default tseslint.config(
+  { ignores: ['dist', 'coverage', 'node_modules', 'src/db/migrations'] },
+  js.configs.recommended,
+  ...tseslint.configs.recommendedTypeChecked,
+  { languageOptions: { parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname } } },
+  {
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'error',
+      '@typescript-eslint/no-floating-promises': 'error',
+      '@typescript-eslint/consistent-type-imports': 'error',
+    },
+  },
+  {
+    files: ['src/domain/**', 'src/ai/**', 'src/time/**', 'src/scheduler/**'],
+    rules: {
+      'no-restricted-imports': ['error', { patterns: [{ group: ['grammy', '@grammyjs/*'], message: 'Domain must not depend on grammY; use Messenger' }] }],
+      'no-restricted-syntax': ['error', ...noClock],
+    },
+  },
+  { files: ['**/*.js'], ...tseslint.configs.disableTypeChecked },
+  prettier,
+);
+```
+
+`.prettierrc.json`: `{ "singleQuote": true, "printWidth": 110, "trailingComma": "all" }`. `.prettierignore`: `dist`, `coverage`, `pnpm-lock.yaml`, `src/db/migrations`, `SPEC.md`, `plan.md`.
+
+- [ ] **Шаг 7: `vitest.config.ts`** (синтаксис `projects` сверить через Context7 → vitest)
+
+```ts
+import { defineConfig } from 'vitest/config';
+
+export default defineConfig({
+  test: {
+    projects: [
+      { test: { name: 'unit', include: ['tests/unit/**/*.test.ts'] } },
+      {
+        test: {
+          name: 'integration',
+          include: ['tests/integration/**/*.test.ts'],
+          globalSetup: ['tests/integration/globalSetup.ts'],
+          fileParallelism: false,
+          testTimeout: 20_000,
+        },
+      },
+    ],
+    coverage: {
+      provider: 'v8',
+      include: ['src/domain/**', 'src/ai/pipeline/**'],
+      thresholds: { lines: 80, functions: 80, branches: 75 },
+    },
+  },
+});
+```
+
+`tests/integration/globalSetup.ts` пока пустой (`export default async function setup() {}`). Он заполняется в задаче 0.4.
+
+- [ ] **Шаг 8: падающий тест архитектурного правила**
+
+```ts
+// tests/unit/architecture.test.ts
+import { describe, it, expect } from 'vitest';
+import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { findForbiddenCyrillic } from '../helpers/architecture.js';
+
+describe('findForbiddenCyrillic', () => {
+  it('flags Cyrillic outside allowed files', () => {
+    expect(
+      findForbiddenCyrillic([
+        { path: 'src/bot/handlers/dm.ts', content: "reply('Привет')" },
+        { path: 'src/bot/texts/ru.ts', content: "export const hi = 'Привет'" },
+        { path: 'src/config/constants.ts', content: "export const STOP = ['ок']" },
+        { path: 'src/ai/policy.ts', content: 'const x = 1;' },
+      ]),
+    ).toEqual(['src/bot/handlers/dm.ts']);
+  });
+});
+
+function walk(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir).flatMap((n) => {
+    const p = join(dir, n);
+    return statSync(p).isDirectory() ? walk(p) : p.endsWith('.ts') ? [p] : [];
+  });
+}
+
+describe('repository', () => {
+  it('keeps user-facing Russian text in src/bot/texts/ru.ts', () => {
+    const files = walk('src').map((path) => ({ path, content: readFileSync(path, 'utf8') }));
+    expect(findForbiddenCyrillic(files)).toEqual([]);
+  });
+});
+```
+
+- [ ] **Шаг 9:** `pnpm test:unit`. Ожидается FAIL: модуль `../helpers/architecture.js` не найден.
+- [ ] **Шаг 10: реализация**
+
+```ts
+// tests/helpers/architecture.ts
+const ALLOWED = new Set(['src/bot/texts/ru.ts', 'src/config/constants.ts']);
+const CYRILLIC = /[А-Яа-яЁё]/;
+
+export function findForbiddenCyrillic(files: Array<{ path: string; content: string }>): string[] {
+  return files
+    .filter((f) => !ALLOWED.has(f.path.replaceAll('\\', '/')))
+    .filter((f) => CYRILLIC.test(f.content))
+    .map((f) => f.path);
+}
+```
+
+- [ ] **Шаг 11:** `pnpm lint && pnpm typecheck && pnpm test:unit` — PASS. `README.md` (кратко: что это, ссылки на SPEC, CLAUDE, plan, команды) и `CHANGELOG.md` (`## [Unreleased]`).
+- [ ] **Шаг 12: коммит и push**
+
+```bash
+git add -A && git commit -m "chore: scaffold TypeScript project tooling" && git push -u origin phase-0-skeleton
+```
+
+### Task 0.2: Конфигурация окружения (zod)
+
+**Файлы:** создать `src/config/env.ts`, `src/config/constants.ts`, `.env.example`; тест `tests/unit/config/env.test.ts`.
+
+**Интерфейсы:**
+- Produces: `EnvSchema`, `type Env`, `loadEnv(source?: Record<string, string | undefined>): Env`, `class EnvError extends Error { issues: string[] }`. Константы (см. шаг 3).
+
+- [ ] **Шаг 1: падающие тесты**
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { loadEnv, EnvError } from '../../../src/config/env.js';
+
+const base = {
+  TELEGRAM_BOT_TOKEN: '123:abc',
+  SUPERADMIN_TG_IDS: '111, 222',
+  DATABASE_URL: 'postgres://stb:x@db:5432/stb',
+};
+
+describe('loadEnv', () => {
+  it('applies defaults', () => {
+    const env = loadEnv(base);
+    expect(env.SUPERADMIN_TG_IDS).toEqual([111, 222]);
+    expect(env.APP_ENV).toBe('dev');
+    expect(env.TELEGRAM_MODE).toBe('polling');
+    expect(env.DEFAULT_TIMEZONE).toBe('Europe/Moscow');
+    expect(env.DEFAULT_WORKSPACE_NAME).toBe('Школа');
+    expect(env.MIGRATE_ON_START).toBe(true);
+    expect(env.LLM_DAILY_BUDGET_USD).toBe(1);
+    expect(env.AI_PREFILTER).toBe('off');
+    expect(env.AI_PREFILTER_THRESHOLD).toBe(0.15);
+    expect(env.HTTP_PORT).toBe(3000);
+    expect(env.GIT_SHA).toBe('dev');
+  });
+
+  it('lists every missing required variable in one error', () => {
+    try {
+      loadEnv({});
+      expect.unreachable();
+    } catch (e) {
+      expect(e).toBeInstanceOf(EnvError);
+      const msg = (e as EnvError).message;
+      expect(msg).toContain('TELEGRAM_BOT_TOKEN');
+      expect(msg).toContain('SUPERADMIN_TG_IDS');
+      expect(msg).toContain('DATABASE_URL');
+    }
+  });
+
+  it('parses booleans strictly ("false" is false)', () => {
+    expect(loadEnv({ ...base, MIGRATE_ON_START: 'false' }).MIGRATE_ON_START).toBe(false);
+    expect(() => loadEnv({ ...base, MIGRATE_ON_START: 'yes' })).toThrow(EnvError);
+  });
+
+  it('rejects invalid values', () => {
+    expect(() => loadEnv({ ...base, SUPERADMIN_TG_IDS: 'abc' })).toThrow(/SUPERADMIN_TG_IDS/);
+    expect(() => loadEnv({ ...base, DEFAULT_TIMEZONE: 'Mars/Base' })).toThrow(/DEFAULT_TIMEZONE/);
+    expect(() => loadEnv({ ...base, APP_ENV: 'staging' })).toThrow(/APP_ENV/);
+    expect(() => loadEnv({ ...base, AI_PREFILTER_THRESHOLD: '1.5' })).toThrow(/AI_PREFILTER_THRESHOLD/);
+  });
+
+  it('requires webhook settings in webhook mode and TypeSafe key for jev', () => {
+    expect(() => loadEnv({ ...base, TELEGRAM_MODE: 'webhook' })).toThrow(/TELEGRAM_WEBHOOK_URL/);
+    expect(() => loadEnv({ ...base, AI_PREFILTER: 'jev' })).toThrow(/TYPESAFE_API_KEY/);
+  });
+
+  it('treats empty strings as unset (as in .env.example)', () => {
+    expect(loadEnv({ ...base, BOOTSTRAP_OWNER_TG_ID: '', OPENROUTER_API_KEY: '' }).BOOTSTRAP_OWNER_TG_ID).toBeUndefined();
+  });
+});
+```
+
+- [ ] **Шаг 2:** `pnpm test:unit tests/unit/config` — FAIL (модуль не найден).
+- [ ] **Шаг 3: реализация.** Переменные — ровно из SPEC §26 плюс `GIT_SHA` (D21).
+  - Обязательны: `TELEGRAM_BOT_TOKEN`, `SUPERADMIN_TG_IDS`, `DATABASE_URL`.
+  - `OPENROUTER_API_KEY` и `LLM_MODEL_PRIMARY` не обязательны. Если хотя бы одной нет, `deps.ai = null`, в лог пишется warn «AI analysis disabled».
+  - Пустые строки заранее превращаются в `undefined`.
+  - Булевы значения парсятся через `z.enum(['true','false']).transform(v => v === 'true')`.
+  - Пояс проверяется через `IANAZone.isValidZone` из luxon.
+  - `superRefine` проверяет условия для webhook (`TELEGRAM_WEBHOOK_URL` и `TELEGRAM_WEBHOOK_SECRET` обязательны) и для `AI_PREFILTER=jev` (`TYPESAFE_API_KEY` обязателен).
+  - `EnvError.message`: `Invalid environment:\n- TELEGRAM_BOT_TOKEN: Required\n…`.
+
+`src/config/constants.ts` (кириллица разрешена; `env.ts` берёт отсюда значение по умолчанию для `DEFAULT_WORKSPACE_NAME`, потому что в самом `env.ts` кириллица запрещена):
+```ts
+export const DEFAULT_WORKSPACE_NAME = 'Школа';
+export const TICK_INTERVAL_MS = 20_000;
+export const HEARTBEAT_MAX_AGE_MS = 60_000;
+export const BATCH_BACKOFF_MINUTES = [1, 5, 15, 15] as const; // после 1-й…4-й неудачи; 5-я → failed
+export const BATCH_MAX_ATTEMPTS = 5;
+export const STALE_RUNNING_BATCH_MS = 5 * 60_000;
+export const MAX_ANALYSIS_TEXT_CHARS = 2000;
+export const QUOTE_MAX_CHARS = 200;
+export const TELEGRAM_TEXT_LIMIT = 4096;
+export const CALLBACK_DATA_MAX_BYTES = 64;
+export const CONTEXT_MESSAGES = 20;
+export const PROMPT_MAX_OPEN_TASKS = 50;
+export const PROMPT_MAX_OPEN_PROPOSALS = 20;
+export const DEDUP_SIMILARITY = 0.6;
+export const DEDUP_WINDOW_DAYS = 14;
+export const MAX_CARDS_PER_BATCH = 10;
+export const PENDING_CHAT_TIMEOUT_HOURS = 72;
+export const CLAIM_CODE_TTL_HOURS = 24;
+export const CONVERSATION_TIMEOUT_MS = 10 * 60_000;
+export const PAGE_SIZE = 5;
+export const FORWARD_BURST_MS = 3000;
+export const DEFAULT_STOP_LIST = ['ок', 'ok', 'окей', 'ок👍', 'спасибо', 'спс', 'да', 'нет', '+', '👍', 'ага', 'угу', 'понял', 'поняла', 'хорошо', 'ясно'];
+export const MSK_TOKENS = ['мск', 'msk'];
+export const COMPLETION_SIGNALS = ['готово', 'сделала', 'сделал', 'сделано', 'отправила', 'отправил', 'выполнила', 'выполнил', 'готова', 'готов'];
+```
+
+Примечание: `хорошо`, `понял` и `поняла` в стоп-листе допустимы: сообщение остаётся контекстом. «Готова» и «готов» — сигналы завершения, стоп-лист их не отсеивает (SPEC §7.3).
+
+- [ ] **Шаг 4:** `.env.example` — дословно SPEC §26 плюс строка `GIT_SHA=dev  # подставляется при сборке образа`.
+- [ ] **Шаг 5:** тесты зелёные, lint и typecheck проходят.
+- [ ] **Шаг 6: коммит и push:** `feat(config): validate environment with zod`.
+
+### Task 0.3: Логгер с redaction
+
+**Файлы:** создать `src/ops/logger.ts`; тест `tests/unit/ops/logger.test.ts`.
+
+**Интерфейсы:** Produces `createLogger(opts: { level: string; destination?: pino.DestinationStream }): Logger`, `type Logger = pino.Logger`.
+
+- [ ] **Шаг 1: падающий тест**
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { Writable } from 'node:stream';
+import { createLogger } from '../../../src/ops/logger.js';
+
+function capture() {
+  const lines: string[] = [];
+  const destination = new Writable({ write(chunk, _e, cb) { lines.push(String(chunk)); cb(); } });
+  return { lines, destination };
+}
+
+describe('logger redaction', () => {
+  it('never prints message texts, names, usernames or secrets', () => {
+    const { lines, destination } = capture();
+    const log = createLogger({ level: 'debug', destination });
+    log.info({
+      text: 'СЕКРЕТ-1',
+      msg1: { text: 'СЕКРЕТ-2', caption: 'СЕКРЕТ-3', from: { first_name: 'Анна', last_name: 'Петрова', username: 'anna_p' } },
+      update: { message: { text: 'СЕКРЕТ-4' } },
+      config: { TELEGRAM_BOT_TOKEN: '123:TOKEN', OPENROUTER_API_KEY: 'sk-or-KEY' },
+      headers: { authorization: 'Bearer XYZ' },
+      chatId: 42,
+    }, 'incoming');
+    const out = lines.join('');
+    for (const s of ['СЕКРЕТ', 'Анна', 'Петрова', 'anna_p', 'TOKEN', 'sk-or-KEY', 'XYZ']) expect(out).not.toContain(s);
+    expect(out).toContain('"chatId":42');
+    expect(out).toContain('[REDACTED]');
+  });
+});
+```
+
+- [ ] **Шаг 2:** FAIL.
+- [ ] **Шаг 3: реализация.** pino с `redact.paths`: `text`, `*.text`, `*.*.text`, `*.*.*.text`, то же для `caption`, `first_name`, `last_name`, `username`; `*.TELEGRAM_BOT_TOKEN`, `*.OPENROUTER_API_KEY`, `*.TYPESAFE_API_KEY`, `*.authorization`, `*.token`, `*.apiKey`; `censor: '[REDACTED]'`. Синтаксис wildcard сверить через Context7 → pino.
+- [ ] **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(ops): add pino logger with PII redaction`.
+
+### Task 0.4: Схема БД, миграции, тестовая БД
+
+**Файлы:**
+- Создать: `drizzle.config.ts`, `src/db/client.ts`, `src/db/migrate.ts`, `src/db/schema/{enums,workspaces,people,chats,messages,ai,tasks,notifications,system,index}.ts`, `src/db/migrations/*` (генерирует drizzle-kit), `docker/compose.dev.yml` (сервис `db`)
+- Создать: `tests/helpers/db.ts`; изменить `tests/integration/globalSetup.ts`; тест `tests/integration/db/schema.test.ts`
+
+**Интерфейсы:**
+- Produces: `createDb`, `Db`, `Tx`, `DbOrTx` (общие контракты); `runMigrations(db: Db, migrationsFolder?: string): Promise<void>` (по умолчанию `src/db/migrations`); `schema` (все таблицы); в тестах `getTestDb(): Db` и `truncateAll(db: Db): Promise<void>`.
+
+**Таблицы** — SPEC §6 с добавлениями D5. Enum'ы — `pgEnum` с именами из SPEC. Правила: `id` — `bigserial({ mode: 'number' })`; Telegram ID — `bigint({ mode: 'number' })`; даты — `timestamp({ withTimezone: true })`; FK с `onDelete`: сообщения, batch, proposals и события — `cascade` от чата или задачи; `tasks.proposal_id` — `set null`. Образец:
+
+```ts
+// src/db/schema/people.ts
+export const memberships = pgTable('memberships', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  workspaceId: bigint('workspace_id', { mode: 'number' }).notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
+  userId: bigint('user_id', { mode: 'number' }).notNull().references(() => users.id, { onDelete: 'cascade' }),
+  role: membershipRole('role').notNull().default('member'),
+  displayName: text('display_name').notNull(),
+  aliases: text('aliases').array().notNull().default(sql`'{}'::text[]`),
+  notifyAssignments: boolean('notify_assignments').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  unique('memberships_workspace_user').on(t.workspaceId, t.userId),
+  uniqueIndex('memberships_one_owner').on(t.workspaceId).where(sql`${t.role} = 'owner'`),
+]);
+```
+
+Обязательные индексы и ограничения: `users.tg_user_id` unique; `chats.tg_chat_id` unique; `messages` unique `(chat_id, tg_message_id)` и индекс `(chat_id, analysis_status, sent_at)`; `tasks` — `(workspace_id, status, due_at)`, `(workspace_id, assignee_user_id, status)`, GIN `gin_trgm_ops` по `title` и `description`; индекс GIN trigram по `(payload->>'title')` у `proposals` (для dedup 2.8); `notifications.dedupe_key` unique и индекс `(status, fire_at)`; `analysis_batches` — индекс `(chat_id, status)`; `error_reports.fingerprint` pk; `app_state.key` pk.
+
+- [ ] **Шаг 1:** `docker/compose.dev.yml` с сервисом `db`: `postgres:17`, `POSTGRES_USER=stb`, `POSTGRES_PASSWORD=stb`, `POSTGRES_DB=stb`, порт `5433:5432`, volume `stb-dev-pgdata`, healthcheck `pg_isready`. Выполнить `pnpm db:up`.
+- [ ] **Шаг 2: падающий интеграционный тест**
+
+```ts
+// tests/integration/db/schema.test.ts
+import { describe, it, expect, beforeEach } from 'vitest';
+import { sql } from 'drizzle-orm';
+import { getTestDb, truncateAll } from '../../helpers/db.js';
+import { workspaces, users, memberships } from '../../../src/db/schema/index.js';
+
+const db = getTestDb();
+beforeEach(() => truncateAll(db));
+
+describe('schema', () => {
+  it('has pg_trgm working on Cyrillic', async () => {
+    const [row] = await db.execute<{ same: number; diff: number }>(
+      sql`select similarity('подготовить расписание', 'подготовить расписание') as same, similarity('расписание', 'аренда') as diff`,
+    );
+    expect(Number(row!.same)).toBe(1);
+    expect(Number(row!.diff)).toBeLessThan(0.3);
+  });
+
+  it('allows at most one owner per workspace', async () => {
+    const [ws] = await db.insert(workspaces).values({ name: 'Школа' }).returning();
+    const [u1, u2] = await db.insert(users).values([{ tgUserId: 1, firstName: 'A' }, { tgUserId: 2, firstName: 'B' }]).returning();
+    await db.insert(memberships).values({ workspaceId: ws!.id, userId: u1!.id, role: 'owner', displayName: 'A' });
+    await expect(
+      db.insert(memberships).values({ workspaceId: ws!.id, userId: u2!.id, role: 'owner', displayName: 'B' }),
+    ).rejects.toThrow(/memberships_one_owner|duplicate key/);
+  });
+
+  it('creates trigram indexes', async () => {
+    const rows = await db.execute<{ indexdef: string }>(sql`select indexdef from pg_indexes where indexdef like '%gin_trgm_ops%'`);
+    expect(rows.length).toBeGreaterThanOrEqual(3);
+  });
+});
+```
+
+- [ ] **Шаг 3:** `pnpm test:int` — FAIL (нет helpers и схемы).
+- [ ] **Шаг 4: миграции.** Порядок важен.
+  1. `pnpm drizzle-kit generate --custom --name=extensions`, в файл вписать `CREATE EXTENSION IF NOT EXISTS pg_trgm;`.
+  2. Описать схему.
+  3. `pnpm db:generate` — сгенерировать основную миграцию. Проверить SQL глазами: частичный индекс, GIN, enum'ы.
+
+  `drizzle.config.ts`: `dialect: 'postgresql'`, `schema: './src/db/schema/index.ts'`, `out: './src/db/migrations'`. Сверить через Context7 → drizzle.
+- [ ] **Шаг 5: `src/db/client.ts`, `src/db/migrate.ts`, helpers**
+  - `createDb` использует `postgres(url, { max })` и `drizzle(client, { schema })`.
+  - `runMigrations` вызывает `migrate(db, { migrationsFolder })` из `drizzle-orm/postgres-js/migrator`. Сверить через Context7.
+  - `src/db/migrate.ts` — CLI: `loadEnv` → `createDb` → `runMigrations` → `close`.
+  - `globalSetup`: подключиться к `postgres://stb:stb@localhost:5433/postgres` (или взять базу из `TEST_DATABASE_URL`), выполнить `DROP DATABASE IF EXISTS stb_test WITH (FORCE)` и `CREATE DATABASE stb_test`, применить миграции.
+  - `truncateAll`: `TRUNCATE <все таблицы> RESTART IDENTITY CASCADE`. Список таблиц брать из `pg_tables where schemaname='public'`, кроме `__drizzle_migrations`.
+- [ ] **Шаг 6:** `pnpm test` — PASS.
+- [ ] **Шаг 7: коммит и push:** `feat(db): add drizzle schema, migrations and test database harness`.
+
+### Task 0.5: Clock, Messenger, отчёты об ошибках
+
+**Файлы:**
+- Создать: `src/time/clock.ts`, `src/domain/messenger.ts`, `src/ops/errorReporter.ts`, `src/domain/system/appState.ts`
+- Создать: `tests/helpers/clock.ts`, `tests/helpers/fakeMessenger.ts`
+- Тесты: `tests/unit/ops/fingerprint.test.ts`, `tests/integration/ops/errorReporter.test.ts`
+
+**Интерфейсы:**
+- Produces:
+  - `fingerprint(err: unknown): string`;
+  - `createErrorReporter(deps: { db: Db; messenger: Messenger; clock: Clock; logger: Logger; superadminIds: number[] }): ErrorReporter`;
+  - `interface ErrorReporter { report(err: unknown, context?: Record<string, string | number | boolean | null>): Promise<void>; alert(key: string, text: string, opts?: { throttleMs?: number; alsoTo?: number[] }): Promise<void> }` — `alert` использует ту же таблицу с отпечатком `alert:<key>`;
+  - `getState<T>(db, key, schema: z.ZodType<T>): Promise<T | null>`, `setState(db, key, value: unknown, now: Date): Promise<void>`;
+  - `FakeMessenger implements Messenger` с полем `sent: Array<{ chatId: number; text: string; opts?: SendOptions }>`, методами `failNextWith(err: MessengerError)` и `reactions`, `edits`, `left`.
+
+- [ ] **Шаг 1: падающие тесты**
+
+```ts
+// tests/unit/ops/fingerprint.test.ts
+import { describe, it, expect } from 'vitest';
+import { fingerprint } from '../../../src/ops/errorReporter.js';
+
+function errAt(message: string) { return new Error(message); }
+
+describe('fingerprint', () => {
+  it('ignores digits in the message', () => {
+    const make = (id: number) => errAt(`Task ${id} not found`);
+    expect(fingerprint(make(12))).toBe(fingerprint(make(13)));
+  });
+  it('differs by error type and message', () => {
+    expect(fingerprint(new TypeError('x'))).not.toBe(fingerprint(new RangeError('x')));
+    expect(fingerprint(new Error('a'))).not.toBe(fingerprint(new Error('b')));
+  });
+  it('handles non-Error values', () => {
+    expect(fingerprint('boom')).toMatch(/^[a-f0-9]{16,}$/);
+  });
+});
+```
+
+```ts
+// tests/integration/ops/errorReporter.test.ts — сценарии:
+// 1. Первая ошибка → каждому superadmin одно сообщение. В тексте есть тип и контекст ({ taskId: 5 }) и нет текста пользователя.
+// 2. Та же ошибка через 10 мин → сообщений нет; в error_reports count=1.
+// 3. Ещё через 61 мин → сообщение «повторилось 2 раза»; count сбрасывается в 0 и увеличивается на эту ошибку.
+// 4. Если messenger.send бросает ошибку, report() её не пробрасывает (пишет в лог).
+// 5. alert('budget:2026-09-23', …) дважды за час → одно сообщение.
+```
+
+- [ ] **Шаг 2:** FAIL.
+- [ ] **Шаг 3: реализация.**
+  - Отпечаток: `sha256(name + ':' + message.replace(/\d+/g, '#') + ':' + первая строка stack после сообщения)`, первые 16 hex-символов.
+  - `sample` — `{ name, message (≤300 символов, без цифр длиннее 6 подряд), topFrames (5), context }`.
+  - Upsert по `fingerprint`: если `last_notified_at` пусто или старше часа, отправить и обновить `last_notified_at`.
+  - Текст отчёта берётся из `texts.errors.report(...)` в `ru.ts`.
+- [ ] **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(ops): add error reporter with hourly throttling`.
+
+### Task 0.6: Ticker, heartbeat, `/healthz`
+
+**Файлы:**
+- Создать: `src/scheduler/ticker.ts`, `src/scheduler/daily.ts`, `src/http/server.ts`, `src/http/routes/health.ts`
+- Тесты: `tests/integration/scheduler/ticker.test.ts`, `tests/integration/http/health.test.ts`
+
+**Интерфейсы:**
+- Consumes: `AppDeps`, `Job`, `getState` и `setState` (0.5).
+- Produces:
+  - `createTicker(deps: AppDeps, jobs: Job[], opts?: { intervalMs?: number }): { start(): void; stop(): Promise<void>; tickOnce(): Promise<void>; lastHeartbeat(): Date | null }`;
+  - `dailyJob(name: string, atUtc: string, run: (deps: AppDeps) => Promise<void>): Job` — выполняется один раз за UTC-сутки после `atUtc`, отметка хранится в `app_state` под ключом `daily:<name>`;
+  - `buildHttpServer(deps: { db: Db; clock: Clock; heartbeat: () => Date | null }): FastifyInstance`.
+
+- [ ] **Шаг 1: падающие тесты**
+  - Ticker:
+    1. `tickOnce` запускает jobs по порядку.
+    2. Ошибка одной job не останавливает следующие и уходит в `deps.errors.report`.
+    3. После тика `app_state['ticker:heartbeat']` равен `clock.now()`.
+    4. Тики не перекрываются: при `intervalMs=10` и job длиной 50 мс число одновременных запусков не больше 1.
+    5. `dailyJob('retention','03:30')`: в 03:29 UTC не запускается, в 03:31 запускается, повторно в тот же день не запускается, на следующий день после 03:30 — запускается.
+  - `/healthz` через `fastify.inject`:
+    1. Heartbeat 10 с назад → 200 `{ status: 'ok' }`.
+    2. Heartbeat 61 с назад → 503.
+    3. БД недоступна (закрытое соединение) → 503.
+- [ ] **Шаг 2:** FAIL.
+- [ ] **Шаг 3: реализация.** Цикл на `setTimeout`: следующий тик планируется после завершения текущего. `stop()` дожидается текущего тика. Heartbeat хранится и в памяти (для `/healthz`), и в `app_state` (для watchdog в 4.5).
+- [ ] **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(scheduler): add ticker, daily jobs and health endpoint`.
+
+### Task 0.7: Скелет бота — `/start`, `/help`, superadmin, ошибки, `/admin`
+
+**Файлы:**
+- Создать: `src/bot/bot.ts`, `src/bot/context.ts`, `src/bot/messenger.ts`, `src/bot/middleware/errors.ts`, `src/bot/middleware/context.ts`, `src/bot/handlers/dm.ts`, `src/bot/handlers/admin.ts`, `src/bot/views/help.ts`, `src/bot/views/admin.ts`, `src/bot/texts/ru.ts`
+- Создать: `tests/helpers/botHarness.ts`, `tests/helpers/updates.ts`
+- Тесты: `tests/unit/bot/messenger.test.ts`, `tests/integration/bot/start.test.ts`, `tests/integration/bot/admin.test.ts`
+
+**Интерфейсы:**
+- Produces:
+  - `type BotContext` (Context + ConversationFlavor + `state: { user: UserRow | null; membership: MembershipRow | null; workspace: WorkspaceRow | null; actor: Actor }`);
+  - `createBot(deps: AppDeps, opts?: { botInfo?: UserFromGetMe }): Bot<BotContext>`;
+  - `createGrammyMessenger(api: Api): Messenger`, `toMessengerError(e: unknown): MessengerError`;
+  - `createBotHarness(opts?: { clock?: string; superadminIds?: number[] }): Promise<BotHarness>`, где `BotHarness = { bot; deps; clock; db; calls: Array<{ method: string; payload: Record<string, unknown> }>; send(update): Promise<void>; replies(chatId?): string[]; reset(): void }`;
+  - фабрики апдейтов: `dmText(from: TgUserLike, text)`, `groupText(chat: TgChatLike, from, text, extra?)`, `callback(from, data, message?)`, `botAdded(chat, by)`, `botRemoved(chat, by)`, `editedGroupText(...)`, `forwardedDm(...)`.
+- Harness: `bot.api.config.use(transformer)` записывает вызов и возвращает фейковый ответ (`sendMessage` → `{ message_id: n++ … }`, остальные → `true`). `botInfo` задаётся вручную, `getMe` не вызывается. Сверить через Context7 → grammY (transformers, `handleUpdate`, `botInfo`).
+
+- [ ] **Шаг 1: падающие тесты**
+  - `/start` от superadmin: в ответе справка superadmin, в `users` у пользователя проставлен `dm_started_at`.
+  - `/start` от незнакомца: нейтральный текст `texts.start.stranger` («Этот бот работает для сотрудников школы…»).
+  - `/admin` от не-superadmin → `texts.common.forbidden`. От superadmin → версия (`GIT_SHA`) и аптайм.
+  - Скрытая команда `/testerror` (только superadmin; кнопок нет, потому что кодек callback появляется в 1.3) → обработчик бросает `new Error('Test error from /testerror')` → `FakeMessenger` получает отчёт для superadmin, пользователь получает `texts.errors.userFacing`. От не-superadmin команда игнорируется.
+  - `toMessengerError`: `GrammyError` 403 → `forbidden`; 429 с `retry_after: 5` → `rate_limited`, `retryAfterSec=5`; 400 `message is not modified` → `edit()` не бросает; 400 `chat not found` → `not_found`; `HttpError` → `network`.
+- [ ] **Шаг 2:** FAIL.
+- [ ] **Шаг 3: реализация.**
+  - `bot.ts`: `new Bot<BotContext>(token, { botInfo })`; `api.config.use(autoRetry())`, `api.config.use(apiThrottler())`; дальше middleware: errors → context → conversations() → handlers. `bot.catch` направляет ошибки в `deps.errors.report(err, { updateId })`.
+  - `context.ts` (фаза 0): upsert пользователя из `ctx.from`, `actor.isSuperadmin` вычисляется по `config.SUPERADMIN_TG_IDS`.
+  - Тексты — в `texts/ru.ts` в виде объекта функций, например `texts.start.owner(name)`.
+- [ ] **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(bot): add bot skeleton with start, help, admin and error reporting`.
+
+### Task 0.8: Composition root, graceful shutdown, Docker
+
+**Файлы:**
+- Создать: `src/index.ts`, `src/app.ts`, `src/deps.ts`, `docker/Dockerfile`, `docker/compose.yml`, `.dockerignore`
+- Изменить: `docker/compose.dev.yml` (добавить сервис `app`)
+- Тест: `tests/integration/app/startup.test.ts`
+
+**Интерфейсы:**
+- Produces: `startApp(env: Env, overrides?: { messenger?: Messenger; polling?: boolean; botInfo?: UserFromGetMe; clock?: Clock }): Promise<{ deps: AppDeps; http: FastifyInstance; stop(): Promise<void> }>`. `src/index.ts` вызывает `startApp(loadEnv())` и вешает `stop` на `SIGTERM` и `SIGINT`.
+
+- [ ] **Шаг 1: падающий тест.** `startApp` с `polling: false`, `FakeMessenger` и `DATABASE_URL` тестовой БД:
+  1. Миграции применены.
+  2. `http.inject GET /healthz` → 200.
+  3. `stop()` завершается менее чем за 10 с, повторный `stop()` ничего не делает.
+- [ ] **Шаг 2:** FAIL.
+- [ ] **Шаг 3: `src/app.ts`.**
+  - Последовательность: `logger` → `createDb` → `runMigrations` (если `MIGRATE_ON_START`) → `createBot` → messenger → error reporter → ticker (пока только heartbeat) → http `listen({ host: '0.0.0.0', port })` → runner.
+  - Runner: `run(bot, { runner: { fetch: { allowed_updates: ['message','edited_message','callback_query','my_chat_member','chat_member'] } } })` с `sequentialize(ctx => ctx.chat?.id.toString())`. Сверить через Context7 → @grammyjs/runner.
+  - `stop()` останавливает сначала runner, потом ticker, потом http и db.
+- [ ] **Шаг 4: `docker/Dockerfile`** (multi-stage, non-root)
+
+```dockerfile
+FROM node:24-bookworm-slim AS base
+# corepack в Node 24 не запускает pnpm 12 (ищет bin/pnpm.cjs), поэтому ставим pnpm через npm
+RUN npm i -g pnpm@12.6.0
+WORKDIR /app
+
+FROM base AS deps
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+
+FROM deps AS build
+COPY . .
+RUN pnpm build
+
+FROM base AS prod-deps
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile --prod
+
+FROM node:24-bookworm-slim AS runtime
+ARG GIT_SHA=dev
+ENV NODE_ENV=production GIT_SHA=$GIT_SHA
+WORKDIR /app
+COPY --from=prod-deps /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
+COPY package.json ./
+COPY prompts ./prompts
+COPY src/db/migrations ./src/db/migrations
+USER node
+EXPOSE 3000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+CMD ["node", "dist/src/index.js"]
+```
+
+Каталог `prompts/` появится в фазе 2. До этого в репозитории лежит `prompts/.gitkeep`.
+
+- [ ] **Шаг 5: `docker/compose.yml`**
+  - `app`: `image: ghcr.io/mozgovoyvf/school-task-bot:${APP_TAG:-latest}`, `env_file: ../.env`, `ports: ["127.0.0.1:${HTTP_PORT:-3000}:3000"]`, `depends_on: db (service_healthy)`, `restart: unless-stopped`.
+  - `db`: `postgres:17`, volume `pgdata`, без публикации порта, `POSTGRES_*` из `.env`, `restart: unless-stopped`.
+  - У обоих логирование `json-file` с `max-size: 10m`, `max-file: "5"` (SPEC §18).
+
+  `compose.dev.yml`: `app` собирается из `docker/Dockerfile` (target `deps`), bind-mount исходников, команда `pnpm dev` (SPEC §27.14).
+- [ ] **Шаг 6: проверка.**
+  - `pnpm test` — PASS.
+  - `docker build -f docker/Dockerfile -t stb:local .` — образ собирается.
+  - `docker compose -f docker/compose.yml -p stb-local up -d` с локальным `.env` (dev-токен, если уже есть) → `curl localhost:3000/healthz` возвращает 200.
+  - `docker compose restart` → данные в БД на месте.
+- [ ] **Шаг 7: коммит и push:** `feat(app): add composition root, graceful shutdown and Docker setup`.
+
+### Task 0.9: CI/CD на GitHub
+
+**Файлы:** создать `.github/workflows/ci.yml`, `.github/workflows/release.yml`, `.github/workflows/deploy.yml`, `.github/dependabot.yml`.
+
+- [ ] **Шаг 1: `ci.yml`** (версии actions сверить через Context7 или документацию GitHub)
+
+```yaml
+name: CI
+on: { push: { branches: ['**'] }, pull_request: {} }
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env: { POSTGRES_USER: stb, POSTGRES_PASSWORD: stb, POSTGRES_DB: stb }
+        ports: ['5433:5432']
+        options: >-
+          --health-cmd "pg_isready -U stb" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://stb:stb@localhost:5433/stb_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm format:check
+      - run: pnpm typecheck
+      - run: pnpm coverage
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with: { context: ., file: docker/Dockerfile, push: false, build-args: GIT_SHA=${{ github.sha }} }
+```
+
+- [ ] **Шаг 2: `release.yml`.** Триггеры: `push: tags: ['v*']` и `workflow_dispatch` с input `tag`. Права: `packages: write`, `contents: read`. Логин в GHCR через `GITHUB_TOKEN`, сборка и push `ghcr.io/mozgovoyvf/school-task-bot:<tag>` и `:latest`; при ручном запуске с тегом `-rc` тег `latest` не ставится. Build-arg `GIT_SHA`.
+- [ ] **Шаг 3: `deploy.yml`.** Только `workflow_dispatch`, секреты `SSH_HOST`, `SSH_KEY`, `SSH_USER`: по SSH выполнить `cd /opt/stb-<env> && ./scripts/deploy.sh <tag>`. По умолчанию не используется (SPEC §24).
+- [ ] **Шаг 4: `dependabot.yml`:** `npm` и `github-actions`, раз в неделю.
+- [ ] **Шаг 5: коммит и push, проверка.** Коммит `chore(ci): add CI, release, manual deploy workflows and dependabot`, затем `git push` и `gh run watch`. Оба job'а должны быть зелёными.
+- [ ] **Шаг 6 (👤 подтвердить): защита `main`.** Выполняется после первого зелёного прогона, когда имена проверок уже известны.
+
+```bash
+gh api -X PUT repos/MozgovoyVF/school-task-bot/branches/main/protection --input - <<'JSON'
+{ "required_status_checks": { "strict": true, "contexts": ["check", "docker-build"] },
+  "enforce_admins": true,
+  "required_pull_request_reviews": { "required_approving_review_count": 0 },
+  "restrictions": null }
+JSON
+```
+
+### Task 0.10: Скрипты деплоя и бэкапа, `docs/DEPLOY.md`, приёмка фазы
+
+**Файлы:** создать `scripts/deploy.sh`, `scripts/backup.sh`, `scripts/restore.sh`, `docs/DEPLOY.md`; изменить `README.md`, `CHANGELOG.md`.
+
+- [ ] **Шаг 1: `scripts/deploy.sh <tag>`** (`set -euo pipefail`):
+  1. Прочитать предыдущий тег из `.deploy/current_tag`.
+  2. Запустить `scripts/backup.sh`.
+  3. `APP_TAG=<tag> docker compose -f docker/compose.yml --env-file .env -p "$COMPOSE_PROJECT" pull app && … up -d`.
+  4. До 90 с опрашивать `curl -fsS http://127.0.0.1:${HTTP_PORT:-3000}/healthz`.
+  5. Если проверка не прошла — откатиться на предыдущий тег и выйти с кодом 1. Если прошла — записать новый тег.
+- [ ] **Шаг 2: `scripts/backup.sh`:**
+  - `docker compose exec -T db pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" | gzip | age -r "$BACKUP_AGE_RECIPIENT" > backups/stb-$APP_ENV-$(date -u +%Y%m%dT%H%M%SZ).sql.gz.age`;
+  - хранить 14 последних копий;
+  - если файл не больше 50 МБ, отправить его superadmin через `curl -F document=@… https://api.telegram.org/bot$TOKEN/sendDocument`;
+  - при ошибке отправить superadmin текстовое оповещение через `sendMessage` и выйти с кодом 1.
+
+  `scripts/restore.sh <file.age> <identity-file>`: остановить `app`, пересоздать БД, выполнить `age -d -i … | gunzip | psql`, запустить `app` и проверить `/healthz`.
+- [ ] **Шаг 3: локальная проверка круговорота бэкапа.** Нужен `age` (`brew install age`, 👤 подтвердить установку). Бэкап compose.dev-базы → восстановление в новую базу → количество строк в `users` совпадает.
+- [ ] **Шаг 4: `docs/DEPLOY.md`** — все 14 пунктов SPEC §27. У каждого шага: точные команды, ожидаемый вывод и раздел «Если что-то пошло не так». Перед написанием п. 1 проверить актуальные тарифы VPS (Aéza, FirstByte, HostVDS, Fornex, Hetzner) через WebSearch и указать дату проверки. Каталоги на сервере: `/opt/stb-dev`, `/opt/stb-prod`. Команды compose: `docker compose -f docker/compose.yml --env-file .env -p stb-dev …`.
+- [ ] **Шаг 5: коммит и push:** `docs(deploy): add deploy/backup scripts and step-by-step DEPLOY guide`.
+- [ ] **Шаг 6: релиз-кандидат.** `gh workflow run release.yml -f tag=v0.1.0-rc.1 --ref phase-0-skeleton`, затем `gh run watch`.
+- [ ] **Шаг 7 (👤): развернуть dev-бота на VPS по `docs/DEPLOY.md`.** Агент сопровождает. Приёмка:
+  1. `/start` в dev-боте работает.
+  2. `/testerror` → отчёт приходит superadmin.
+  3. `docker compose restart` не теряет данные: пользователь сохранился.
+  4. `curl 127.0.0.1:3000/healthz` возвращает 200.
+- [ ] **Шаг 8: закрытие фазы.**
+  1. `CHANGELOG.md` → `## [0.1.0]`.
+  2. `gh pr create --base main --title "Phase 0: skeleton" --body "<чек-лист приёмки>"`, дождаться зелёного CI.
+  3. 👤 подтверждение, затем `gh pr merge --merge`.
+  4. На `main`: `git tag v0.1.0 && git push origin v0.1.0`.
+
+---
+## Фаза 1 — Группы и сбор сообщений (ветка `phase-1-groups`)
+
+**Решение по ходу:** перед Task 1.8 обсудить с пользователем D12 (`paused` и `analysis_enabled`).
+
+**Приёмка (SPEC §22):** бот, добавленный Owner, публикует уведомление и сохраняет сообщения · бот, добавленный посторонним, ждёт разрешения и ничего не сохраняет · claim-код одноразовый и истекает · сообщения старше 30 дней удаляются (тест со сдвигом времени).
+
+### Task 1.1: Настройки workspace и сам workspace
+
+**Файлы:** создать `src/domain/settings/schema.ts`, `src/domain/workspaces/repo.ts`; тесты `tests/unit/domain/settings.test.ts`, `tests/integration/domain/workspaces.test.ts`.
+
+**Интерфейсы:**
+- Produces:
+  - `SettingsSchema`, `type Settings`, `type DeepPartial<T>`;
+  - `parseSettings(raw: unknown, logger?: Logger): Settings` — невалидное значение даёт warn и defaults;
+  - `mergeSettings(current: Settings, patch: DeepPartial<Settings>): Settings` — бросает `ZodError`, если результат невалиден;
+  - `ensureDefaultWorkspace(db, { name, timezone }): Promise<WorkspaceRow>`, `getWorkspace(db, id)`, `getSettings(db, workspaceId): Promise<Settings>`, `updateSettings(db, workspaceId, patch): Promise<Settings>`, `listWorkspaces(db)`.
+
+- [ ] **Шаг 1: падающие тесты**
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { parseSettings, mergeSettings } from '../../../src/domain/settings/schema.js';
+
+const DEFAULTS = {
+  summary: { enabled: true, time: '09:00', forMembers: false },
+  reminders: { preDueTime: '10:00', allDayDueTime: '10:00', overdueTime: '10:00', notifyAssignees: true, groupOverdueThreshold: 3 },
+  quiet: { enabled: false, weekdays: [], windows: [], dateRanges: [] },
+  fuzzyTimes: { morning: '10:00', afternoon: '15:00', evening: '19:00', endOfWeekDay: 5, endOfWeekTime: '18:00', soonWorkdays: 2, defaultTime: '18:00' },
+  ai: { thresholds: { low: 0.35, high: 0.7, modify: 0.5 }, autoCreate: { enabled: false, minConfidence: 0.9 }, proposalExpiryDays: 7 },
+  batch: { quietSeconds: 180, maxMessages: 25, maxWaitSeconds: 600 },
+  reactions: { onDetect: '👀', onAccept: null },
+  retention: { messageDays: 30, batchRawDays: 30 },
+  privacyNoticeText: null,
+};
+
+describe('settings', () => {
+  it('fills every default from SPEC §16', () => {
+    expect(parseSettings({})).toEqual(DEFAULTS);
+    expect(parseSettings(null)).toEqual(DEFAULTS);
+  });
+  it('deep-merges partial values', () => {
+    const s = parseSettings({ summary: { time: '08:30' } });
+    expect(s.summary).toEqual({ enabled: true, time: '08:30', forMembers: false });
+    expect(s.reminders).toEqual(DEFAULTS.reminders);
+  });
+  it('rejects invalid values on merge', () => {
+    expect(() => mergeSettings(parseSettings({}), { summary: { time: '25:00' } })).toThrow();
+    expect(() => mergeSettings(parseSettings({}), { ai: { thresholds: { low: 1.2 } } })).toThrow();
+    expect(() => mergeSettings(parseSettings({}), { quiet: { weekdays: [8] } })).toThrow();
+    expect(() => mergeSettings(parseSettings({}), { quiet: { dateRanges: [{ from: '2026-13-01', to: '2027-01-08' }] } })).toThrow();
+  });
+  it('accepts quiet windows crossing midnight and labelled date ranges', () => {
+    const s = mergeSettings(parseSettings({}), {
+      quiet: { enabled: true, windows: [{ from: '22:00', to: '08:00' }], dateRanges: [{ from: '2026-12-31', to: '2027-01-08', label: 'Каникулы' }] },
+    });
+    expect(s.quiet.windows).toHaveLength(1);
+  });
+  it('falls back to defaults on corrupted stored JSON', () => {
+    expect(parseSettings({ summary: { time: 42 } }).summary.time).toBe('09:00');
+  });
+});
+```
+
+Интеграционные тесты: `ensureDefaultWorkspace`, вызванный дважды, создаёт одну строку · `updateSettings` сохраняет значение, `getSettings` возвращает объединённый результат.
+
+- [ ] **Шаг 2:** FAIL.
+- [ ] **Шаг 3: реализация.**
+  - Формат `HH:mm` проверяется регуляркой `/^([01]\d|2[0-3]):[0-5]\d$/`, дата — `/^\d{4}-\d{2}-\d{2}$/` плюс `DateTime.fromISO().isValid`.
+  - `weekdays` — ISO 1..7 (D10).
+  - `reactions.onDetect` и `onAccept` — `string | null`.
+  - `parseSettings` при ошибке разбирает каждую ветку отдельно и откатывает к defaults только невалидную.
+- [ ] **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(settings): add workspace settings schema with defaults`.
+
+### Task 1.2: Люди, контекст запроса, матрица прав
+
+**Файлы:** создать `src/domain/people/repo.ts`, `src/domain/people/permissions.ts`; изменить `src/bot/middleware/context.ts`; тесты `tests/unit/domain/permissions.test.ts`, `tests/integration/domain/people.test.ts`.
+
+**Интерфейсы:**
+- Produces:
+  - `upsertTelegramUser(db, tg: { id: number; username?: string; first_name: string; last_name?: string }): Promise<UserRow>`;
+  - `ensureMembership(db, { workspaceId, userId, displayName }): Promise<MembershipRow>` — роль `member`; существующие `role` и `display_name` не перезаписывает;
+  - `getOwner(db, workspaceId): Promise<{ user: UserRow; membership: MembershipRow } | null>`;
+  - `getMembership(db, workspaceId, userId)`, `listMembers(db, workspaceId)`;
+  - `markDmStarted(db, userId, now)`, `markDmBlocked(db, userId, blocked: boolean)`, `setUserTimezone(db, userId, zone)`;
+  - `bootstrapOwner(db, { workspaceId, tgUserId }): Promise<'created' | 'exists' | 'skipped'>`;
+  - `type Action = 'proposal.receive' | 'proposal.decide' | 'task.createDm' | 'task.viewAll' | 'task.viewOwn' | 'task.startOwn' | 'task.doneOwn' | 'task.edit' | 'reminders.receive' | 'chat.approve' | 'admin.tech' | 'transfer.generate'`;
+  - `can(actor: Actor, action: Action, target?: { assigneeUserId?: number | null }): boolean`.
+
+- [ ] **Шаг 1: падающие тесты** (матрица SPEC §3)
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { can, type Actor, type Action } from '../../../src/domain/people/permissions.js';
+
+const superadmin: Actor = { userId: 1, isSuperadmin: true, role: null, dmStarted: true };
+const owner: Actor = { userId: 2, isSuperadmin: false, role: 'owner', dmStarted: true };
+const memberDm: Actor = { userId: 3, isSuperadmin: false, role: 'member', dmStarted: true };
+const memberNoDm: Actor = { userId: 4, isSuperadmin: false, role: 'member', dmStarted: false };
+
+const rows: Array<[Action, boolean, boolean, boolean, boolean]> = [
+  // action,               superadmin, owner, memberDm, memberNoDm
+  ['proposal.receive',     false, true,  false, false],
+  ['proposal.decide',      false, true,  false, false],
+  ['task.createDm',        false, true,  false, false],
+  ['task.viewAll',         false, true,  false, false],
+  ['task.edit',            false, true,  false, false],
+  ['chat.approve',         true,  true,  false, false],
+  ['admin.tech',           true,  false, false, false],
+  ['transfer.generate',    true,  true,  false, false],
+];
+
+describe('permission matrix (SPEC §3)', () => {
+  it.each(rows)('%s', (action, sa, ow, md, mn) => {
+    expect([can(superadmin, action), can(owner, action), can(memberDm, action), can(memberNoDm, action)]).toEqual([sa, ow, md, mn]);
+  });
+  it('members act only on their own tasks and only after starting DM', () => {
+    expect(can(memberDm, 'task.viewOwn', { assigneeUserId: 3 })).toBe(true);
+    expect(can(memberDm, 'task.startOwn', { assigneeUserId: 3 })).toBe(true);
+    expect(can(memberDm, 'task.doneOwn', { assigneeUserId: 3 })).toBe(true);
+    expect(can(memberDm, 'task.doneOwn', { assigneeUserId: 99 })).toBe(false);
+    expect(can(memberNoDm, 'task.viewOwn', { assigneeUserId: 4 })).toBe(false);
+    expect(can(memberDm, 'reminders.receive', { assigneeUserId: 3 })).toBe(true);
+    expect(can(owner, 'task.doneOwn', { assigneeUserId: 99 })).toBe(true);
+  });
+  it('superadmin who is also owner gets both sets', () => {
+    const both: Actor = { ...owner, isSuperadmin: true };
+    expect(can(both, 'admin.tech')).toBe(true);
+    expect(can(both, 'proposal.decide')).toBe(true);
+  });
+});
+```
+
+Интеграционные тесты:
+- `upsertTelegramUser` обновляет `username` и имена;
+- `ensureMembership` не понижает owner;
+- `bootstrapOwner`: если owner нет → `'created'`; если есть → `'exists'`; если `BOOTSTRAP_OWNER_TG_ID` не задан → `'skipped'`;
+- middleware `context` для апдейта из группы находит workspace по чату, для DM — по членству (в MVP это `default`).
+
+- [ ] **Шаг 2:** FAIL.
+- [ ] **Шаг 3: реализация.** `can` — чистая функция по таблице выше. В `context.ts` строится `ctx.state.actor`: пользователь, его membership в workspace чата или DM, `isSuperadmin`. `bootstrapOwner` вызывается из `startApp` после `ensureDefaultWorkspace`.
+- [ ] **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(people): add users, memberships, bootstrap owner and permission matrix`.
+
+### Task 1.3: Кодек callback-данных и клавиатуры
+
+**Файлы:** создать `src/bot/keyboards/callbackCodec.ts`, `src/bot/keyboards/build.ts`; тест `tests/unit/bot/callbackCodec.test.ts`.
+
+**Интерфейсы:**
+- Produces:
+  - `type Entity = 'p' | 't' | 'c' | 'n' | 'l' | 's' | 'u' | 'a' | 'z' | 'o'` (proposal, task, chat, notification, list, settings, user/person, admin, timezone, ownership);
+  - `interface CallbackPayload { entity: Entity; action: string; id: number; arg?: string }`;
+  - `encodeCallback(p): string` (бросает `CallbackTooLongError`), `decodeCallback(data: string): CallbackPayload | null`;
+  - `toInlineKeyboard(buttons: Buttons): InlineKeyboard`.
+
+- [ ] **Шаг 1: падающие тесты**
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { encodeCallback, decodeCallback, CallbackTooLongError } from '../../../src/bot/keyboards/callbackCodec.js';
+
+describe('callback codec', () => {
+  it('encodes per SPEC §25', () => {
+    expect(encodeCallback({ entity: 'p', action: 'acc', id: 123 })).toBe('v1:p:acc:123');
+    expect(encodeCallback({ entity: 't', action: 'snz', id: 45, arg: '1h' })).toBe('v1:t:snz:45:1h');
+  });
+  it('round-trips', () => {
+    const p = { entity: 'l', action: 'ovd', id: 2, arg: 'a17' } as const;
+    expect(decodeCallback(encodeCallback(p))).toEqual(p);
+  });
+  it.each(['v2:p:acc:1', 'v1:p:acc:abc', 'v1:zz:acc:1', 'garbage', '', 'v1:p:acc:-5', 'v1:p::1', 'v1:p:ACC:1', 'v1:p:acc:1:a:b'])(
+    'rejects %j', (s) => expect(decodeCallback(s)).toBeNull(),
+  );
+  it('refuses payloads over 64 bytes or with unsafe args', () => {
+    expect(() => encodeCallback({ entity: 'p', action: 'acc', id: 1, arg: 'x'.repeat(60) })).toThrow(CallbackTooLongError);
+    expect(() => encodeCallback({ entity: 'p', action: 'acc', id: 1, arg: 'a:b' })).toThrow();
+  });
+});
+```
+
+- [ ] **Шаг 2:** FAIL.
+- [ ] **Шаг 3: реализация.** Регулярка `^v1:([a-z]):([a-z]{1,4}):(\d{1,15})(?::([A-Za-z0-9_.-]{1,40}))?$`, плюс zod-проверка `entity`. Размер считать через `Buffer.byteLength(s, 'utf8') <= 64`.
+- [ ] **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(bot): add versioned callback data codec`.
+
+### Task 1.4: Часовые пояса, `/start` с выбором пояса, `/timezone`
+
+**Файлы:** создать `src/time/zones.ts`, `src/bot/conversations/timezone.ts`; изменить `src/bot/handlers/dm.ts`, `src/bot/views/help.ts`, `src/bot/texts/ru.ts`; тесты `tests/unit/time/zones.test.ts`, `tests/integration/bot/timezone.test.ts`.
+
+**Интерфейсы:**
+- Produces:
+  - `RU_ZONES: readonly string[]` — `Europe/Kaliningrad`, `Europe/Moscow`, `Europe/Samara`, `Asia/Yekaterinburg`, `Asia/Omsk`, `Asia/Novosibirsk`, `Asia/Krasnoyarsk`, `Asia/Irkutsk`, `Asia/Yakutsk`, `Asia/Vladivostok`, `Asia/Magadan`, `Asia/Kamchatka`; подписи для кнопок лежат в `ru.ts`;
+  - `parseZoneInput(input: string): string | null` — кириллические токены (`мск`) лежат в `MSK_TOKENS` в `src/config/constants.ts`;
+  - `zoneLabel(zone: string, at: Date): { kind: 'msk' | 'utc'; offsetMinutes: number }` — для поясов из `RU_ZONES` смещение считается относительно Москвы, для остальных — относительно UTC (D17);
+  - `formatZoneLabel(l): string` в `src/bot/texts/ru.ts` — `МСК`, `МСК+2`, `МСК−1`, `UTC+2`;
+  - `userZone(user: { timezone: string | null }, workspace: { timezone: string }): string`.
+
+- [ ] **Шаг 1: падающие тесты**
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { parseZoneInput, zoneLabel as rawZoneLabel } from '../../../src/time/zones.js';
+import { formatZoneLabel } from '../../../src/bot/texts/ru.js';
+
+const zoneLabel = (zone: string, at: Date) => formatZoneLabel(rawZoneLabel(zone, at));
+const at = new Date('2026-09-23T09:00:00Z');
+
+describe('zones', () => {
+  it.each([
+    ['Europe/Samara', 'Europe/Samara'],
+    ['  asia/yekaterinburg ', 'Asia/Yekaterinburg'],
+    ['+5', 'UTC+5'],
+    ['UTC+5', 'UTC+5'],
+    ['GMT+05:00', 'UTC+5'],
+    ['UTC-3:30', 'UTC-3:30'],
+    ['МСК+2', 'UTC+5'],
+    ['мск', 'Europe/Moscow'],
+    ['Mars/Base', null],
+    ['+15', null],
+  ])('parseZoneInput(%j) → %j', (input, out) => expect(parseZoneInput(input)).toBe(out));
+
+  it.each([
+    ['Europe/Moscow', 'МСК'],
+    ['Asia/Yekaterinburg', 'МСК+2'],
+    ['Europe/Kaliningrad', 'МСК−1'],
+    ['Europe/Paris', 'UTC+2'],
+    ['UTC+5', 'UTC+5'],
+  ])('zoneLabel(%s) → %s', (zone, label) => expect(zoneLabel(zone, at)).toBe(label));
+});
+```
+
+Для 2026-09-23 у Europe/Paris летнее время, UTC+2. Структура из `src/time` превращается в строку только в `ru.ts`, потому что кириллица в `src/time` запрещена.
+
+Интеграционные тесты:
+- первый `/start` показывает кнопки поясов с кнопкой по умолчанию «Оставить: Москва»; нажатие сохраняет `users.timezone`, потом приходит справка по роли;
+- `/timezone` → «Ввести вручную» → `+5` сохраняет `UTC+5`, а `Mars/Base` возвращает понятную ошибку и повторный запрос.
+
+- [ ] **Шаг 2:** FAIL.
+- [ ] **Шаг 3: реализация.** Диалог на conversations v2: побочные эффекты только через `conversation.external`, `maxMillisecondsToWait: CONVERSATION_TIMEOUT_MS`. Сверить API через Context7.
+- [ ] **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(bot): add timezone selection on start and /timezone`.
+
+### Task 1.5: Коды владения — `/transfer`, `/claim`, код для пустого workspace
+
+**Файлы:** создать `src/domain/people/claim.ts`, `src/bot/handlers/transfer.ts`, `src/bot/views/transfer.ts`; изменить `src/bot/handlers/admin.ts`; тесты `tests/unit/domain/claimCode.test.ts`, `tests/integration/domain/claim.test.ts`, `tests/integration/bot/transfer.test.ts`.
+
+**Интерфейсы:**
+- Produces:
+  - `CLAIM_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'`;
+  - `generateClaimCode(randomBytes?: (n: number) => Uint8Array): string` — 8 символов;
+  - `normalizeClaimCode(input: string): string` — верхний регистр, без пробелов и дефисов;
+  - `hashClaimCode(code: string): string` — sha256 hex от нормализованного кода;
+  - `createClaimCode(db, { workspaceId, createdByUserId, previousOwnerAction: 'demote' | 'remove', now }): Promise<{ code: string; expiresAt: Date }>`;
+  - `redeemClaimCode(db, { code, userId, now }): Promise<{ ok: true; workspaceId: number; previousOwnerUserId: number | null } | { ok: false; reason: 'invalid' | 'expired' | 'used' }>`;
+  - `afterOwnerChanged(deps, workspaceId): Promise<void>` в `src/domain/people/ownerChanged.ts` — вызывается после успешного `/claim`. В этой задаче функция только пишет в лог. Задача 1.6 добавляет в неё `requestPendingApprovals`, задача 1.11 — `syncCommands`, каждая со своим тестом.
+
+- [ ] **Шаг 1: падающие тесты**
+  - Unit:
+    - код состоит из 8 символов алфавита;
+    - `normalizeClaimCode(' abcd-2345 ')` даёт `'ABCD2345'`;
+    - хеш детерминирован и не равен коду.
+  - Integration:
+    1. redeem верным кодом → `ok`, новый пользователь становится owner, прежний — member (`demote`);
+    2. повторный redeem → `used`;
+    3. через 24 ч + 1 с → `expired`;
+    4. неверный код → `invalid`;
+    5. при `remove` membership прежнего owner удаляется;
+    6. код для пустого workspace (выпущен superadmin, owner нет) → `ok`, `previousOwnerUserId=null`;
+    7. два одновременных redeem одного кода → ровно один `ok`;
+    8. в БД хранится только хеш: поиск по открытому коду в `claim_codes` ничего не находит.
+  - Бот:
+    - `/transfer` от owner → выбор «Прежний владелец станет участником / будет удалён» → сообщение с кодом;
+    - `/transfer` от member → `forbidden`;
+    - `/claim КОД` в группе игнорируется;
+    - `/admin` → «Код владельца» (superadmin) → код.
+- [ ] **Шаг 2:** FAIL.
+- [ ] **Шаг 3: реализация.** Redeem выполняется в одной транзакции: `SELECT … FOR UPDATE` строки кода → проверки → понизить или удалить прежнего owner → назначить нового → `used_at`. Порядок «сначала понизить, потом назначить» сохраняет частичный уникальный индекс. `redeemClaimCode` никогда не логирует сам код.
+- [ ] **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(people): add one-time ownership transfer codes`.
+
+### Task 1.6: Жизненный цикл групповых чатов
+
+**Файлы:** создать `src/domain/chats/repo.ts`, `src/domain/chats/lifecycle.ts`, `src/bot/handlers/chatMember.ts`, `src/bot/views/chatApproval.ts`, `src/scheduler/jobs/pendingChats.ts`; тесты `tests/integration/bot/chatLifecycle.test.ts`, `tests/integration/scheduler/pendingChats.test.ts`.
+
+**Интерфейсы:**
+- Produces:
+  - `onBotAdded(deps, { tgChat: { id: number; title: string; type: 'group' | 'supergroup' }, addedByTgUserId: number }): Promise<{ chat: ChatRow; outcome: 'activated' | 'pending_notified' | 'pending_no_owner' }>`;
+  - `approveChat(deps, chatId, actor)`, `rejectChat(deps, chatId, actor)`;
+  - `onBotRemoved(deps, tgChatId)` — `status='left'`, pending-сообщения удаляются, `notice_sent_at=null` (D25);
+  - `migrateChat(db, oldTgChatId, newTgChatId)`;
+  - `publishNoticeOnce(deps, chat)`;
+  - `requestPendingApprovals(deps, workspaceId)` — вызывается из `afterOwnerChanged` (1.5): отправляет Owner запросы по pending-чатам и проставляет `pending_since`;
+  - job `pendingChatsJob: Job`.
+
+- [ ] **Шаг 1: падающие тесты** (апдейты `my_chat_member` из `tests/helpers/updates.ts`)
+  1. Бота добавил owner → чат `active`, уведомление (SPEC §15.2) опубликовано один раз. Повторный апдейт уведомление не дублирует.
+  2. Добавил superadmin → `active` (D14).
+  3. Добавил посторонний → `pending`, `pending_since` проставлен. Owner и superadmin получили карточку «Бота добавили в „…“ (добавил: …)» с кнопками `[✅ Разрешить] [🚪 Покинуть чат]`.
+  4. Owner ещё нет → `pending`, `pending_since=null`, superadmin получил карточку. После `/claim` owner получает запрос, `pending_since` проставляется.
+  5. «Разрешить» от owner → `active` плюс уведомление. «Разрешить» от member (подделанный callback) → `forbidden`, статус не меняется.
+  6. «Покинуть» → `leaveChat`, `status='left'`.
+  7. Job: `pending_since` + 72 ч + 1 мин → `leaveChat` и `left`. Через 71 ч ничего не происходит. При `pending_since=null` ничего не происходит.
+  8. Бота удалили (`kicked`) → `left`, pending-сообщения удалены, задачи не тронуты.
+  9. `migrate_to_chat_id` → у той же строки `chats.tg_chat_id` новый, `type='supergroup'`.
+  10. Повышение бота до администратора не меняет статус.
+- [ ] **Шаг 2:** FAIL.
+- [ ] **Шаг 3: реализация.** `publishNoticeOnce` сначала «застолбляет» отправку (`UPDATE chats SET notice_sent_at=$now WHERE id=$1 AND notice_sent_at IS NULL RETURNING id`), потом отправляет. Если отправка упала, метка сбрасывается в `NULL`. Текст уведомления: `settings.privacyNoticeText ?? texts.privacy.chatNotice`.
+- [ ] **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(chats): add group lifecycle with approval, notice and auto-leave`.
+
+### Task 1.7: Нормализация входящих сообщений и эвристика stage 0
+
+**Файлы:** создать `src/ai/pipeline/heuristics.ts`, `src/bot/handlers/normalize.ts`; тесты `tests/unit/ai/heuristics.test.ts`, `tests/unit/bot/normalize.test.ts`.
+
+**Интерфейсы:**
+- Produces:
+  - `classifyForAnalysis(text: string, opts?: { stopList?: readonly string[]; completionSignals?: readonly string[] }): 'pending' | 'skipped'`;
+  - `interface IncomingMessage { tgChatId: number; tgMessageId: number; from: { id: number; first_name: string; last_name?: string; username?: string; is_bot: boolean }; sentAt: Date; text: string; replyToTgMessageId: number | null; replyQuote: string | null; isForward: boolean; forwardOriginName: string | null; isTaskCommand: boolean; commandArgs: string | null }`;
+  - `normalizeIncoming(msg: Message, botUsername: string): IncomingMessage | null`.
+
+- [ ] **Шаг 1: падающие тесты**
+
+```ts
+// heuristics
+import { describe, it, expect } from 'vitest';
+import { classifyForAnalysis } from '../../../src/ai/pipeline/heuristics.js';
+
+describe('stage 0 heuristics (SPEC §7.3)', () => {
+  it.each(['ок', 'Ок.', 'ОК!!', 'ок👍', '👍', '👍👍🔥', '!!!', '+', '  ', 'да', 'нет', 'спасибо!', 'ok', '10'])(
+    'skips %j', (t) => expect(classifyForAnalysis(t)).toBe('skipped'),
+  );
+  it.each(['готово', 'Сделала', 'сделал ✅', 'отправила', 'Готова!', '15:00', 'в 15', 'Маша, подготовь расписание', 'спасибо большое, сделаю завтра'])(
+    'keeps %j', (t) => expect(classifyForAnalysis(t)).toBe('pending'),
+  );
+});
+```
+
+```ts
+// normalize — строить Message-объекты вручную (минимальные поля)
+// Случаи:
+// 1. текст от человека → IncomingMessage с text и sentAt = date*1000.
+// 2. from.is_bot → null. 3. нет text и caption (стикер, new_chat_members) → null.
+// 4. photo + caption 'счёт' → text '[фото] счёт'; document → '[документ] …'; video → '[видео] …'; audio → '[аудио] …'; animation → '[gif] …'.
+// 5. '/help' → null; '/task купить бумагу' → isTaskCommand=true, commandArgs='купить бумагу'; '/task@school_bot' → isTaskCommand=true, commandArgs=null.
+// 6. forward_origin: user → 'Ольга'; hidden_user → sender_user_name; chat/channel → title; isForward=true.
+// 7. reply_to_message → replyToTgMessageId и replyQuote = текст исходного, обрезанный до 200 символов.
+// 8. форум: reply_to_message.forum_topic_created → replyToTgMessageId=null (D26).
+// 9. quote (частичная цитата при ответе) → replyQuote = quote.text.
+// 10. текст 5000 символов → text сохраняется целиком (обрезка до 2000 — только в buildInput).
+```
+
+- [ ] **Шаг 2:** FAIL.
+- [ ] **Шаг 3: реализация.**
+  - Нормализация текста: NFC → lowercase → trim → схлопнуть пробелы → убрать пунктуацию по краям.
+  - Длина считается как `Array.from(s).length`.
+  - Порядок правил: сигналы завершения (любое слово текста совпадает с `COMPLETION_SIGNALS`) → `pending`; стоп-лист (весь нормализованный текст целиком) → `skipped`; длина меньше 3 → `skipped`; только эмодзи и пунктуация (`/^[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Regional_Indicator}‍️\p{P}\p{S}\s]+$/u`) → `skipped`; иначе `pending`.
+  - `\p{Emoji_Component}` не использовать: он включает цифры (`CLAUDE.md` §12).
+  - Метки медиа (`[фото]`) берутся из `texts.media` в `ru.ts`.
+- [ ] **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(intake): add message normalization and stage-0 heuristics`.
+
+### Task 1.8: Приём сообщений в группах и правки
+
+**Файлы:** создать `src/domain/chats/messages.ts`, `src/bot/handlers/group.ts`; тест `tests/integration/bot/groupIntake.test.ts`.
+
+**Интерфейсы:**
+- Consumes: `normalizeIncoming`, `classifyForAnalysis`, `upsertTelegramUser`, `ensureMembership`.
+- Produces:
+  - `saveIncomingMessage(db, { chat: ChatRow; incoming: IncomingMessage; authorUserId: number; status: 'pending' | 'skipped' }): Promise<MessageRow | null>` — `ON CONFLICT (chat_id, tg_message_id) DO NOTHING`;
+  - `applyEdit(db, { chatId, tgMessageId, text, editedAt }): Promise<'updated_pending' | 'updated_analyzed' | 'not_found'>`.
+
+- [ ] **Шаг 1: падающие тесты**
+  1. Активный чат, текст «Маша, подготовь расписание» → строка `pending`, автор есть в `users` и в `memberships`. При `first_name='Мария Иванова'` получается `display_name='Мария'` (D28).
+  2. «ок» → `skipped`.
+  3. Сообщения ботов не сохраняются.
+  4. Чат `pending`, `paused` или `analysis_enabled=false` → ничего не сохраняется.
+  5. Фото с подписью → `[фото] …`.
+  6. Пересылка → `is_forward=true`, `forward_origin_name` заполнен.
+  7. Ответ на сообщение, которого нет в БД → `reply_to_quote` заполнен.
+  8. Один и тот же апдейт дважды → одна строка.
+  9. `edited_message` для `pending` → текст обновлён, `edited_at` пусто.
+  10. `edited_message` для `analyzed` → текст обновлён, `edited_at` проставлен, в лог пишется debug.
+  11. Текст 5000 символов сохранён целиком.
+  12. `/task` в группе этим обработчиком не сохраняется: он уходит обработчику задачи 3.10, до фазы 3 — в заглушку, которая только пишет в лог. Прочие команды игнорируются.
+- [ ] **Шаг 2:** FAIL.
+- [ ] **Шаг 3: реализация** по SPEC §7.2.
+- [ ] **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(intake): store group messages and handle edits`.
+
+### Task 1.9: `/chats` — управление чатами
+
+**Файлы:** создать `src/bot/handlers/chats.ts`, `src/bot/views/chats.ts`; тесты `tests/unit/bot/views/chats.test.ts`, `tests/integration/bot/chats.test.ts`.
+
+**Интерфейсы:** Produces `renderChatList(chats: ChatRow[]): { text: string; buttons: Buttons }`, `renderChatCard(chat: ChatRow): { text: string; buttons: Buttons }`; domain-функции `setAnalysis`, `setReactions`, `pauseChat`, `resumeChat`, `leaveChat` в `src/domain/chats/lifecycle.ts`.
+
+- [ ] **Шаг 1: падающие тесты**
+  - Views (inline snapshot): список со статусами (`🟢 активен`, `⏸ пауза`, `⏳ ждёт разрешения`, `🚪 покинут`). Карточка с кнопками `[Анализ: вкл] [Реакции: вкл] [⏸ Пауза] [🚪 Покинуть] [◀️ Назад]`, каждый `callback_data` не длиннее 64 байт.
+  - Integration:
+    - owner переключает анализ → БД обновлена, карточка отредактирована;
+    - member → `forbidden`;
+    - «Покинуть» требует подтверждения («Точно покинуть „…“?»), после него `leaveChat`, `left`, pending-сообщения удалены;
+    - «Пауза» → `paused`, «Возобновить» → `active`.
+- [ ] **Шаг 2:** FAIL.
+- [ ] **Шаг 3: реализация.**
+- [ ] **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(chats): add /chats management`.
+
+### Task 1.10: `/people` — участники, имена, алиасы
+
+**Файлы:** создать `src/bot/handlers/people.ts`, `src/bot/views/people.ts`, `src/bot/conversations/editPerson.ts`; тесты `tests/unit/domain/aliases.test.ts`, `tests/integration/bot/people.test.ts`.
+
+**Интерфейсы:** Produces `parseAliases(input: string): string[]` в `src/domain/people/repo.ts`, а также `updatePerson(db, { membershipId, displayName?, aliases?, notifyAssignments? })`.
+
+- [ ] **Шаг 1: падающие тесты**
+  - `parseAliases('Маша, Машенька ,маша,, ')` → `['Маша', 'Машенька']` (регистронезависимая дедупликация, пустые убираются).
+  - Больше 10 алиасов или алиас длиннее 30 символов → ошибка.
+  - `/people` (owner) → список: имя, алиасы, пояс, 🔔 уведомления вкл/выкл, статус DM.
+  - Редактирование имени и алиасов через диалог сохраняется.
+  - member → `forbidden`.
+- [ ] **Шаг 2:** FAIL.
+- [ ] **Шаг 3: реализация.** Кнопка «Удалить данные» появляется в задаче 3.12.
+- [ ] **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(people): add /people with names and aliases`.
+
+### Task 1.11: Privacy mode, `/privacy`, меню команд
+
+**Файлы:** создать `src/bot/startupChecks.ts`, `src/bot/commands.ts`, `src/bot/handlers/privacy.ts`, `docs/legal/privacy_notice_chat.md`, `docs/legal/privacy_full.md`; изменить `src/bot/texts/ru.ts`; тест `tests/integration/bot/privacy.test.ts`.
+
+**Интерфейсы:**
+- Produces:
+  - `checkPrivacyMode(deps, me: UserFromGetMe): Promise<void>` — при `can_read_all_group_messages === false` пишет warn в лог и вызывает `errors.alert('privacy_mode', texts.admin.privacyModeOn)`;
+  - `syncCommands(deps, api)` — `setMyCommands` для scope: все личные чаты (`/start /help /my /timezone /privacy`), все группы (`/task /privacy`), чат owner (полный список SPEC §12.2), чаты superadmin (плюс `/admin /debug /reanalyze`).
+
+- [ ] **Шаг 1: падающие тесты**
+  - `getMe` с `can_read_all_group_messages: false` → superadmin получает инструкцию «Отключите privacy mode и **заново добавьте бота** в группы».
+  - При `true` сообщения нет.
+  - `/privacy` в группе → бот отвечает полным текстом (единственный случай, когда бот пишет в группу).
+  - `/privacy` в DM → тот же текст.
+  - `syncCommands` делает 4 вызова `setMyCommands` с правильными `scope`.
+  - После `/claim` меню owner обновляется.
+- [ ] **Шаг 2:** FAIL.
+- [ ] **Шаг 3: реализация.** Тексты `privacy_full` и уведомления в чате лежат в `ru.ts`. Их содержательные копии — в `docs/legal/*.md` с пометкой «проверить юристу». Обязательно указать, что имена третьих лиц в MVP не заменяются (SPEC §19.3.2).
+- [ ] **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(privacy): add privacy mode check, /privacy and scoped command menus`.
+
+### Task 1.12: Очистка по сроку хранения и закрытие фазы
+
+**Файлы:** создать `src/domain/chats/retention.ts`, `src/scheduler/jobs/retention.ts`; тест `tests/integration/scheduler/retention.test.ts`.
+
+**Интерфейсы:** Produces `runRetention(db, { now: Date }): Promise<{ deletedMessages: number; clearedTexts: number; clearedRaw: number }>` и `retentionJob = dailyJob('retention', '03:30', …)`.
+
+- [ ] **Шаг 1: падающие тесты** (сдвиг времени через `fixedClock`)
+  1. Сообщение старше 31 дня → строка удалена.
+  2. Сообщение возрастом 29 дней → осталось.
+  3. Сообщение старше 31 дня, на которое ссылается pending-proposal (`source_message_ids`) → строка осталась, `text=NULL`.
+  4. У batch старше `batchRawDays` → `raw_response=NULL`.
+  5. `messageDays` берётся из настроек workspace чата (например, 10).
+  6. Job в тот же день второй раз не запускается.
+- [ ] **Шаг 2:** FAIL.
+- [ ] **Шаг 3: реализация.** SQL с параметром `$now`; удаление строк по условию `NOT EXISTS (SELECT 1 FROM proposals p WHERE p.status='pending' AND m.id = ANY(p.source_message_ids))`.
+- [ ] **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(retention): delete message texts after retention period`.
+- [ ] **Шаг 6: закрытие фазы.**
+  1. `docs/` и `CHANGELOG.md` обновлены.
+  2. RC-релиз `v0.2.0-rc.1` → деплой на dev (👤).
+  3. Ручная проверка приёмки: тестовая группа, добавленная owner, и группа, добавленная посторонним.
+  4. PR `Phase 1: groups and message intake` → 👤 подтверждение → merge → тег `v0.2.0`.
+
+---
+## Фаза 2 — AI-пайплайн и предложения (ветка `phase-2-ai`)
+
+**Решение по ходу:** перед Task 2.15 обсудить с пользователем D11 (истечение proposals). 👤 Аккаунт OpenRouter, ключ с лимитом расходов, тестовые группы.
+
+**Приёмка (SPEC §22):**
+- eval достигает целей SPEC §20.2 на выбранной модели: recall ≥ 0.90, precision ≥ 0.60, точность дат ≥ 0.85;
+- «Маша, подготовь расписание к пятнице» даёт карточку у Owner не позже 4 мин после последнего сообщения, с правильными исполнителем и сроком;
+- «сделала» на открытую задачу даёт предложение закрыть её;
+- отключение OpenRouter не теряет сообщения;
+- превышение бюджета ставит анализ на паузу и оповещает.
+
+### Task 2.1: Схемы выхода extractor
+
+**Файлы:** создать `src/ai/schemas.ts`; тест `tests/unit/ai/schemas.test.ts`.
+
+**Интерфейсы:**
+- Produces:
+  - `TimeHint`, `Due`, `Action`, `ExtractionResult` — дословно SPEC §9.5;
+  - `type ExtractionResultT = z.infer<typeof ExtractionResult>`, `type DueT`, `type ActionT`;
+  - `ExtractionWire` — wire-схема по D4;
+  - `extractionJsonSchema(): Record<string, unknown>` — `z.toJSONSchema(ExtractionWire)`;
+  - `parseExtraction(raw: unknown): { ok: true; value: ExtractionResultT } | { ok: false; error: string }` — сначала нормализует wire-данные (`null` → поле отсутствует у `changes.*`), потом проверяет строгой схемой. `error` — короткий человекочитаемый список проблем для повторного запроса.
+
+- [ ] **Шаг 1: падающие тесты**
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { parseExtraction, extractionJsonSchema } from '../../../src/ai/schemas.js';
+
+const create = {
+  type: 'create', category: 'assignment', title: 'Подготовить расписание на октябрь', description: null,
+  assignee_ref: 'P1', assignee_name_text: null,
+  due: { due_local: '2026-09-25', time_hint: 'none', due_text: 'к пятнице' },
+  priority: 'normal', source_message_ids: ['M1'], confidence: 0.87, reasoning: 'Прямое поручение',
+};
+
+describe('extraction schema', () => {
+  it('accepts a valid result', () => {
+    expect(parseExtraction({ actions: [create] })).toMatchObject({ ok: true });
+    expect(parseExtraction({ actions: [] })).toMatchObject({ ok: true });
+  });
+  it.each([
+    [{ ...create, source_message_ids: ['X1'] }],
+    [{ ...create, source_message_ids: [] }],
+    [{ ...create, confidence: 1.2 }],
+    [{ ...create, title: 'ok' }],
+    [{ ...create, assignee_ref: 'Маша' }],
+    [{ ...create, due: { due_local: '25.09.2026', time_hint: 'none', due_text: null } }],
+    [{ type: 'complete', target_ref: 'X5', source_message_ids: ['M1'], confidence: 0.9, reasoning: '' }],
+  ])('rejects invalid action %#', (a) => {
+    const r = parseExtraction({ actions: [a] });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.length).toBeGreaterThan(0);
+  });
+  it('rejects more than 20 actions', () => {
+    expect(parseExtraction({ actions: Array(21).fill(create) }).ok).toBe(false);
+  });
+  it('normalizes wire nulls in update.changes', () => {
+    const r = parseExtraction({ actions: [{ type: 'update', target_ref: 'T12', changes: { due: null, assignee_ref: null, title: 'Новое' },
+      source_message_ids: ['M2'], confidence: 0.8, reasoning: 'Уточнение' }] });
+    expect(r.ok && r.value.actions[0]).toMatchObject({ changes: { title: 'Новое' } });
+    expect(r.ok && 'due' in (r.value.actions[0] as { changes: object }).changes).toBe(false);
+  });
+  it('produces a strict-compatible JSON schema', () => {
+    const walk = (n: unknown): void => {
+      if (n && typeof n === 'object') {
+        const o = n as Record<string, unknown>;
+        if (o.type === 'object' && o.properties) {
+          expect(o.additionalProperties).toBe(false);
+          expect(new Set(o.required as string[])).toEqual(new Set(Object.keys(o.properties as object)));
+        }
+        Object.values(o).forEach(walk);
+      }
+    };
+    walk(extractionJsonSchema());
+    expect(JSON.stringify(extractionJsonSchema())).not.toContain('"oneOf"'); // strict mode понимает только anyOf
+  });
+});
+```
+
+Примечание: в `update.changes` wire-поле `assignee_ref: null` неоднозначно: это «не менять» или «снять исполнителя»? Правило: `null` в wire означает «не менять». Снятие исполнителя моделью не поддерживается, Owner делает это через «Изменить».
+
+- [ ] **Шаг 2:** FAIL.
+- [ ] **Шаг 3: реализация.** API `z.toJSONSchema` сверить через Context7 → zod v4. Если для `discriminatedUnion` генерируется `oneOf`, при построении wire-схемы заменить его на `anyOf`.
+- [ ] **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(ai): add extraction zod schemas and strict wire schema`.
+
+### Task 2.2: Псевдонимизация
+
+**Файлы:** создать `src/ai/pseudonymize.ts`; тест `tests/unit/ai/pseudonymize.test.ts`. Маркеры (`[телефон]`, `[email]`, `[реквизиты]`, `[ссылка]`, `@user`) лежат в `src/config/constants.ts` как `PII_MARKERS`.
+
+**Интерфейсы:**
+- Produces:
+  - `interface ParticipantForLlm { code: string; userId: number; displayName: string; aliases: string[]; username: string | null; lastName: string | null; isOwner: boolean }`;
+  - `pseudonymizeText(text: string, participants: readonly ParticipantForLlm[]): string`.
+
+- [ ] **Шаг 1: падающие тесты**
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { pseudonymizeText, type ParticipantForLlm } from '../../../src/ai/pseudonymize.js';
+
+const P: ParticipantForLlm[] = [
+  { code: 'P0', userId: 1, displayName: 'Анна', aliases: [], username: 'anna_p', lastName: 'Петрова', isOwner: true },
+  { code: 'P1', userId: 2, displayName: 'Мария', aliases: ['Маша'], username: 'maria_t', lastName: 'Иванова', isOwner: false },
+];
+const ps = (t: string) => pseudonymizeText(t, P);
+
+describe('pseudonymize (SPEC §19.3.2)', () => {
+  it.each([
+    ['@maria_t подготовь', 'P1 подготовь'],
+    ['@unknown_user привет', '@user привет'],
+    ['позвони +7 (912) 345-67-89', 'позвони [телефон]'],
+    ['89123456789', '[телефон]'],
+    ['8 912 345 67 89 мама Пети', '[телефон] мама Пети'],
+    ['+79123456789', '[телефон]'],
+    ['912-345-67-89', '[телефон]'],
+    ['+33 6 12 34 56 78', '[телефон]'],
+    ['пиши на anna@school.ru', 'пиши на [email]'],
+    ['карта 2202 2024 1234 5678', 'карта [реквизиты]'],
+    ['счёт 40702810900000012345', 'счёт [реквизиты]'],
+    ['смотри https://docs.google.com/x?id=1', 'смотри [ссылка]'],
+    ['https://t.me/maria_t', '[ссылка]'],
+    ['www.school.ru/price', '[ссылка]'],
+    ['Мария Иванова сделает', 'Мария сделает'],
+    ['Иванова, отчёт готов?', 'P1, отчёт готов?'],
+    ['ИВАНОВА!', 'P1!'],
+  ])('%j → %j', (input, out) => expect(ps(input)).toBe(out));
+
+  it.each([
+    'созвон 15.10 в 14:00',
+    'оплата 15 000 ₽ до 01.11',
+    'урок в каб. 3',
+    'дата 2026-10-03',
+    'ученик Петя Сидоров',
+    'Ивановка — это деревня',
+  ])('keeps %j unchanged', (t) => expect(ps(t)).toBe(t));
+
+  it('is idempotent', () => {
+    const t = 'Мария Иванова, @maria_t, +7 912 345-67-89, https://x.ru';
+    expect(ps(ps(t))).toBe(ps(t));
+  });
+});
+```
+
+- [ ] **Шаг 2:** FAIL.
+- [ ] **Шаг 3: реализация.**
+  - Порядок замен: URL → e-mail → `@username` → номера карт и счетов (16–20 цифр с разделителями) → телефоны → фамилии.
+  - Границы слов: `(?<![\p{L}\p{N}_])` и `(?![\p{L}\p{N}_])` с флагом `u`, без `\b`.
+  - «Имя Фамилия», где имя совпадает с `displayName` или алиасом, превращается в «Имя». Отдельная фамилия превращается в `P#`. Совпадение по фамилии регистронезависимое и точное: падежные формы в MVP не обрабатываются, это отмечено в `/privacy`.
+  - Имена третьих лиц не заменяются (SPEC §19.3.2).
+- [ ] **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(ai): add pseudonymization before LLM calls`.
+
+### Task 2.3: Промпты, few-shot и сборка входа extractor
+
+**Файлы:**
+- Создать: `prompts/extractor.v1.md`, `prompts/extractor.single.v1.md`, `prompts/parseDate.v1.md`, `prompts/profiles/school_ru.md`, `prompts/examples.school_ru.json`, `src/ai/prompts.ts`, `src/ai/pipeline/buildInput.ts`
+- Тесты: `tests/unit/ai/prompts.test.ts`, `tests/unit/ai/buildInput.test.ts`
+
+**Интерфейсы:**
+- Produces:
+  - `interface PromptBundle { version: string; system: string; userTemplate: string; examples: Array<{ user: string; assistant: string }> }`;
+  - `loadPrompt(opts: { name: 'extractor' | 'extractor.single' | 'parseDate'; version: string; profile: string; dir?: string }): PromptBundle` — `version` имеет вид `'extractor.v1'`;
+  - `renderTemplate(tpl: string, vars: Record<string, string>): string` — бросает ошибку на отсутствующую переменную и на оставшийся `{name}`;
+  - `interface OpenTaskForLlm { id: number; title: string; assignee: AssigneeResolution; dueAt: Date | null; dueAllDay: boolean }`, `interface OpenProposalForLlm { id: number; title: string; kind: string; targetTaskId: number | null }`;
+  - `interface MessageForLlm { id: number; sentAt: Date; authorUserId: number; authorTz: string | null; text: string; replyToMessageId: number | null; replyQuote: string | null; isForward: boolean; forwardOriginName: string | null; forwardOriginUserId: number | null }`;
+  - `interface RefMaps { messages: Map<string, number>; participants: Map<string, number>; tasks: Map<string, number>; proposals: Map<string, number> }`;
+  - `interface ExtractionInput { promptVersion: string; messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>; refs: RefMaps }`;
+  - `buildExtractionInput(args: { now: Date; workspaceTz: string; participants: ParticipantForLlm[]; openTasks: OpenTaskForLlm[]; openProposals: OpenProposalForLlm[]; context: MessageForLlm[]; messages: MessageForLlm[] }, prompt: PromptBundle): ExtractionInput`.
+
+- [ ] **Шаг 1: файлы промптов.**
+  - `extractor.v1.md` — текст SPEC §9.9. Выше маркера `<!-- DATA -->` — инструкции и `{profile}`, ниже — строки с `{now_local}`, `{weekday}`, `{workspace_tz}`, `{participants}`, `{open_tasks}`, `{open_proposals}`, `{context_messages}`, `{new_messages}` (D27).
+  - `extractor.single.v1.md` — дополнение для ручного режима: «Во входе ровно одно сообщение, которое пользователь явно пометил как задачу. Верни ровно одно действие `create`…» (D19).
+  - `parseDate.v1.md` — «разбери дату и время из фразы относительно „Сейчас“», вывод по схеме `Due`.
+  - `profiles/school_ru.md` — текст профиля из SPEC §9.9.
+  - `examples.school_ru.json` — 8–10 синтетических примеров: по одному на каждую категорию `create`, плюс `complete`, `update`, `cancel` и два негатива. Каждый пример проходит `ExtractionResult`.
+- [ ] **Шаг 2: падающие тесты**
+  - `prompts.test.ts`:
+    - `loadPrompt('extractor','extractor.v1','school_ru')` отдаёт `system` с текстом профиля и без `{profile}`;
+    - `userTemplate` содержит все 8 переменных;
+    - каждый пример из `examples.school_ru.json` проходит `parseExtraction`;
+    - `renderTemplate('a {x}', {})` бросает ошибку.
+  - `buildInput.test.ts` (сейчас `2026-09-23T12:00+03:00`, пояс Europe/Moscow; участники из 2.2; задача T12 «Подготовить расписание», P1, 2026-10-02 18:00):
+    1. Строки участников: `P0/OWNER: Анна (руководитель)` и `P1: Мария (алиасы: Маша)`.
+    2. Во всех `content` нет `Петрова`, `Иванова`, `anna_p`, `maria_t` и Telegram ID.
+    3. Новое сообщение: `M1 [2026-09-23 11:58, P0]: Маша, подготовь расписание к пятнице`.
+    4. Ответ: `M2 [2026-09-23 12:01, P1, ответ на M1]: хорошо`. Ответ на контекстное сообщение ссылается на `M-ctx-N`. Если исходного нет в БД — `ответ на «<reply_quote>»`.
+    5. Пересылка от участника: `переслано от P1`. От чужого: `переслано от «Ольга»`.
+    6. Автор с поясом, отличным от пояса workspace: `…, P2, пояс Asia/Yekaterinburg]`.
+    7. Задачи: `T12: «Подготовить расписание» · P1 · срок 2026-10-02 18:00`. All-day — `срок 2026-10-02`, без срока — `без срока`, исполнитель «всем» — `ALL`.
+    8. Лимиты: не больше 50 задач, 20 proposals и 20 контекстных сообщений. Текст обрезан до 2000 символов с `…`.
+    9. `refs.messages.get('M1')` равен ID сообщения в БД, `refs.participants.get('P1') === 2`.
+    10. Телефон в тексте превращается в `[телефон]`.
+    11. Порядок `messages`: system, пары few-shot, user.
+- [ ] **Шаг 3:** FAIL.
+- [ ] **Шаг 4: реализация.** Тексты промптов лежат в `prompts/*.md`. Подписи в строках входа (`ответ на`, `переслано от`, `срок`, `без срока`, `пояс`, `руководитель`, `алиасы`) — в `constants.ts` как `PROMPT_LABELS` (правило кириллицы).
+- [ ] **Шаг 5:** PASS.
+- [ ] **Шаг 6: коммит и push:** `feat(ai): add versioned prompts, few-shot examples and input builder`.
+
+### Task 2.4: Провайдеры LLM и оркестрация extract
+
+**Файлы:**
+- Создать: `src/ai/providers/types.ts`, `src/ai/providers/openrouter.ts`, `src/ai/providers/fixture.ts`, `src/ai/pipeline/extract.ts`, `tests/fixtures/llm/*.json`
+- Тесты: `tests/unit/ai/openrouter.test.ts`, `tests/unit/ai/extract.test.ts`
+
+**Интерфейсы** (SPEC §9.2 плюс уровень клиента):
+
+```ts
+// src/ai/providers/types.ts
+export interface Usage { inputTokens: number; outputTokens: number; costUsd: number }
+export interface CompletionRequest { model: string; messages: ExtractionInput['messages']; jsonSchema: Record<string, unknown> | null; timeoutMs: number }
+export interface CompletionResponse { content: string; usage: Usage; model: string; raw: unknown }
+export interface ChatCompletionClient { complete(req: CompletionRequest): Promise<CompletionResponse> }
+export interface ExtractionProvider {
+  extract(input: ExtractionInput): Promise<{ result: ExtractionResultT; usage: Usage; model: string; raw: unknown }>;
+}
+export interface PrefilterInput { messages: ExtractionInput['messages'] }
+export interface DecisionProvider {
+  hasActionableContent(input: PrefilterInput): Promise<{ probability: number; usage: Usage; model: string }>;
+}
+export class ExtractionError extends Error { constructor(message: string, readonly usage: Usage, readonly attempts: string[]) { super(message); } }
+export interface AiProviders { extraction: ExtractionProvider; decision: DecisionProvider | null; client: ChatCompletionClient; models: { primary: string; fallback: string | null } }
+```
+
+- Produces:
+  - `createOpenRouterClient(opts: { apiKey: string; fetch?: typeof fetch; referer: string; title: string }): ChatCompletionClient`;
+  - `class LlmExtractionProvider implements ExtractionProvider` с конструктором `(client, { primary, fallback, timeoutMs = 30_000, jsonSchema })`;
+  - `class FixtureClient implements ChatCompletionClient` с конструктором `(script: Array<CompletionResponse | Error>)`, отдаёт ответы по порядку и сохраняет запросы в `requests`.
+
+- [ ] **Шаг 1: fixtures** в `tests/fixtures/llm/`: `valid_assignment.json`, `valid_complete_t12.json`, `invalid_json.json` (`content: "{actions: ["`), `schema_violation.json` (confidence 1.4), `hallucinated_refs.json` (M9, P7, T99), `empty_actions.json`, `too_many_actions.json`. Формат — `CompletionResponse`.
+- [ ] **Шаг 2: падающие тесты**
+  - `openrouter.test.ts` (подменный `fetch` через опцию клиента openai SDK; сверить через Context7):
+    - в запросе: `baseURL` OpenRouter, `model`, `temperature: 0`, `response_format: { type: 'json_schema', json_schema: { name: 'extraction', strict: true, schema } }`, заголовки `HTTP-Referer` и `X-Title`;
+    - из `usage.cost`, `prompt_tokens` и `completion_tokens` получается `Usage`;
+    - без `usage.cost` → `costUsd=0` и warn;
+    - ответ 400 со словом `response_format` → повторный запрос с `{ type: 'json_object' }` (схема передаётся текстом в system), модель запоминается как non-strict.
+  - `extract.test.ts`:
+    1. Валидный ответ с первой попытки → `result`, `model=primary`.
+    2. `invalid_json`, затем валидный → вторая попытка на primary. В её `messages` есть assistant с сырым ответом и user с текстом ошибки. `usage` просуммирован.
+    3. Две невалидные попытки подряд → fallback-модель → успех, `model=fallback`.
+    4. Таймаут на primary (Error `timeout`) → сразу fallback.
+    5. Все попытки неудачны → `ExtractionError` с суммарным `usage` и списком попыток.
+    6. `fallback=null` и две неудачи → `ExtractionError`.
+    7. `empty_actions` → `{ actions: [] }`, это не ошибка.
+- [ ] **Шаг 3:** FAIL.
+- [ ] **Шаг 4: реализация.**
+  - OpenAI SDK: `new OpenAI({ apiKey, baseURL: 'https://openrouter.ai/api/v1', defaultHeaders, fetch })`.
+  - Дополнительно передать `provider: { require_parameters: true }` (сверить с документацией OpenRouter), чтобы запросы уходили только к провайдерам со structured outputs.
+  - `usage` разбирать zod-схемой с `.passthrough()`: поле `cost` отсутствует в типах SDK.
+- [ ] **Шаг 5:** PASS.
+- [ ] **Шаг 6: коммит и push:** `feat(ai): add OpenRouter client and extraction provider with retry and fallback`.
+
+### Task 2.5: Разрешение сроков (resolveDue)
+
+**Файлы:** создать `src/time/resolveDue.ts`; тест `tests/unit/time/resolveDue.test.ts`.
+
+**Интерфейсы:**
+- Produces:
+  - `type FuzzyTimes = Settings['fuzzyTimes']`;
+  - `interface ResolvedDue { dueAt: Date | null; allDay: boolean; tz: string | null; inPast: boolean; invalid: boolean; dueText: string | null }`;
+  - `resolveDue(due: DueT, opts: { zone: string; now: Date; fuzzy: FuzzyTimes }): ResolvedDue`.
+
+- [ ] **Шаг 1: падающие тесты** (SPEC §10; значения проверены на luxon 3.7.2)
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { resolveDue } from '../../../src/time/resolveDue.js';
+import type { DueT } from '../../../src/ai/schemas.js';
+
+const fuzzy = { morning: '10:00', afternoon: '15:00', evening: '19:00', endOfWeekDay: 5, endOfWeekTime: '18:00', soonWorkdays: 2, defaultTime: '18:00' };
+const WED = '2026-09-23T12:00:00+03:00'; // среда
+const r = (due: Partial<DueT>, now = WED, zone = 'Europe/Moscow') =>
+  resolveDue({ due_local: null, time_hint: 'none', due_text: null, ...due }, { zone, now: new Date(now), fuzzy });
+const iso = (x: { dueAt: Date | null }) => x.dueAt?.toISOString() ?? null;
+
+describe('resolveDue (SPEC §10)', () => {
+  it.each([
+    [{ due_local: '2026-09-25T18:00' }, '2026-09-25T15:00:00.000Z', false],
+    [{ due_local: '2026-09-25', time_hint: 'morning' }, '2026-09-25T07:00:00.000Z', false],
+    [{ due_local: '2026-09-25', time_hint: 'afternoon' }, '2026-09-25T12:00:00.000Z', false],
+    [{ due_local: '2026-09-25', time_hint: 'evening' }, '2026-09-25T16:00:00.000Z', false],
+    [{ due_local: '2026-09-25' }, '2026-09-25T20:59:00.000Z', true],
+    [{ time_hint: 'end_of_week' }, '2026-09-25T15:00:00.000Z', false],
+    [{ time_hint: 'soon' }, '2026-09-25T15:00:00.000Z', false],
+    [{ due_local: '2026-09-25', time_hint: 'end_of_week' }, '2026-09-25T15:00:00.000Z', false], // дата есть → дата + defaultTime
+  ] as const)('%j', (due, expected, allDay) => {
+    const res = r(due);
+    expect(iso(res)).toBe(expected);
+    expect(res.allDay).toBe(allDay);
+    expect(res.tz).toBe('Europe/Moscow');
+  });
+
+  it('returns null due when nothing is given', () => {
+    expect(r({})).toMatchObject({ dueAt: null, allDay: false, tz: null, inPast: false });
+  });
+
+  it.each([
+    ['2026-09-25T17:00:00+03:00', '2026-09-25T15:00:00.000Z'], // пт до 18:00 → сегодня
+    ['2026-09-25T18:00:00+03:00', '2026-10-02T15:00:00.000Z'], // ровно 18:00 → следующая
+    ['2026-09-25T18:30:00+03:00', '2026-10-02T15:00:00.000Z'],
+    ['2026-09-26T10:00:00+03:00', '2026-10-02T15:00:00.000Z'], // сб
+    ['2026-09-27T10:00:00+03:00', '2026-10-02T15:00:00.000Z'], // вс
+  ])('end_of_week at %s', (now, expected) => expect(iso(r({ time_hint: 'end_of_week' }, now))).toBe(expected));
+
+  it.each([
+    ['2026-09-24T12:00:00+03:00', '2026-09-28T15:00:00.000Z'], // чт → пн
+    ['2026-09-25T12:00:00+03:00', '2026-09-29T15:00:00.000Z'], // пт → вт
+    ['2026-09-26T12:00:00+03:00', '2026-09-29T15:00:00.000Z'], // сб → вт
+  ])('soon at %s', (now, expected) => expect(iso(r({ time_hint: 'soon' }, now))).toBe(expected));
+
+  it('crosses the year boundary', () => {
+    expect(iso(r({ time_hint: 'soon' }, '2026-12-30T12:00:00+03:00'))).toBe('2027-01-01T15:00:00.000Z');
+    expect(iso(r({ time_hint: 'end_of_week' }, '2026-12-31T12:00:00+03:00'))).toBe('2027-01-01T15:00:00.000Z');
+  });
+
+  it('flags dates in the past', () => {
+    expect(r({ due_local: '2026-09-22' }).inPast).toBe(true);
+    expect(r({ due_local: '2026-09-23' }).inPast).toBe(false);          // 23:59 сегодня
+    expect(r({ due_local: '2026-09-23', time_hint: 'morning' }).inPast).toBe(true);
+  });
+
+  it('uses the author zone', () => {
+    const res = r({ due_local: '2026-09-25T18:00' }, WED, 'Asia/Yekaterinburg');
+    expect(iso(res)).toBe('2026-09-25T13:00:00.000Z');
+    expect(res.tz).toBe('Asia/Yekaterinburg');
+  });
+
+  it('handles DST gaps and overlaps deterministically', () => {
+    expect(iso(r({ due_local: '2026-03-29T02:30' }, '2026-03-20T12:00:00+01:00', 'Europe/Berlin'))).toBe('2026-03-29T01:30:00.000Z');
+    expect(iso(r({ due_local: '2026-10-25T02:30' }, '2026-10-20T12:00:00+02:00', 'Europe/Berlin'))).toBe('2026-10-25T00:30:00.000Z');
+  });
+
+  it('marks impossible dates as invalid instead of throwing', () => {
+    expect(r({ due_local: '2026-02-30' })).toMatchObject({ dueAt: null, invalid: true });
+  });
+
+  it('respects fuzzyTimes overrides', () => {
+    const res = resolveDue({ due_local: '2026-09-25', time_hint: 'morning', due_text: null },
+      { zone: 'Europe/Moscow', now: new Date(WED), fuzzy: { ...fuzzy, morning: '09:30' } });
+    expect(iso(res)).toBe('2026-09-25T06:30:00.000Z');
+  });
+});
+```
+
+- [ ] **Шаг 2:** FAIL.
+- [ ] **Шаг 3: реализация.**
+  - Только luxon. Выходные — сб и вс, праздники не учитываются (SPEC §30.2).
+  - `end_of_week`: кандидат — пятница текущей ISO-недели в `endOfWeekTime`. Если кандидат ≤ `now`, берётся +7 дней.
+  - `soon`: прибавлять дни, пропуская выходные, пока не наберётся `soonWorkdays` рабочих дней, потом поставить `defaultTime`.
+- [ ] **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(time): resolve fuzzy due dates across zones and DST`.
+
+### Task 2.6: Разрешение ссылок и исполнителя
+
+**Файлы:** создать `src/ai/pipeline/resolve.ts`; тест `tests/unit/ai/resolve.test.ts`.
+
+**Интерфейсы:**
+- Produces:
+
+```ts
+export type AssigneeResolution = { type: 'user'; userId: number } | { type: 'all' } | { type: 'text'; name: string } | { type: 'none' };
+export type Category = 'assignment' | 'event' | 'owner_intent' | 'commitment' | 'request_to_owner';
+interface Common { sourceMessageIds: number[]; confidence: number; reasoning: string }
+export type ResolvedAction =
+  | ({ kind: 'create'; category: Category; title: string; description: string | null; assignee: AssigneeResolution; due: ResolvedDue; priority: 'low' | 'normal' | 'high' } & Common)
+  | ({ kind: 'update'; target: { taskId: number } | { proposalId: number }; changes: { due?: ResolvedDue; assignee?: AssigneeResolution; title?: string } } & Common)
+  | ({ kind: 'complete' | 'cancel'; target: { taskId: number } | { proposalId: number } } & Common);
+export interface ResolveContext {
+  refs: RefMaps;
+  messages: Map<number, { authorUserId: number; authorTz: string | null; replyToAuthorUserId: number | null }>;
+  ownerUserId: number; workspaceTz: string; now: Date; fuzzy: FuzzyTimes;
+}
+export function resolveActions(result: ExtractionResultT, ctx: ResolveContext): { actions: ResolvedAction[]; dropped: Array<{ index: number; reason: string }> };
+export function defaultAssignee(category: Category, ctx: { authorUserId: number; replyToAuthorUserId: number | null; ownerUserId: number }): AssigneeResolution;
+```
+
+- [ ] **Шаг 1: падающие тесты**
+  1. `source_message_ids: ['M1','M9']`, где M9 неизвестна → M9 отброшена, действие осталось. `['M9']` → действие отброшено, в `dropped` причина `unknown_message_refs`.
+  2. `target_ref: 'T99'`, которого нет → отброшено (`unknown_target`). `R5` из входа → `{ proposalId }`.
+  3. `assignee_ref: 'P7'`, которого нет → применяется правило исполнителя по умолчанию, пишется warn.
+  4. `OWNER` → owner. `ALL` → `{ type: 'all' }`. `null` плюс `assignee_name_text: 'Ольга'` → `{ type: 'text', name: 'Ольга' }`.
+  5. Исполнитель по умолчанию (SPEC §9.6):
+     - `commitment` → автор первого исходного сообщения;
+     - `request_to_owner` и `owner_intent` → owner;
+     - `assignment` в ответ на сообщение P1 → P1;
+     - `assignment` без ответа → `none`;
+     - `event` → `none`.
+  6. Срок считается в поясе автора первого исходного сообщения (`users.timezone`, иначе пояс workspace).
+  7. `update.changes.due` тоже проходит `resolveDue`.
+- [ ] **Шаг 2:** FAIL.
+- [ ] **Шаг 3: реализация.**
+- [ ] **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(ai): resolve model references, assignees and dates`.
+
+### Task 2.7: Policy — правила показа
+
+**Файлы:** создать `src/ai/pipeline/policy.ts`; тест `tests/unit/ai/policy.test.ts`.
+
+**Интерфейсы:** Produces `applyPolicy(a: ResolvedAction, thresholds: Settings['ai']['thresholds'], mode: 'auto' | 'manual'): { decision: 'shown' | 'suppressed'; reason: string }`.
+
+- [ ] **Шаг 1: падающие тесты**
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { applyPolicy } from '../../../src/ai/pipeline/policy.js';
+
+const T = { low: 0.35, high: 0.7, modify: 0.5 };
+const due = { dueAt: new Date('2026-09-25T15:00:00Z'), allDay: false, tz: 'Europe/Moscow', inPast: false, invalid: false, dueText: 'к пятнице' };
+const noDue = { dueAt: null, allDay: false, tz: null, inPast: false, invalid: false, dueText: null };
+const create = (category: string, confidence: number, d = noDue) => ({
+  kind: 'create', category, confidence, due: d, title: 'X', description: null, assignee: { type: 'none' },
+  priority: 'normal', sourceMessageIds: [1], reasoning: '',
+}) as never;
+const modify = (kind: string, confidence: number) => ({ kind, confidence, target: { taskId: 1 }, sourceMessageIds: [1], reasoning: '', changes: {} }) as never;
+
+describe('policy (SPEC §9.6)', () => {
+  it.each([
+    [create('assignment', 0.35), 'shown'],
+    [create('assignment', 0.34), 'suppressed'],
+    [create('event', 0.5), 'shown'],
+    [create('owner_intent', 0.35), 'shown'],
+    [create('commitment', 0.35, due), 'shown'],
+    [create('commitment', 0.34, due), 'suppressed'],
+    [create('commitment', 0.69), 'suppressed'],
+    [create('commitment', 0.7), 'shown'],
+    [create('request_to_owner', 0.69), 'suppressed'],
+    [create('request_to_owner', 0.4, due), 'shown'],
+    [modify('update', 0.5), 'shown'],
+    [modify('update', 0.49), 'suppressed'],
+    [modify('complete', 0.5), 'shown'],
+    [modify('cancel', 0.49), 'suppressed'],
+  ])('%# → %s', (a, expected) => expect(applyPolicy(a, T, 'auto').decision).toBe(expected));
+
+  it('explains suppression', () => {
+    expect(applyPolicy(create('commitment', 0.5), T, 'auto').reason).toBe('commitment_without_due_below_high');
+    expect(applyPolicy(create('assignment', 0.1), T, 'auto').reason).toBe('below_low');
+    expect(applyPolicy(modify('update', 0.1), T, 'auto').reason).toBe('modify_below_threshold');
+  });
+
+  it('never suppresses manual requests', () => {
+    expect(applyPolicy(create('assignment', 0.01), T, 'manual').decision).toBe('shown');
+  });
+});
+```
+
+- [ ] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(ai): add display policy with configurable thresholds`.
+
+### Task 2.8: Дедупликация
+
+**Файлы:** создать `src/ai/pipeline/dedup.ts`; тест `tests/integration/ai/dedup.test.ts`.
+
+**Интерфейсы:**
+- Produces:
+  - `findPossibleDuplicate(db, { workspaceId: number; title: string; assignee: AssigneeResolution; now: Date }): Promise<{ type: 'task' | 'proposal'; id: number; title: string; similarity: number } | null>`;
+  - `isRepeatInBatch(existing: ResolvedAction[], candidate: ResolvedAction): boolean` — тот же набор `sourceMessageIds` и то же нормализованное название (SPEC §9.7 п. 3).
+
+- [ ] **Шаг 1: падающие тесты**
+  1. Открытая задача «Подготовить расписание на октябрь» (P1) и кандидат «подготовить расписание на октябрь!» (P1) → дубль, `type='task'`.
+  2. Тот же текст с другим исполнителем → не дубль.
+  3. Задача создана 15 дней назад → не дубль.
+  4. Задача `done` → не дубль.
+  5. Совсем другое название → не дубль.
+  6. Pending-proposal с похожим `payload.title` → дубль, `type='proposal'`.
+  7. Совпадают исполнители `all` и `all`, а также `none` и `none`.
+  8. `isRepeatInBatch`: одинаковые ID и название, различающееся регистром → `true`.
+- [ ] **Шаг 2:** FAIL.
+- [ ] **Шаг 3: реализация.** SQL: `similarity(lower(title), lower($title)) >= 0.6`, `status IN ('open','in_progress')`, `created_at >= $now - 14 days`. Для proposals — `status='pending'` и `payload->>'title'`. Берётся строка с максимальной похожестью.
+- [ ] **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(ai): detect possible duplicates with trigram similarity`.
+
+### Task 2.9: Батчинг, analyze job, бюджет, backoff
+
+**Файлы:** создать `src/ai/pipeline/batcher.ts`, `src/ai/budget.ts`, `src/scheduler/jobs/analyze.ts`; тесты `tests/unit/ai/batcher.test.ts`, `tests/integration/scheduler/analyze.test.ts`.
+
+**Интерфейсы:**
+- Produces:
+  - `interface PendingStats { pendingCount: number; lastMessageAt: Date; oldestPendingAt: Date }`;
+  - `shouldEnqueue(s: PendingStats, cfg: Settings['batch'], now: Date): boolean`;
+  - `nextAttemptAt(failedAttempts: number, now: Date): Date | null` — `null` означает `failed`;
+  - `enqueueBatches(db, { now: Date }): Promise<number[]>` — не больше одного открытого (`queued` или `running`) batch на чат; batch берёт до `maxMessages` самых старых pending-сообщений без `batch_id`;
+  - `claimNextBatch(db, { now }): Promise<BatchRow | null>` — `FOR UPDATE SKIP LOCKED`, переводит в `running`;
+  - `recoverStaleBatches(db, { now })` — `running` старше 5 мин переводит обратно в `queued`;
+  - `spentTodayUsd(db, { now, tz }): Promise<number>`;
+  - `analyzeJob: Job`.
+
+- [ ] **Шаг 1: падающие тесты**
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { shouldEnqueue, nextAttemptAt } from '../../../src/ai/pipeline/batcher.js';
+
+const cfg = { quietSeconds: 180, maxMessages: 25, maxWaitSeconds: 600 };
+const now = new Date('2026-09-23T09:00:00Z');
+const ago = (s: number) => new Date(now.getTime() - s * 1000);
+
+describe('shouldEnqueue (SPEC §8)', () => {
+  it.each([
+    [{ pendingCount: 3, lastMessageAt: ago(180), oldestPendingAt: ago(200) }, true],
+    [{ pendingCount: 3, lastMessageAt: ago(179), oldestPendingAt: ago(179) }, false],
+    [{ pendingCount: 25, lastMessageAt: ago(5), oldestPendingAt: ago(60) }, true],
+    [{ pendingCount: 4, lastMessageAt: ago(10), oldestPendingAt: ago(600) }, true],
+    [{ pendingCount: 0, lastMessageAt: ago(999), oldestPendingAt: ago(999) }, false],
+  ])('%j → %s', (s, expected) => expect(shouldEnqueue(s, cfg, now)).toBe(expected));
+});
+
+describe('nextAttemptAt', () => {
+  it.each([[1, 1], [2, 5], [3, 15], [4, 15]])('after failure %i waits %i min', (n, min) =>
+    expect(nextAttemptAt(n, now)!.getTime() - now.getTime()).toBe(min * 60_000));
+  it('gives up after the 5th failure', () => expect(nextAttemptAt(5, now)).toBeNull());
+});
+```
+
+Интеграционные тесты (`FixtureClient` через `deps.ai`):
+1. Чат с 3 pending-сообщениями, последнее 3 мин назад → создан batch, сообщения получили `batch_id`. Новое сообщение в процессе → не попадает в этот batch.
+2. Два параллельных `claimNextBatch` на разных соединениях → разные batch или `null`, двойного захвата нет.
+3. LLM падает → `attempts=1`, `next_attempt_at=+1 мин`, статус `queued`, сообщения остаются `pending`. После 5 неудач → `failed`, superadmin получил оповещение. Сообщения по-прежнему `pending` и доступны для `/reanalyze`.
+4. Пять неудачных вызовов LLM подряд (в разных batch) → оповещение «5 ошибок LLM подряд». Успешный вызов сбрасывает счётчик.
+5. Бюджет: `spentToday >= LLM_DAILY_BUDGET_USD` → вызовов LLM нет, сообщения копятся, superadmin и owner получают по одному оповещению в день. На следующие сутки (в `DEFAULT_TIMEZONE`) анализ продолжается.
+6. `deps.ai = null` → job ничего не делает.
+7. Префильтр: `DecisionProvider` с `probability=0.1` при пороге 0.15 → extractor не вызывается, сообщения `analyzed`, proposals нет, стоимость префильтра учтена.
+8. `recoverStaleBatches`: `running` 6 мин назад → `queued`.
+- [ ] **Шаг 2:** FAIL.
+- [ ] **Шаг 3: реализация.**
+  - Порядок в job: `recoverStaleBatches` → `enqueueBatches` → проверка бюджета → до 5 раз `claimNextBatch` и `processBatch` (2.10).
+  - Подряд идущие ошибки считаются в `app_state['llm:consecutive_failures']`.
+  - Бюджетная пауза фиксируется в `app_state['budget:paused:<YYYY-MM-DD>']`.
+- [ ] **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(ai): add batching, retry backoff and daily LLM budget`.
+
+### Task 2.10: processBatch — от пачки к proposals в одной транзакции
+
+**Файлы:** создать `src/ai/pipeline/processBatch.ts`, `src/domain/proposals/repo.ts`; тест `tests/integration/ai/processBatch.test.ts`.
+
+**Интерфейсы:**
+- Consumes: `buildExtractionInput`, `ExtractionProvider`, `resolveActions`, `applyPolicy`, `findPossibleDuplicate`, `isRepeatInBatch`.
+- Produces:
+  - `processBatch(deps: AppDeps, batch: BatchRow, opts?: { mode?: 'auto' | 'manual'; noReaction?: boolean }): Promise<{ shown: number; suppressed: number }>`;
+  - `insertProposal(tx, p: NewProposal): Promise<ProposalRow>`;
+  - payload proposal: `{ title, description, category, assignee, due, priority, dueText, reasoning, duplicateOf?: { type, id, title }, changes?, origin: 'ai' | 'manual_group' | 'manual_dm' | 'forward', noReaction?: boolean, quote, quoteAuthorName }`.
+
+- [ ] **Шаг 1: падающие тесты** (FixtureClient, фиксированные часы)
+  1. Сообщение «Маша, подготовь расписание к пятнице» от owner и fixture `valid_assignment`:
+     - один proposal `shown`, `kind='create'`, `category='assignment'`, исполнитель Мария, срок — пятница, 23:59 МСК, all-day;
+     - сообщения `analyzed`;
+     - у batch статус `done`, заполнены `model`, `prompt_version='extractor.v1'`, токены, `cost_usd`, `latency_ms`, `raw_response`.
+  2. Действие с confidence 0.2 → proposal `suppressed` с `policy_reason`, `notified_at` пусто, в outbox не попадает.
+  3. `hallucinated_refs` → отброшенные действия не записаны, в лог пишется warn с индексами (без текстов).
+  4. Похожая открытая задача → `payload.duplicateOf` заполнен.
+  5. `valid_complete_t12` → proposal `kind='complete'`, `target_task_id=12`.
+  6. **Падение посреди записи:** `insertProposal` бросает ошибку на втором proposal → транзакция откатилась (proposals нет, сообщения `pending`, batch не `done`), job переводит batch на повтор (Фокус ревью 1).
+  7. `skipped`-сообщения из того же временного окна попадают во вход как контекст, а не как новые.
+  8. В `/reanalyze`-режиме (`noReaction`) флаг сохраняется в payload.
+- [ ] **Шаг 2:** FAIL.
+- [ ] **Шаг 3: реализация.**
+  - Вызов LLM выполняется **вне** транзакции.
+  - В одной транзакции: запись proposals (`shown` и `suppressed`) → сообщения `analyzed` → batch `done`.
+  - Карточки здесь не отправляются: их отправляет outbox (2.12).
+- [ ] **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(ai): process batches into proposals transactionally`.
+
+### Task 2.11: Отображение — даты, ссылки, карточки proposals
+
+**Файлы:** создать `src/time/format.ts`, `src/bot/views/escape.ts`, `src/bot/views/links.ts`, `src/bot/views/proposalCard.ts`; тесты `tests/unit/time/format.test.ts`, `tests/unit/bot/views/proposalCard.test.ts`.
+
+**Интерфейсы:**
+- Produces:
+  - `formatDue(due: { at: Date; allDay: boolean; tz: string | null } | null, viewerZone: string): { date: string; time: string | null; zone: ZoneLabel | null } | null` — структура. Строку собирает `texts.formatDue` в `ru.ts`, массивы дней и месяцев лежат там же (D17, D29);
+  - `escapeHtml(s: string): string`;
+  - `messageLink(chat: { type: 'group' | 'supergroup'; tgChatId: number }, tgMessageId: number): string | null`;
+  - `interface ProposalCardView { id: number; kind: 'create' | 'update' | 'complete' | 'cancel'; category: Category | 'manual' | null; confidence: number; manual: boolean; title: string; assigneeName: string | null; assigneeKind: AssigneeResolution['type']; due: { at: Date; allDay: boolean; tz: string | null } | null; priority: 'low' | 'normal' | 'high'; quote: string | null; quoteAuthor: string | null; chatTitle: string | null; link: string | null; dueInPast: boolean; duplicateOf: { taskId: number; title: string } | null; target: { taskId: number; title: string; before: string | null; after: string | null; field: 'due' | 'assignee' | 'title' | null } | null }`;
+  - `renderProposalCard(v: ProposalCardView, viewerZone: string): { text: string; buttons: Buttons }`.
+
+- [ ] **Шаг 1: падающие тесты**
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { renderProposalCard } from '../../../../src/bot/views/proposalCard.js';
+import { messageLink } from '../../../../src/bot/views/links.js';
+
+const base = {
+  id: 7, kind: 'create', category: 'assignment', confidence: 0.87, manual: false,
+  title: 'Подготовить расписание на октябрь', assigneeName: 'Мария', assigneeKind: 'user',
+  due: { at: new Date('2026-09-25T15:00:00Z'), allDay: false, tz: 'Europe/Moscow' }, priority: 'normal',
+  quote: 'Маша, подготовь расписание к пятнице', quoteAuthor: 'Анна', chatTitle: 'Преподаватели',
+  link: 'https://t.me/c/1234567890/42', dueInPast: false, duplicateOf: null, target: null,
+} as const;
+
+describe('proposal card (SPEC §11.1)', () => {
+  it('renders a create card', () => {
+    const { text, buttons } = renderProposalCard(base, 'Europe/Moscow');
+    expect(text).toBe(
+      '🆕 Задача · уверенность 87%\n' +
+      '📌 Подготовить расписание на октябрь\n' +
+      '👤 Мария · 📅 пт, 25 сен, 18:00 · ⚡ обычный\n' +
+      '💬 «Маша, подготовь расписание к пятнице» — Анна, «Преподаватели»\n' +
+      '🔗 <a href="https://t.me/c/1234567890/42">Открыть сообщение</a>',
+    );
+    expect(buttons).toEqual([[
+      { text: '✅ Создать', data: 'v1:p:acc:7' },
+      { text: '✏️ Изменить', data: 'v1:p:edt:7' },
+      { text: '❌ Не задача', data: 'v1:p:rej:7' },
+    ]]);
+  });
+  it('shows the viewer zone when it differs (D29)', () => {
+    expect(renderProposalCard(base, 'Asia/Yekaterinburg').text).toContain('📅 пт, 25 сен, 20:00 (МСК+2)');
+  });
+  it('escapes HTML and truncates the quote', () => {
+    const t = renderProposalCard({ ...base, title: 'A <b> & B', quote: '<x>'.repeat(100) }, 'Europe/Moscow').text;
+    expect(t).toContain('A &lt;b&gt; &amp; B');
+    expect(t).not.toContain('<x>');
+  });
+  it('marks manual cards, past dates and duplicates', () => {
+    const t = renderProposalCard({ ...base, manual: true, dueInPast: true, duplicateOf: { taskId: 12, title: 'Подготовить расписание' } }, 'Europe/Moscow');
+    expect(t.text.split('\n')[0]).toBe('🆕 Задача · вручную');
+    expect(t.text).toContain('⚠️ срок в прошлом — проверьте');
+    expect(t.buttons.flat()).toContainEqual({ text: '🔗 Дубль T12', data: 'v1:p:dup:7:12' });
+  });
+  it('renders update / complete / cancel cards', () => {
+    const upd = renderProposalCard({ ...base, kind: 'update', target: { taskId: 12, title: 'Подготовить расписание', before: 'пт, 25 сен', after: 'пн, 28 сен', field: 'due' } }, 'Europe/Moscow');
+    expect(upd.text).toContain('🔄 Перенос срока: T12 «Подготовить расписание» · было пт, 25 сен → стало пн, 28 сен');
+    expect(upd.buttons.flat().map((b) => b.text)).toEqual(['✅ Применить', '✏️ Изменить', '❌ Игнорировать']);
+    const done = renderProposalCard({ ...base, kind: 'complete', quote: 'сделала', quoteAuthor: 'Мария', target: { taskId: 12, title: 'Подготовить расписание', before: null, after: null, field: null } }, 'Europe/Moscow');
+    expect(done.text).toContain('✅ Похоже, выполнено: T12 «Подготовить расписание» — «сделала» (Мария)');
+    expect(done.buttons.flat().map((b) => b.text)).toEqual(['✅ Закрыть задачу', '❌ Нет']);
+    const cancel = renderProposalCard({ ...base, kind: 'cancel', quote: 'уже не нужно', quoteAuthor: 'Мария', target: { taskId: 12, title: 'Подготовить расписание', before: null, after: null, field: null } }, 'Europe/Moscow');
+    expect(cancel.buttons.flat().map((b) => b.text)).toEqual(['🗑 Отменить задачу', '❌ Нет']);
+  });
+  it('keeps every card within Telegram limits', () => {
+    const t = renderProposalCard({ ...base, title: 'я'.repeat(120), quote: 'ж'.repeat(5000) }, 'Europe/Moscow');
+    expect(t.text.length).toBeLessThanOrEqual(4096);
+    for (const b of t.buttons.flat()) expect(Buffer.byteLength(b.data!, 'utf8')).toBeLessThanOrEqual(64);
+  });
+});
+
+describe('messageLink', () => {
+  it('builds supergroup links only', () => {
+    expect(messageLink({ type: 'supergroup', tgChatId: -1001234567890 }, 42)).toBe('https://t.me/c/1234567890/42');
+    expect(messageLink({ type: 'group', tgChatId: -4567 }, 42)).toBeNull();
+  });
+});
+```
+
+Плюс `format.test.ts`:
+- all-day → `пт, 25 сен` без времени и без пояса;
+- `null` → `без срока`;
+- 1 января → `пт, 1 янв`;
+- пояс получателя тот же, что у срока → без метки.
+- [ ] **Шаг 2:** FAIL.
+- [ ] **Шаг 3: реализация.** Все строки берутся из `ru.ts`. Цитата обрезается до 200 символов **до** экранирования. Причины отказа: `v1:p:rjr:7:nt|dup|done|oth`.
+- [ ] **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(bot): render proposal cards and localized due dates`.
+
+### Task 2.12: Outbox карточек, реакции 👀, тихие часы
+
+**Файлы:** создать `src/time/quiet.ts`, `src/scheduler/jobs/cards.ts`; тесты `tests/unit/time/quiet.test.ts`, `tests/integration/scheduler/cards.test.ts`.
+
+**Интерфейсы:** Produces `isQuietAt(instant: Date, zone: string, quiet: Settings['quiet']): boolean` и `cardsJob: Job`.
+
+- [ ] **Шаг 1: падающие тесты**
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { isQuietAt } from '../../../src/time/quiet.js';
+
+const MSK = 'Europe/Moscow';
+const off = { enabled: false, weekdays: [], windows: [{ from: '22:00', to: '08:00' }], dateRanges: [] };
+const night = { ...off, enabled: true };
+const q = (iso: string, cfg: typeof off, zone = MSK) => isQuietAt(new Date(iso), zone, cfg);
+
+describe('quiet hours (SPEC §13.5, D10)', () => {
+  it('is off when disabled', () => expect(q('2026-09-23T20:00:00Z', off)).toBe(false));
+  it.each([
+    ['2026-09-23T20:00:00Z', true],  // 23:00 МСК
+    ['2026-09-24T04:59:00Z', true],  // 07:59
+    ['2026-09-24T05:00:00Z', false], // 08:00
+    ['2026-09-23T18:59:00Z', false], // 21:59
+  ])('overnight window at %s', (iso, expected) => expect(q(iso, night)).toBe(expected));
+  it('supports same-day windows', () => {
+    const lunch = { ...night, windows: [{ from: '13:00', to: '14:00' }] };
+    expect(q('2026-09-23T10:30:00Z', lunch)).toBe(true);
+    expect(q('2026-09-23T11:00:00Z', lunch)).toBe(false);
+  });
+  it('supports ISO weekdays', () => {
+    const weekend = { ...night, windows: [], weekdays: [6, 7] };
+    expect(q('2026-09-26T09:00:00Z', weekend)).toBe(true);  // сб
+    expect(q('2026-09-25T09:00:00Z', weekend)).toBe(false); // пт
+  });
+  it('supports inclusive date ranges', () => {
+    const hol = { ...night, windows: [], dateRanges: [{ from: '2026-12-31', to: '2027-01-08' }] };
+    expect(q('2027-01-08T20:00:00Z', hol)).toBe(true);  // 23:00 8 янв
+    expect(q('2027-01-08T21:00:00Z', hol)).toBe(false); // 00:00 9 янв
+    expect(q('2026-12-30T20:59:00Z', hol)).toBe(false); // 23:59 30 дек
+  });
+  it('evaluates in the recipient zone', () => {
+    expect(q('2026-09-23T18:00:00Z', night, MSK)).toBe(false);                 // 21:00 МСК
+    expect(q('2026-09-23T18:00:00Z', night, 'Asia/Yekaterinburg')).toBe(true); // 23:00
+  });
+});
+```
+
+Интеграционные тесты `cardsJob` (FakeMessenger):
+1. 12 shown-proposals одного batch → 10 карточек и одно сообщение «ещё 2 предложения: /inbox». У всех 12 заполнен `notified_at`, у первых 10 — `owner_dm_message_id`.
+2. Реакция 👀 на первое исходное сообщение каждого shown-proposal из группы (`react(chatTgId, msgId, '👀')`). При `reactions_enabled=false`, `onDetect=null` или `noReaction` реакции нет. Если `react` бросает `bad_request`, карточка всё равно отправлена, ошибка пишется в лог.
+3. Тихие часы owner сейчас → ничего не отправлено. После их окончания → одно сообщение «За время тишины найдено N предложений» с кнопкой `[📥 Разобрать]`, `notified_at` заполнен у всех (D10).
+4. Owner не начал DM → ничего не отправлено, superadmin получает оповещение не чаще раза в час. После `/start` owner'а карточки уходят.
+5. `send` бросает `forbidden` → `users.dm_blocked=true`, `notified_at` пусто.
+6. Suppressed-proposals никогда не отправляются.
+- [ ] **Шаг 2:** FAIL.
+- [ ] **Шаг 3: реализация.** `notified_at` проставляется **после** успешной отправки (at-least-once). Группировка идёт по `batch_id`, карточки упорядочены по `created_at`.
+- [ ] **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(scheduler): deliver proposal cards via outbox with quiet hours and reactions`.
+
+### Task 2.13: Ядро задач и решения по proposals
+
+**Файлы:**
+- Создать: `src/domain/tasks/repo.ts`, `src/domain/tasks/service.ts`, `src/domain/tasks/events.ts`, `src/domain/proposals/decide.ts`, `src/bot/handlers/proposalCallbacks.ts`, `src/bot/views/taskCreated.ts`
+- Тесты: `tests/integration/domain/tasks.test.ts`, `tests/integration/bot/proposalActions.test.ts`
+
+**Интерфейсы:**
+- Produces:
+
+```ts
+export interface CreateTaskInput {
+  workspaceId: number; title: string; description: string | null; assignee: AssigneeResolution;
+  due: { at: Date | null; allDay: boolean; tz: string | null }; priority: 'low' | 'normal' | 'high';
+  origin: 'ai' | 'manual_group' | 'manual_dm' | 'forward'; proposalId: number | null;
+  source: { chatId: number | null; tgMessageId: number | null; link: string | null; quote: string | null };
+}
+export type ActorRef = { type: 'user'; userId: number } | { type: 'system' } | { type: 'ai' } | { type: 'apple'; userId: number };
+export interface TaskService {
+  create(tx: Tx, input: CreateTaskInput, actor: ActorRef): Promise<TaskRow>;
+  update(tx: Tx, taskId: number, patch: Partial<Pick<CreateTaskInput, 'title' | 'description' | 'assignee' | 'due' | 'priority'>>, actor: ActorRef): Promise<TaskRow>;
+  setStatus(tx: Tx, taskId: number, status: 'open' | 'in_progress' | 'done' | 'cancelled', actor: ActorRef): Promise<TaskRow>;
+}
+export function createTaskService(deps: Pick<AppDeps, 'clock' | 'config' | 'taskHooks'>): TaskService;
+
+// src/domain/proposals/decide.ts
+export type DecisionResult<T> = { ok: true; value: T } | { ok: false; reason: 'already_decided' | 'forbidden' | 'not_found' | 'target_gone' };
+export function acceptProposal(deps: AppDeps, a: { proposalId: number; actor: Actor; edits?: ProposalEdits }): Promise<DecisionResult<TaskRow>>;
+export function rejectProposal(deps: AppDeps, a: { proposalId: number; actor: Actor; reason: 'not_task' | 'duplicate' | 'already_done' | 'other' | null }): Promise<DecisionResult<ProposalRow>>;
+export function markDuplicate(deps: AppDeps, a: { proposalId: number; taskId: number; actor: Actor; appendToDescription: boolean }): Promise<DecisionResult<TaskRow>>;
+export function applyModification(deps: AppDeps, a: { proposalId: number; actor: Actor }): Promise<DecisionResult<TaskRow>>; // для kind update/complete/cancel
+export interface ProposalEdits { title?: string; assignee?: AssigneeResolution; due?: { at: Date | null; allDay: boolean; tz: string | null }; priority?: 'low' | 'normal' | 'high'; description?: string | null }
+```
+
+- [ ] **Шаг 1: падающие тесты**
+  - Сервис задач:
+    - `create` пишет событие `created`, `version=1`, `title` обрезается до 120 символов, `source_quote` — до 200;
+    - `update` увеличивает `version`, пишет событие `updated` с `diff`;
+    - каждое изменение вызывает `taskHooks` внутри той же транзакции (проверяется шпионским хуком).
+  - Решения (через bot harness):
+    1. «✅ Создать» от owner → задача `origin='ai'`, proposal `accepted` (`decided_by`, `decided_at`), карточка отредактирована в «✅ Создано: T<id> „…“».
+    2. **Два одновременных accept** (`Promise.all`) → одна задача, второй получает `already_decided` и ответ «Уже обработано» (Фокус ревью 2).
+    3. «Создать» от member (пересланная карточка) → `forbidden`, задачи нет.
+    4. После передачи владения прежний owner (теперь member) нажимает кнопку → `forbidden`.
+    5. «❌ Не задача» → меню причин → «Уже сделано» → `rejected`, `reject_reason='already_done'`, карточка отредактирована.
+    6. «🔗 Дубль T12» → proposal `rejected` (`duplicate`). По кнопке «Дописать в описание» текст добавлен в описание T12.
+    7. `update` → «✅ Применить» → у T12 новый срок, событие `updated`. `complete` → T12 `done`. `cancel` → T12 `cancelled`. Если задачу удалили → `target_gone` и понятный текст.
+    8. Реакция `onAccept` (если задана `✍`) ставится на исходное сообщение после accept.
+- [ ] **Шаг 2:** FAIL.
+- [ ] **Шаг 3: реализация.**
+  - Решение: `UPDATE proposals SET status=…, decided_by_user_id=…, decided_at=$now WHERE id=$1 AND status='pending' RETURNING *` — в той же транзакции, что и создание или изменение задачи.
+  - Права проверяются `can(actor, 'proposal.decide')` по данным БД.
+- [ ] **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(proposals): accept, reject, duplicate and apply proposals idempotently`.
+
+### Task 2.14: Диалог «Изменить» и разбор даты из текста
+
+**Файлы:** создать `src/bot/conversations/editProposal.ts`, `src/bot/views/editMenu.ts`, `src/ai/pipeline/parseDate.ts`, `src/time/quickDue.ts`; тесты `tests/unit/time/quickDue.test.ts`, `tests/unit/ai/parseDate.test.ts`, `tests/integration/bot/editProposal.test.ts`.
+
+**Интерфейсы:**
+- Produces:
+  - `quickDue(option: 'today' | 'tomorrow' | 'fri' | 'next_mon' | 'none', now: Date, zone: string): { at: Date | null; allDay: boolean; tz: string | null }` (D23);
+  - `parseDateText(deps: AppDeps, text: string, ctx: { zone: string; now: Date }): Promise<ResolvedDue | null>` — промпт `parseDate.v1`, схема `Due`, дальше `resolveDue`; стоимость записывается как `analysis_batches` с `kind='manual'`;
+  - `editProposalConversation` — conversations v2, `maxMillisecondsToWait = CONVERSATION_TIMEOUT_MS`.
+
+- [ ] **Шаг 1: падающие тесты**
+  - `quickDue` (сейчас среда 2026-09-23 12:00 МСК):
+    - `today` → 2026-09-23 all-day (23:59 МСК = `20:59Z`);
+    - `tomorrow` → 24.09;
+    - `fri` → 25.09; `fri` в пятницу → в тот же день; `fri` в субботу 26.09 → 02.10;
+    - `next_mon` → 28.09;
+    - `none` → `at=null`.
+  - `parseDate` на FixtureClient:
+    - «в четверг в 11» → fixture `{"due_local":"2026-09-24T11:00","time_hint":"none","due_text":"в четверг в 11"}` → `2026-09-24T08:00Z`;
+    - мусорный ответ → `null` (пользователь увидит «Не удалось разобрать дату»).
+  - Диалог:
+    1. «✏️ Изменить» → меню `[Название] [Исполнитель] [Срок] [Приоритет] [Описание] [✅ Сохранить и создать] [↩️ Назад]`.
+    2. «Исполнитель» → кнопки участников, «Я», «Не назначен», «Всем».
+    3. «Срок» → `[Сегодня] [Завтра] [Пт] [След. пн] [Без срока] [Ввести…]`. «Ввести…» → текст «15.10 14:00» → превью «чт, 15 окт, 14:00 — верно?» → `[Да] [Нет]`.
+    4. «Сохранить и создать» → задача с правками. В `proposals.payload.ownerEdits` записаны пары было/стало по полям (для SPEC §20.4).
+    5. Member не может войти в диалог.
+- [ ] **Шаг 2:** FAIL.
+- [ ] **Шаг 3: реализация.** Все обращения к БД и LLM внутри диалога — через `conversation.external`. Сверить через Context7 → grammY conversations.
+- [ ] **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(bot): add proposal editing dialog with quick and free-text dates`.
+
+### Task 2.15: `/inbox`, `/debug`, `/reanalyze`, расширенный `/admin`, истечение proposals
+
+**Файлы:**
+- Создать: `src/bot/handlers/inbox.ts`, `src/bot/views/debug.ts`, `src/domain/proposals/queries.ts`, `src/domain/ai/stats.ts`, `src/scheduler/jobs/expireProposals.ts`
+- Изменить: `src/bot/handlers/admin.ts`, `src/bot/views/admin.ts`
+- Тесты: `tests/integration/bot/inbox.test.ts`, `tests/integration/bot/debug.test.ts`, `tests/integration/domain/aiStats.test.ts`
+
+**Интерфейсы:**
+- Produces:
+  - `listPendingProposals(db, workspaceId, { page, pageSize })`;
+  - `aiStats(db, { now, tz }): Promise<{ costToday: number; costMonth: number; last7: { shown: number; suppressed: number; accepted: number; rejected: number }; precision: number | null; pendingByChat: Array<{ chatId: number; title: string; count: number }> }>`;
+  - `reanalyze(deps, { chatId, lastN?: number })` — если `lastN` не задан, failed-batch'и чата возвращаются в очередь (`batch_id=null` у их сообщений). Если задан, последние N сообщений с текстом переводятся в `pending` и собираются в новый batch с `kind='reanalyze'` и `noReaction`;
+  - `expireProposalsJob = dailyJob('expire-proposals', '03:40', …)` (D11).
+
+- [ ] **Шаг 1: падающие тесты**
+  1. `/inbox` → список неразобранных (по 5 на страницу). Нажатие → карточка присылается заново.
+  2. `/debug` (superadmin) → последние 10 batch: время, число сообщений, shown и suppressed с причинами, стоимость, модель, статус и ошибка. Не-superadmin → `forbidden`.
+  3. `/reanalyze <chatId> 10` → новый batch `reanalyze`; повторные proposals помечаются дублями (дедуп работает); реакции не ставятся.
+  4. `/reanalyze <chatId>` без N → failed-сообщения снова в очереди.
+  5. `/admin` показывает стоимость за сегодня и месяц, статистику за 7 дней и precision = accepted/(accepted+rejected); при нуле знаменателя — «н/д».
+  6. Proposal возрастом 8 дней → `expired`. Возрастом 6 дней — остаётся.
+- [ ] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(bot): add /inbox, /debug, /reanalyze and AI stats in /admin`.
+
+### Task 2.16: Eval-датасет (≥150 синтетических кейсов)
+
+**Файлы:** создать `eval/schema.ts`, `eval/datasets/school_ru.v1.jsonl`; тест `tests/unit/eval/dataset.test.ts`.
+
+**Интерфейсы:**
+- Produces: `EvalCaseSchema` (zod), `type EvalCase`:
+
+```ts
+{
+  id: string; tags: string[]; now: string /* ISO с offset */; workspaceTz: string;
+  participants: Array<{ code: string; name: string; aliases?: string[]; role: 'owner' | 'member'; tz?: string }>;
+  openTasks: Array<{ ref: string; title: string; assignee: string | null; due: string | null }>;
+  openProposals: Array<{ ref: string; title: string }>;
+  context: Array<{ ref: string; author: string; at: string; text: string }>;
+  messages: Array<{ ref: string; author: string; at: string; text: string; replyTo?: string; forwardFrom?: string }>;
+  expected: Array<{ type: 'create' | 'update' | 'complete' | 'cancel'; category?: Category; assignee?: string | null; targetRef?: string;
+                    due?: { date: string | null; time: string | null; hint: 'morning'|'afternoon'|'evening'|'end_of_week'|'soon'|'none' } }>;
+}
+```
+
+- [ ] **Шаг 1: падающий тест**
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { EvalCaseSchema } from '../../../eval/schema.js';
+
+const cases = readFileSync('eval/datasets/school_ru.v1.jsonl', 'utf8').split('\n').filter(Boolean)
+  .map((l) => EvalCaseSchema.parse(JSON.parse(l)));
+const examples = JSON.parse(readFileSync('prompts/examples.school_ru.json', 'utf8')) as Array<{ messages: Array<{ text: string }> }>;
+const share = (pred: (c: (typeof cases)[number]) => boolean) => cases.filter(pred).length / cases.length;
+
+describe('eval dataset (SPEC §20.1)', () => {
+  it('has at least 150 unique cases', () => {
+    expect(cases.length).toBeGreaterThanOrEqual(150);
+    expect(new Set(cases.map((c) => c.id)).size).toBe(cases.length);
+  });
+  it('follows the target distribution', () => {
+    expect(share((c) => c.expected.some((a) => a.type === 'create'))).toBeGreaterThanOrEqual(0.40);
+    expect(share((c) => c.expected.some((a) => a.type === 'create'))).toBeLessThanOrEqual(0.50);
+    const mod = share((c) => c.expected.length > 0 && c.expected.every((a) => a.type !== 'create'));
+    expect(mod).toBeGreaterThanOrEqual(0.12);
+    expect(mod).toBeLessThanOrEqual(0.18);
+    expect(share((c) => c.expected.length === 0)).toBeGreaterThanOrEqual(0.35);
+    expect(share((c) => c.expected.length === 0)).toBeLessThanOrEqual(0.45);
+  });
+  it('covers every category', () => {
+    for (const cat of ['assignment', 'event', 'owner_intent', 'commitment', 'request_to_owner']) {
+      expect(cases.filter((c) => c.expected.some((a) => a.category === cat)).length).toBeGreaterThanOrEqual(8);
+    }
+  });
+  it('covers date phrases, month and year crossing', () => {
+    const dateCases = cases.filter((c) => c.tags.includes('dates'));
+    expect(dateCases.length).toBeGreaterThanOrEqual(20);
+    const all = dateCases.flatMap((c) => c.messages.map((m) => m.text.toLowerCase())).join('\n');
+    for (const p of ['к пятнице', 'в среду в 15', 'до конца недели', 'на днях', 'завтра утром', 'после обеда', 'через неделю', '15.10', 'к 1 ноября']) {
+      expect(all).toContain(p);
+    }
+    expect(cases.some((c) => c.tags.includes('month_cross'))).toBe(true);
+    expect(cases.some((c) => c.tags.includes('year_cross'))).toBe(true);
+  });
+  it('has consistent references', () => {
+    for (const c of cases) {
+      const people = new Set([...c.participants.map((p) => p.code), 'OWNER', 'ALL']);
+      const targets = new Set([...c.openTasks.map((t) => t.ref), ...c.openProposals.map((p) => p.ref)]);
+      for (const a of c.expected) {
+        if (a.assignee) expect(people.has(a.assignee), `${c.id}`).toBe(true);
+        if (a.targetRef) expect(targets.has(a.targetRef), `${c.id}`).toBe(true);
+      }
+    }
+  });
+  it('does not leak few-shot examples', () => {
+    const shots = new Set(examples.flatMap((e) => e.messages.map((m) => m.text)));
+    for (const c of cases) for (const m of c.messages) expect(shots.has(m.text), c.id).toBe(false);
+  });
+});
+```
+
+- [ ] **Шаг 2:** FAIL (нет файла).
+- [ ] **Шаг 3: датасет в три коммита**, чтобы ревью было проще: (а) ~70 кейсов с `create` по всем категориям, включая 20+ кейсов на даты; (б) ~23 кейса `complete`, `update`, `cancel`; (в) ~60 трудных негативов (обсуждение без действия, прошедшие события, «надо бы когда-нибудь…» без адресата, вопросы, шутки, благодарности). Стиль — живой рабочий русский: сокращения, опечатки, эмодзи, нет знаков препинания, есть реплаи и пересылки. Имена вымышленные, телефоны вида `+7 900 000-00-00`.
+- [ ] **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммиты и push:** `test(eval): add synthetic dataset part N/3`.
+
+### Task 2.17: Скрипт `pnpm eval`
+
+**Файлы:** создать `eval/run.ts`, `eval/metrics.ts`, `eval/report.ts`, `eval/pricing.ts`; тест `tests/unit/eval/metrics.test.ts`.
+
+**Интерфейсы:**
+- Produces:
+  - `computeMetrics(rows: Array<{ caseId: string; expected: EvalCase['expected']; predicted: Array<ResolvedAction & { decision: 'shown' | 'suppressed' }>; resolvedExpectedDue: Array<Date | null>; costUsd: number; latencyMs: number }>): Metrics`;
+  - `interface Metrics { n: number; recall: number; precision: number; typeAccuracy: number; categoryAccuracy: number; assigneeAccuracy: number; dueAccuracy: number; costPer100: number; avgLatencyMs: number }`;
+  - `renderReport(meta, metrics, failures): string`;
+  - `estimateCostUsd(cases, pricing): number`.
+- CLI: `pnpm eval --model <id> [--fallback <id>] [--prefilter off|llm|jev] [--prompt-version v1] [--limit N] [--concurrency 4] [--yes] [--provider openrouter|fixture]`.
+
+- [ ] **Шаг 1: падающие тесты** (`computeMetrics` на ручных данных)
+  1. 4 кейса: TP (ожидалось и показано), FN (ожидалось, ничего не показано), FP (не ожидалось, показано), TN → recall 0.5, precision 0.5.
+  2. Сопоставление действий: по типу и `targetRef`, для `create` — по категории. Верный тип при неверной категории: `typeAccuracy` 1, `categoryAccuracy` 0.
+  3. Исполнитель сравнивается только у сопоставленных `create`, где исполнитель ожидался.
+  4. Срок: ожидаемый срок прогоняется через `resolveDue` и сравнивается с предсказанным `dueAt`. Всё, что не all-day, должно совпадать с точностью до минуты; у all-day — дата.
+  5. Suppressed-действия не считаются показанными (метрики отражают то, что увидит Owner).
+- [ ] **Шаг 2:** FAIL.
+- [ ] **Шаг 3: реализация.**
+  - `run.ts` берёт цену модели из `GET https://openrouter.ai/api/v1/models`, оценивает стоимость (символы / 3 × цена токена), печатает оценку. Если оценка больше $1 и нет `--yes`, спрашивает подтверждение через `readline`. После прогона печатает фактическую стоимость.
+  - Отчёт: `eval/reports/<YYYY-MM-DD>-<model>-<prompt>.md` плюс строка в `eval/reports/COMPARISON.md`.
+  - `--provider fixture` отвечает эталоном: даёт метрики 1.0 и служит smoke-проверкой без затрат.
+- [ ] **Шаг 4:** PASS, плюс `pnpm eval --provider fixture --limit 5` отрабатывает.
+- [ ] **Шаг 5: коммит и push:** `feat(eval): add evaluation runner with metrics and reports`.
+
+### Task 2.18 (👤): Выбор моделей, настройка промпта, приёмка фазы
+
+- [ ] **Шаг 1:** проверить актуальный список и цены моделей OpenRouter (WebFetch `openrouter.ai/models`). Предложить пользователю 3–4 кандидата из классов SPEC §9.2 (Gemini Flash, GPT mini, Claude Haiku 4.5) с оценкой стоимости полного прогона.
+- [ ] **Шаг 2 (👤 одобрить расходы):** `pnpm eval --model <m> --limit 30` для каждого кандидата, затем полный прогон для двух лучших.
+- [ ] **Шаг 3:** если целевые метрики не достигнуты, итерировать промпт через новые версии файлов (`extractor.v2.md`, D27). Каждая итерация — отдельный коммит с отчётом.
+- [ ] **Шаг 4:** записать выбор (primary и fallback) в `eval/reports/COMPARISON.md`, в `.env.example` (комментарий) и в `CHANGELOG.md`. Коммит: `docs(eval): select primary and fallback models`.
+- [ ] **Шаг 5 (👤): ручная приёмка на dev-боте** (RC `v0.3.0-rc.1`):
+  1. «Маша, подготовь расписание к пятнице» → карточка не позже 4 мин с правильными исполнителем и сроком.
+  2. «сделала» ответом → предложение закрыть задачу.
+  3. Неверный `OPENROUTER_API_KEY` → сообщения `pending`, после исправления они проанализированы.
+  4. `LLM_DAILY_BUDGET_USD=0.0001` → пауза и оповещения.
+  5. `docker stats` после суток работы — RAM приложения меньше 300 МБ (SPEC §29).
+- [ ] **Шаг 6: закрытие фазы:** docs, `CHANGELOG.md`, PR `Phase 2: AI pipeline and proposals` → 👤 → merge → тег `v0.3.0`.
+
+### Task 2.19 (опционально, фаза 2b, по решению пользователя): префильтр Jev
+
+- [ ] **Шаг 1:** исследовать актуальную документацию (Context7, WebFetch: typesafe.ai, jevai.org, Pydantic AI по TypeSafe): доступ к API, есть ли модель в OpenRouter, формат запроса, цена, русский язык. Результат — `docs/JEV_SPIKE.md`.
+- [ ] **Шаг 2:** если API доступен: `src/ai/providers/jev.ts` (`DecisionProvider`) плюс вариант `llm` (дешёвая модель), unit-тесты на fixtures, `pnpm eval --prefilter jev|llm`.
+- [ ] **Шаг 3:** критерий включения (SPEC §9.4): теряется не больше 2% позитивных кейсов и стоимость заметно снижается. Иначе `AI_PREFILTER=off`. Решение — в `COMPARISON.md`.
+
+---
+## Фаза 3 — Задачи, напоминания, исполнители (ветка `phase-3-tasks`)
+
+**Решение по ходу:** перед Task 3.1 обсудить с пользователем D6 (`dedupe_key` с версией) и D7 (правила планирования overdue).
+
+**Приёмка (SPEC §22):**
+- unit-тесты расписания: часовые пояса, all-day, переходы DST, тихие часы, изменение срока;
+- сквозной сценарий: задача → напоминание накануне → snooze → due → «Готово» от исполнителя → Review → «Принять» → архив;
+- сводка приходит в 09:00 в поясе Owner.
+
+### Task 3.1: Планировщик уведомлений задачи (чистая функция)
+
+**Файлы:** создать `src/domain/notifications/plan.ts`; тест `tests/unit/domain/notificationPlan.test.ts`.
+
+**Интерфейсы:**
+- Produces:
+  - `interface PlanRecipient { userId: number; zone: string; role: 'owner' | 'assignee' }`;
+  - `interface PlannedNotification { kind: 'pre_due' | 'due' | 'overdue'; recipientUserId: number; fireAt: Date; dedupeKey: string }`;
+  - `planTaskNotifications(a: { task: { id: number; version: number; dueAt: Date | null; dueAllDay: boolean; dueTz: string | null; status: string; reviewPending: boolean }; recipients: PlanRecipient[]; reminders: Settings['reminders']; now: Date }): PlannedNotification[]`;
+  - `nextOverdueAfter(a: { task; recipient: PlanRecipient; reminders; after: Date }): PlannedNotification | null` — используется для цепочки в 3.3.
+
+- [ ] **Шаг 1: падающие тесты** (SPEC §13.2, D6–D9)
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { planTaskNotifications, type PlanRecipient } from '../../../src/domain/notifications/plan.js';
+
+const reminders = { preDueTime: '10:00', allDayDueTime: '10:00', overdueTime: '10:00', notifyAssignees: true, groupOverdueThreshold: 3 };
+const owner: PlanRecipient = { userId: 10, zone: 'Europe/Moscow', role: 'owner' };
+const maria: PlanRecipient = { userId: 20, zone: 'Europe/Moscow', role: 'assignee' };
+const FRI_18_MSK = new Date('2026-09-25T15:00:00Z');
+const FRI_ALLDAY_MSK = new Date('2026-09-25T20:59:00Z');
+const task = (o: Partial<{ id: number; version: number; dueAt: Date | null; dueAllDay: boolean; dueTz: string | null; status: string; reviewPending: boolean }> = {}) =>
+  ({ id: 1, version: 1, dueAt: FRI_18_MSK, dueAllDay: false, dueTz: 'Europe/Moscow', status: 'open', reviewPending: false, ...o });
+const plan = (t: ReturnType<typeof task>, now: string, recipients: PlanRecipient[] = [owner], r = reminders) =>
+  planTaskNotifications({ task: t, recipients, reminders: r, now: new Date(now) })
+    .map((n) => [n.kind, n.recipientUserId, n.fireAt.toISOString(), n.dedupeKey]);
+
+describe('planTaskNotifications', () => {
+  it('datetime due more than 24h ahead', () => {
+    expect(plan(task(), '2026-09-23T09:00:00Z')).toEqual([
+      ['pre_due', 10, '2026-09-24T07:00:00.000Z', 'task:1:v1:pre_due:10:2026-09-24'],
+      ['due', 10, '2026-09-25T15:00:00.000Z', 'task:1:v1:due:10:2026-09-25'],
+      ['overdue', 10, '2026-09-26T07:00:00.000Z', 'task:1:v1:overdue:10:2026-09-26'],
+    ]);
+  });
+  it('skips pre_due when due is less than 24h away (D8)', () => {
+    expect(plan(task(), '2026-09-25T00:00:00Z').map((x) => x[0])).toEqual(['due', 'overdue']);
+  });
+  it('all-day due', () => {
+    expect(plan(task({ dueAt: FRI_ALLDAY_MSK, dueAllDay: true }), '2026-09-23T09:00:00Z').map((x) => x[2])).toEqual([
+      '2026-09-24T07:00:00.000Z', '2026-09-25T07:00:00.000Z', '2026-09-26T07:00:00.000Z',
+    ]);
+  });
+  it('never schedules in the past (D7)', () => {
+    expect(plan(task({ dueAt: FRI_ALLDAY_MSK, dueAllDay: true }), '2026-09-24T12:00:00Z').map((x) => x[0])).toEqual(['due', 'overdue']);
+  });
+  it('uses the recipient zone for all-day dates', () => {
+    const yekt: PlanRecipient = { userId: 10, zone: 'Asia/Yekaterinburg', role: 'owner' };
+    expect(plan(task({ dueAt: FRI_ALLDAY_MSK, dueAllDay: true }), '2026-09-23T03:00:00Z', [yekt]).map((x) => x[2])).toEqual([
+      '2026-09-24T05:00:00.000Z', '2026-09-25T05:00:00.000Z', '2026-09-26T05:00:00.000Z',
+    ]);
+  });
+  it('first overdue for an already overdue task is the next overdueTime after now', () => {
+    expect(plan(task(), '2026-09-27T09:00:00Z')).toEqual([
+      ['overdue', 10, '2026-09-28T07:00:00.000Z', 'task:1:v1:overdue:10:2026-09-28'],
+    ]);
+  });
+  it('datetime overdue may fire the same day (D7, literal SPEC §13.2)', () => {
+    const due0900 = new Date('2026-09-25T06:00:00Z');
+    expect(plan(task({ dueAt: due0900 }), '2026-09-23T09:00:00Z').at(-1)?.[2]).toBe('2026-09-25T07:00:00.000Z');
+  });
+  it('handles DST in the recipient zone', () => {
+    const berlin: PlanRecipient = { userId: 10, zone: 'Europe/Berlin', role: 'owner' };
+    const t = task({ dueAt: new Date('2026-10-25T22:59:00Z'), dueAllDay: true, dueTz: 'Europe/Berlin' });
+    expect(plan(t, '2026-10-20T10:00:00Z', [berlin]).map((x) => x[2])).toEqual([
+      '2026-10-24T08:00:00.000Z', '2026-10-25T09:00:00.000Z', '2026-10-26T09:00:00.000Z',
+    ]);
+  });
+  it('returns nothing without due or for closed tasks', () => {
+    expect(plan(task({ dueAt: null }), '2026-09-23T09:00:00Z')).toEqual([]);
+    expect(plan(task({ status: 'done' }), '2026-09-23T09:00:00Z')).toEqual([]);
+    expect(plan(task({ status: 'cancelled' }), '2026-09-23T09:00:00Z')).toEqual([]);
+  });
+  it('reminds in_progress tasks; skips the assignee (not the owner) during review (D9)', () => {
+    expect(plan(task({ status: 'in_progress' }), '2026-09-23T09:00:00Z')).toHaveLength(3);
+    const r = plan(task({ reviewPending: true }), '2026-09-23T09:00:00Z', [owner, maria]);
+    expect(r.every((x) => x[1] === 10)).toBe(true);
+    expect(r).toHaveLength(3);
+  });
+  it('embeds the task version in dedupe keys (D6) and honours custom times', () => {
+    const r = plan(task({ version: 3 }), '2026-09-23T09:00:00Z', [owner], { ...reminders, preDueTime: '09:00' });
+    expect(r[0]).toEqual(['pre_due', 10, '2026-09-24T06:00:00.000Z', 'task:1:v3:pre_due:10:2026-09-24']);
+  });
+});
+```
+
+- [ ] **Шаг 2:** FAIL.
+- [ ] **Шаг 3: реализация** (только luxon).
+  - Календарная дата all-day берётся в `task.dueTz` (при отсутствии — в поясе получателя), время напоминания — в поясе получателя.
+  - Первый `overdue`:
+    - срок со временем — самое раннее `overdueTime` в поясе получателя строго после `max(dueAt, now)`;
+    - all-day — самое раннее `overdueTime` не раньше следующего дня после даты срока и строго после `now`.
+- [ ] **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(notifications): plan pre-due, due and overdue reminders`.
+
+### Task 3.2: Пересчёт напоминаний при изменении задачи
+
+**Файлы:** создать `src/domain/notifications/recipients.ts`, `src/domain/notifications/schedule.ts`; изменить `src/app.ts` (зарегистрировать хук в `deps.taskHooks`); тест `tests/integration/domain/reschedule.test.ts`.
+
+**Интерфейсы:**
+- Produces:
+  - `resolveRecipients(tx, task: TaskRow, settings: Settings): Promise<PlanRecipient[]>`:
+    - owner получает уведомления, если `dm_started_at` не пусто и `dm_blocked=false`;
+    - исполнитель-member — если он не owner, `settings.reminders.notifyAssignees=true`, DM начат и не заблокирован;
+    - пояс получателя: `users.timezone`, иначе пояс workspace;
+  - `remindersHook: TaskHook` — отменяет все `scheduled` уведомления задачи (включая snooze: «любое изменение → отмена всех», SPEC §13.2), затем вставляет план `ON CONFLICT (dedupe_key) DO NOTHING`.
+
+- [ ] **Шаг 1: падающие тесты**
+  1. Создание задачи со сроком → строки `notifications` для owner и исполнителя (DM начат).
+  2. Исполнитель не начал DM → только owner. `notifyAssignees=false` → только owner. Исполнитель и есть owner → одна копия.
+  3. Изменение срока → старые строки `cancelled`, новые `scheduled` с `v2` в ключе.
+  4. Перенос срока в пределах того же дня после уже отправленного `due` → новая строка создаётся без конфликта (D6).
+  5. `done` или `cancelled` → все `scheduled` отменены.
+  6. Review у исполнителя → его уведомления `cancelled`, у owner остаются (D9).
+- [ ] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(notifications): reschedule reminders on every task change`.
+
+### Task 3.3: Job рассылки уведомлений
+
+**Файлы:** создать `src/scheduler/jobs/notify.ts`, `src/bot/views/reminder.ts`; тесты `tests/unit/bot/views/reminder.test.ts`, `tests/integration/scheduler/notify.test.ts`.
+
+**Интерфейсы:**
+- Produces:
+  - `notifyJob: Job`;
+  - `renderReminder(v: { kind: 'pre_due' | 'due' | 'overdue' | 'snooze'; task: TaskListItem; viewerZone: string; forAssignee: boolean }): { text: string; buttons: Buttons }` — кнопки `[✅ Готово] [⏰ +1 час] [📅 Завтра] [🕐 Выбрать время]` (SPEC §13.3);
+  - `renderOverdueDigest(items: TaskListItem[], viewerZone): { text; buttons }`;
+  - `interface TaskListItem { id: number; title: string; assigneeName: string | null; dueAt: Date | null; dueAllDay: boolean; dueTz: string | null; status: string; reviewPending: boolean }` и `getTaskListItem(db, taskId): Promise<TaskListItem | null>` в `src/domain/tasks/queries.ts` (задачи 3.5 и 3.7 дополняют этот файл).
+
+- [ ] **Шаг 1: падающие тесты** (интеграционные, FakeMessenger, `fixedClock`)
+  1. Scheduled `due` с `fire_at <= now` → отправлено, `status='sent'`, `sent_tg_message_id` заполнен.
+  2. **Два параллельных `tickOnce`** (два соединения) → каждое уведомление отправлено ровно один раз (Фокус ревью 1).
+  3. Три `overdue` одному owner в один тик → одно сообщение-список (`groupOverdueThreshold=3`). Два — отдельными сообщениями.
+  4. После отправки `overdue` создан следующий на завтра в `overdueTime` (цепочка D7). Задача закрыта → цепочка не продолжается.
+  5. Задача закрыта или удалена между планированием и отправкой → уведомление `cancelled`, ничего не отправлено.
+  6. Тихие часы: `pre_due`, `overdue` и `summary` → `cancelled`, `last_error='quiet'`, цепочка `overdue` продолжается. `due` и `snooze` отправляются (SPEC §13.5).
+  7. `send` бросает `rate_limited` или `network` → `attempts++`, `fire_at` сдвигается по `nextAttemptAt`. После 5 неудач → `failed`.
+  8. `forbidden` (403) → `users.dm_blocked=true`, все `scheduled` этого пользователя `cancelled`.
+  9. У исполнителя в review уведомление в момент отправки не уходит.
+- [ ] **Шаг 2:** FAIL.
+- [ ] **Шаг 3: реализация.** Одна транзакция: `SELECT … WHERE status='scheduled' AND fire_at <= $now ORDER BY fire_at LIMIT 50 FOR UPDATE SKIP LOCKED` (SPEC §13.1) → проверка актуальности → группировка → отправка через throttled messenger → обновление статусов. Сводки (`kind='summary'`) рендерятся в момент отправки (3.5).
+- [ ] **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(scheduler): send reminders with retries, grouping and quiet hours`.
+
+### Task 3.4: Кнопки в напоминании и snooze
+
+**Файлы:** создать `src/domain/notifications/snooze.ts`, `src/bot/handlers/reminderCallbacks.ts`, `src/bot/conversations/snoozeInput.ts`; тесты `tests/unit/domain/snooze.test.ts`, `tests/integration/bot/reminderButtons.test.ts`.
+
+**Интерфейсы:**
+- Produces:
+  - `type SnoozeOption = '1h' | 'tomorrow' | '3h' | 'today18' | 'dayafter'`;
+  - `snoozeFireAt(option: SnoozeOption, now: Date, zone: string, reminders: Settings['reminders']): Date | null` — `null`, если вариант уже неприменим (например, «Сегодня 18:00» после 18:00);
+  - `createSnooze(tx, { taskId, recipientUserId, fireAt, workspaceId })` — `kind='snooze'`, ключ `snooze:{task}:{recipient}:{fireAtISO}`.
+
+- [ ] **Шаг 1: падающие тесты**
+  - `snoozeFireAt` (сейчас 2026-09-23T09:00Z = 12:00 МСК):
+    - `1h` → `10:00Z`;
+    - `3h` → `12:00Z`;
+    - `tomorrow` → `2026-09-24T07:00Z` (10:00 МСК);
+    - `today18` → `2026-09-23T15:00Z`; при `now=18:30 МСК` → `null`;
+    - `dayafter` → `2026-09-25T07:00Z`.
+  - Кнопки:
+    1. «⏰ +1 час» от исполнителя → snooze только для исполнителя, срок задачи не изменился, у owner новых уведомлений нет (SPEC §13.3).
+    2. «🕐 Выбрать время» → `[Через 3 ч] [Сегодня 18:00] [Послезавтра] [Ввести…]`. «Ввести…» → текст → `parseDateText` → превью → snooze.
+    3. «✅ Готово» от owner → задача `done`. От исполнителя → review (3.9).
+    4. Кнопка напоминания по чужой задаче (подделанный callback) → `forbidden`.
+- [ ] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(reminders): add done and per-recipient snooze buttons`.
+
+### Task 3.5: Утренняя сводка
+
+**Файлы:** создать `src/bot/views/summary.ts`, `src/scheduler/jobs/summary.ts`, `src/domain/tasks/queries.ts` (секции сводки); тесты `tests/unit/bot/views/summary.test.ts`, `tests/integration/scheduler/summary.test.ts`.
+
+**Интерфейсы:**
+- Produces:
+  - `summarySections(db, { workspaceId, viewerUserId, scope: 'owner' | 'member', now, zone }): Promise<{ overdue: TaskListItem[]; today: TaskListItem[]; review: TaskListItem[]; inboxCount: number; noDue: TaskListItem[]; noDueTotal: number }>`;
+  - `renderSummary(s, { date: Date; zone: string; scope }): { text: string; buttons: Buttons }`;
+  - `ensureSummariesJob: Job` — для owner (и для исполнителей при `summary.forMembers`) держит одну scheduled-сводку на следующее `summary.time` в поясе получателя; ключ `summary:{ws}:{user}:{date}`.
+
+- [ ] **Шаг 1: падающие тесты**
+  - View:
+    - все секции в порядке SPEC §13.4, заголовок `☀️ Доброе утро! Сводка на пт, 25 сен`;
+    - пустые секции не выводятся;
+    - всё пусто → `Задач на сегодня нет 🎉`;
+    - «Без срока»: топ-5 самых старых и `ещё 2 → /tasks`;
+    - кнопки `[📋 Все задачи] [📥 Разобрать]`;
+    - при 200 задачах текст не длиннее 4096 символов (секции обрезаются с «ещё N»).
+    - для `scope='member'` нет секций inbox и review.
+  - Integration:
+    1. Owner в поясе Asia/Yekaterinburg, `summary.time='09:00'`. Тик в `03:59Z` → ничего; тик в `04:00Z` → сводка отправлена, создана запись на завтра.
+    2. `summary.enabled=false` → записи не создаются, уже созданные отменены.
+    3. Смена `summary.time` через `/settings` → scheduled-сводка пересоздана.
+    4. `forMembers=true` → исполнитель с начатым DM получает сводку по своим задачам.
+    5. Тихий день (`dateRanges`) → сводка подавлена, на следующий день приходит.
+- [ ] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(summary): add daily morning summary`.
+
+### Task 3.6: Карточка задачи и действия с ней
+
+**Файлы:** создать `src/bot/views/taskCard.ts`, `src/bot/views/history.ts`, `src/bot/handlers/taskCallbacks.ts`, `src/bot/conversations/editTask.ts`; изменить `src/domain/tasks/service.ts` (`cancel`, `restore`, `deleteForever`); тесты `tests/unit/bot/views/taskCard.test.ts`, `tests/integration/bot/taskActions.test.ts`.
+
+**Интерфейсы:**
+- Produces:
+  - `renderTaskCard(t: TaskCardView, viewerZone: string, viewer: 'owner' | 'assignee'): { text; buttons }` — формат SPEC §12.4;
+  - `TaskService.cancel`, `restore` (→ `open`), `deleteForever` (удаляет задачу, события и уведомления);
+  - общий редактор полей `editFieldsConversation`, который делят 2.14 и 3.6: после 2.14 вынести общие шаги в `src/bot/conversations/editFields.ts`.
+
+- [ ] **Шаг 1: падающие тесты**
+  - View:
+    - snapshot карточки owner с кнопками `[✅ Выполнено] [▶️ В работу] / [✏️ Изменить] [⏰ Отложить] / [🗑 Отменить] [📜 История]`;
+    - у архивной задачи кнопки `[♻️ Восстановить] [🗑 Удалить навсегда]`;
+    - у исполнителя только `[▶️ В работу] [✅ Готово]`.
+  - Действия:
+    1. «Выполнено» → `done`, `completed_at`, `completed_by`, событие `status_changed`, напоминания отменены.
+    2. «В работу» → `in_progress`.
+    3. «Изменить» → диалог. Изменение срока → `version+1`, напоминания пересчитаны.
+    4. «Отложить» → варианты snooze для owner.
+    5. «Отменить» → `cancelled` (архив).
+    6. «Восстановить» → `open`, напоминания запланированы заново.
+    7. «Удалить навсегда» требует **двух** подтверждений. После них в БД нет ни задачи, ни событий, ни уведомлений.
+    8. «История» → последние 20 событий с датами в поясе получателя.
+    9. Кнопка удалённой задачи → «Задача не найдена», без исключения (Фокус ревью 2).
+    10. Member жмёт кнопку управления → `forbidden`.
+- [ ] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(tasks): add task card with status, edit, archive and delete actions`.
+
+### Task 3.7: Списки и фильтры — `/tasks`, `/today`, `/overdue`, `/archive`, `/my`
+
+**Файлы:** изменить `src/domain/tasks/queries.ts`; создать `src/bot/views/taskList.ts`, `src/bot/handlers/lists.ts`; тесты `tests/unit/bot/views/taskList.test.ts`, `tests/integration/domain/taskQueries.test.ts`, `tests/integration/bot/lists.test.ts`.
+
+**Интерфейсы:**
+- Produces:
+  - `type ListFilter = { kind: 'open' } | { kind: 'today' } | { kind: 'overdue' } | { kind: 'no_due' } | { kind: 'review' } | { kind: 'assignee'; userId: number | 'none' | 'all' } | { kind: 'chat'; chatId: number } | { kind: 'archive' } | { kind: 'my'; userId: number } | { kind: 'today_and_overdue' }`;
+  - Consumes: `TaskListItem` из 3.3;
+  - `listTasks(db, { workspaceId, filter, page, pageSize = 5, now, zone }): Promise<{ items: TaskListItem[]; total: number; pages: number }>`;
+  - `rowMarker(item, now, zone): '🟣' | '🔴' | '🔵' | '🟡' | '⚪'` (D24);
+  - `renderTaskList(r, { filter, page, zone, now }): { text; buttons }`.
+  - Callback: `v1:l:<f>:<page>[:<arg>]`, где `f` ∈ `all|tod|ovd|nod|rev|asg|cht|arc|my|tov`.
+
+- [ ] **Шаг 1: падающие тесты**
+  - `rowMarker`:
+    - review → 🟣, даже если задача просрочена;
+    - просрочено → 🔴;
+    - `in_progress` и не просрочено → 🔵;
+    - срок сегодня в поясе получателя → 🟡;
+    - позже или без срока → ⚪;
+    - all-day со сроком сегодня не считается просроченным до конца дня.
+  - Строка: `🔴 T12 Подготовить расписание — Мария · пт, 25 сен`.
+  - Пагинация: 12 задач → `стр 1/3`. На первой странице нет `◀️`, на последней нет `▶️`.
+  - Запросы:
+    - `today` в поясе Yekaterinburg отличается от Moscow на границе суток (тест на 20:30Z);
+    - `archive` — `done` и `cancelled`, от новых к старым;
+    - `my` — только задачи исполнителя.
+  - Бот:
+    - `/today` = сегодня + просроченные;
+    - `/my` от member показывает только его задачи;
+    - member не может вызвать `/tasks` (`forbidden`);
+    - нажатие на номер открывает карточку;
+    - меню «По исполнителю ▾» и «По чату ▾» работает.
+- [ ] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(tasks): add task lists with filters and pagination`.
+
+### Task 3.8: Поиск и статистика
+
+**Файлы:** создать `src/domain/tasks/search.ts`, `src/domain/tasks/stats.ts`, `src/bot/handlers/search.ts`, `src/bot/handlers/stats.ts`, `src/bot/views/stats.ts`; тесты `tests/integration/domain/search.test.ts`, `tests/integration/domain/stats.test.ts`.
+
+**Интерфейсы:**
+- Produces:
+  - `searchTasks(db, { workspaceId, query, page }): Promise<{ items: TaskListItem[]; total: number }>` — по всем статусам (SPEC §12.2);
+  - `taskStats(db, { workspaceId, periodDays: 7 | 30 | 90, now }): Promise<Array<{ key: { type: 'user'; userId: number; name: string } | { type: 'owner' } | { type: 'none' }; open: number; inProgress: number; overdueNow: number; done: number; onTimePct: number | null; avgLateHours: number | null }>>`.
+
+- [ ] **Шаг 1: падающие тесты**
+  - Поиск:
+    1. «расписан» находит «Подготовить расписание» (ILIKE) и «Расписание на ноябрь».
+    2. Опечатка «расписане» находит через trigram.
+    3. Запрос `50%` находит «Скидка 50% для группы» и не находит «Скидка 500».
+    4. Запрос `_` не возвращает все задачи подряд (Фокус ревью 4).
+    5. Ищутся и архивные задачи.
+  - Статистика по Марии за 30 дней:
+    - 2 задачи выполнены в срок, 1 — с опозданием на 48 ч, 1 открыта и просрочена, 1 в работе;
+    - ожидается: `open=1`, `inProgress=1`, `overdueNow=1`, `done=3`, `onTimePct=67`, `avgLateHours=48`;
+    - отдельные строки «Owner» и «без исполнителя».
+- [ ] **Шаг 2:** FAIL.
+- [ ] **Шаг 3: реализация.** `ILIKE` с экранированием `%`, `_` и `\` (`ESCAPE '\'`) плюс `similarity(title, q) > 0.2`; сортировка по `greatest(similarity(title), similarity(description))`. Период выбирается кнопками `[7] [30] [90]`.
+- [ ] **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(tasks): add search and per-assignee statistics`.
+
+### Task 3.9: Поток исполнителя — назначение, «В работу», «Готово» → Review
+
+**Файлы:** создать `src/domain/tasks/review.ts`, `src/bot/handlers/assigneeCallbacks.ts`, `src/bot/views/assignment.ts`, `src/bot/conversations/returnComment.ts`; изменить `src/domain/proposals/decide.ts` (уведомление при accept); тест `tests/integration/bot/assigneeFlow.test.ts`.
+
+**Интерфейсы:**
+- Produces: `requestReview(deps, { taskId, actor })`, `acceptReview(deps, { taskId, actor })`, `returnReview(deps, { taskId, actor, comment: string | null })`, `notifyAssignment(deps, task)`.
+
+- [ ] **Шаг 1: падающие тесты** (SPEC §14)
+  1. Accept proposal с исполнителем Мария (DM начат, не заблокирована, `notify_assignments=true`) → Мария получает «📌 Вам поставлена задача: … · срок … · от Анна» `[▶️ Беру в работу] [✅ Готово]`.
+  2. DM не начат, заблокирован или `notify_assignments=false` → сообщения нет, всё остальное работает.
+  3. «Беру в работу» → `in_progress`, событие.
+  4. «Готово» от Марии → статус не меняется, `review_pending=true`, `review_requested_by` и `review_requested_at` заполнены, событие `review_requested`. Owner получает «🟣 Мария отметила выполненной: T12 …» `[✅ Принять] [↩️ Вернуть в работу]`.
+  5. «Принять» → `done`, `review_pending=false`, событие `review_accepted`.
+  6. «Вернуть» → диалог «Добавить комментарий?» (`[Без комментария]` или текст) → `review_pending=false`, `in_progress`. Мария получает «Задачу вернули в работу» и комментарий.
+  7. Мария жмёт «Готово» по чужой задаче → `forbidden`. `/my` не показывает чужие задачи.
+  8. Повторное «Готово» во время review → «Уже на проверке».
+- [ ] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(tasks): add assignee flow with review and return`.
+
+### Task 3.10: Ручное создание — `/task` в группе, `/new`, свободный текст, пересылки
+
+**Файлы:** создать `src/ai/pipeline/extractSingle.ts`, `src/bot/handlers/taskCommand.ts`, `src/bot/handlers/dmFreeText.ts`, `src/bot/handlers/forwards.ts`, `src/bot/conversations/newTask.ts`; тесты `tests/integration/bot/manualCreation.test.ts`, `tests/unit/ai/extractSingle.test.ts`.
+
+**Интерфейсы:**
+- Produces:
+  - `extractSingle(deps, { text: string; authorUserId: number; workspaceId: number; now: Date }): Promise<ResolvedAction & { kind: 'create' }>` — промпт `extractor.v1` + `extractor.single.v1`. Если действия нет или LLM недоступен, возвращает черновик с `title = первые 80 символов` (D19). Стоимость пишется как `analysis_batches` с `kind='manual'`;
+  - `createManualProposal(deps, { workspaceId, chatId: number | null, action, origin: 'manual_group' | 'manual_dm' | 'forward', sourceMessageIds, quote, quoteAuthorName, createdByUserId })` — `category='manual'`, `policy_decision='shown'`, дальше обычный outbox (2.12).
+
+- [ ] **Шаг 1: падающие тесты**
+  1. `/task` ответом на сообщение в группе → карточка у owner с пометкой «вручную», на команду стоит реакция ✍, текстом в группу бот не отвечает.
+  2. `/task купить бумагу` → карточка с этим текстом.
+  3. `/task` от member → то же (предложение для owner).
+  4. `/task` в `paused`-чате игнорируется. При `analysis_enabled=false` работает (D12).
+  5. `/task` без текста и без ответа → игнорируется, пишется debug-лог.
+  6. `/new` → шаги название → исполнитель → срок → приоритет → подтверждение → задача `origin='manual_dm'`.
+  7. Свободный текст owner'а в DM (вне диалога) → черновик «Создать задачу?» `[✅ Создать] [✏️ Изменить] [❌ Отмена]`.
+  8. Свободный текст от member → подсказка про `/my`, LLM не вызывается.
+  9. Три пересланных сообщения за 1 с → один черновик `origin='forward'` с цитатой первого и автором из `forward_origin`. Пересылки с интервалом 5 с → два черновика (D18).
+  10. Бюджет превышен → ручное создание всё равно работает (SPEC §9.2).
+  11. LLM недоступен → черновик с названием из первых 80 символов (unit на `extractSingle`).
+- [ ] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(tasks): add manual task creation from group, DM text and forwards`.
+
+### Task 3.11: `/settings` и технические настройки в `/admin`
+
+**Файлы:** создать `src/bot/handlers/settings.ts`, `src/bot/conversations/settings.ts`, `src/bot/views/settings.ts`, `src/time/parseRanges.ts`; тесты `tests/unit/time/parseRanges.test.ts`, `tests/integration/bot/settings.test.ts`.
+
+**Интерфейсы:**
+- Produces:
+  - `parseDateRange(input: string, now: Date, zone: string): { from: string; to: string } | null`;
+  - `parseTimeWindow(input: string): { from: string; to: string } | null`;
+  - `parseAdminSetting(input: string): { path: string; value: unknown } | null` — формат `ключ значение`, например `ai.thresholds.low 0.3`.
+
+- [ ] **Шаг 1: падающие тесты**
+  - `parseDateRange` (сейчас 2026-09-23):
+    - `с 31.12 по 08.01` → `2026-12-31..2027-01-08`;
+    - `31.12-08.01` → то же;
+    - `с 01.11 по 03.11` → 2026;
+    - `с 01.03 по 05.03` → 2027 (дата уже прошла);
+    - `с 01.01.2027 по 10.01.2027` → явный год;
+    - `32.12` → `null`.
+    - Парсер извлекает даты регуляркой `\d{1,2}\.\d{1,2}(\.\d{4})?` и не зависит от слов «с/по», поэтому кириллица в коде не нужна.
+  - `parseTimeWindow`: `22:00-08:00`, `22-8` → `22:00` и `08:00`; `25-8` → `null`.
+  - Бот:
+    1. Разделы: Сводка (вкл/выкл, время, для сотрудников); Напоминания (время `preDue`, `allDayDue`, `overdue`, «уведомлять исполнителей», порог группировки); Тихие часы (вкл/выкл, дни недели кнопками, окно, диапазоны дат — добавить и удалить); Часовой пояс школы; Реакции (👀 вкл/выкл, ✍ при подтверждении); Текст уведомления в чате (изменить или сбросить).
+    2. Некорректное время → понятная ошибка, настройки не изменились.
+    3. `/admin → AI-настройки` (superadmin): `ai.thresholds.low 0.3` сохраняется, `ai.thresholds.low 2` отклоняется zod. `batch.*` — так же.
+    4. Member → `forbidden`.
+- [ ] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(settings): add /settings menus and admin AI/batch tuning`.
+
+### Task 3.12: Удаление персональных данных (SPEC §19.3.3)
+
+**Файлы:** создать `src/domain/people/erase.ts`, `src/domain/workspaces/erase.ts`; изменить `src/bot/handlers/people.ts`, `src/bot/handlers/admin.ts`; тест `tests/integration/domain/erase.test.ts`.
+
+**Интерфейсы:**
+- Produces:
+  - `eraseMember(deps, { workspaceId, userId, actor }): Promise<{ messages: number; tasksAnonymized: number; userDeleted: boolean }>`;
+  - `eraseWorkspace(deps, { workspaceId, actor }): Promise<void>` — только superadmin, бот также покидает все чаты workspace.
+
+- [ ] **Шаг 1: падающие тесты**
+  1. `eraseMember(Мария)`:
+     - её сообщения удалены;
+     - в задачах, где она исполнитель, `assignee_user_id=null`, `assignee_name_text` берётся из `texts.erase.anonymous` («[удалено]»);
+     - `source_quote` задач из её сообщений очищен;
+     - `actor_user_id` в `task_events` и `decided_by` в proposals очищены;
+     - её ID убраны из `source_message_ids`;
+     - membership удалён; user удалён, если у него нет других workspace и он не superadmin.
+  2. Owner не может удалить себя (сначала `/transfer`).
+  3. Нужно двойное подтверждение.
+  4. `eraseWorkspace` → в БД нет строк этого workspace, `leaveChat` вызван для каждого активного чата.
+- [ ] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(privacy): add per-member and per-workspace data erasure`.
+
+### Task 3.13: `pnpm feedback-report` (SPEC §20.4)
+
+**Файлы:** создать `src/domain/proposals/feedback.ts`, `scripts/feedback-report.ts`; тест `tests/integration/domain/feedback.test.ts`.
+
+**Интерфейсы:** Produces `feedbackStats(db, { since: Date; withText: boolean }): Promise<{ byCategory: Record<string, { shown: number; accepted: number; rejected: number }>; rejectReasons: Record<string, number>; editedFields: Record<string, number>; confidenceBuckets: Array<{ from: number; to: number; accepted: number; rejected: number }>; samples?: Array<{ title: string; quote: string | null; decision: string }> }>`.
+
+- [ ] **Шаг 1: падающий тест.**
+  - Засеянные решения дают правильные частоты.
+  - Без `withText` в результате нет строк с текстом: проверяется, что в `JSON.stringify` нет названий задач.
+- [ ] **Шаг 2:** FAIL.
+- [ ] **Шаг 3: реализация.** Вывод — Markdown в stdout. Флаг `--with-text` печатает предупреждение «только для локального разбора».
+- [ ] **Шаг 4:** PASS.
+- [ ] **Шаг 5: коммит и push:** `feat(eval): add feedback report from owner decisions`.
+
+### Task 3.14: Сквозной сценарий, меню команд, закрытие фазы
+
+**Файлы:** создать `tests/integration/e2e/taskLifecycle.test.ts`; изменить `src/bot/commands.ts`, `src/bot/views/help.ts`.
+
+- [ ] **Шаг 1: сквозной тест** (bot harness, `fixedClock`, FixtureClient; каждый шаг — `clock.set(...)` и `ticker.tickOnce()`):
+  1. Среда, 12:00 МСК. Сообщение в группе «Маша, подготовь расписание к пятнице 18:00» → через 3 мин тик → карточка у owner → «✅ Создать».
+  2. Мария (DM начат) получила «📌 Вам поставлена задача».
+  3. Четверг, 10:00 МСК → `pre_due` у owner и у Марии.
+  4. Мария → «⏰ +1 час» → в 11:00 snooze-напоминание только у Марии.
+  5. Пятница, 18:00 → `due` у обоих.
+  6. Мария → «✅ Готово» → у owner 🟣-карточка.
+  7. Owner → «✅ Принять» → задача `done`, запланированный `overdue` отменён. В субботу в 10:00 по этой задаче ничего не отправлено. Задача видна в `/archive`.
+  8. Owner в поясе Asia/Yekaterinburg: сводка в 09:00 местного времени (`04:00Z`), в `03:59Z` её ещё нет.
+- [ ] **Шаг 2:** прогнать, исправить найденное. PASS.
+- [ ] **Шаг 3:** финальные `setMyCommands` для всех scope (SPEC §12.2) и `/help` по ролям.
+- [ ] **Шаг 4: коммит и push:** `test(e2e): cover task lifecycle acceptance scenario`.
+- [ ] **Шаг 5: закрытие фазы.**
+  1. `pnpm coverage` показывает не меньше 80% по `domain` и `ai/pipeline`.
+  2. `docs/` и `CHANGELOG.md` обновлены.
+  3. RC `v0.4.0-rc.1` → dev (👤 ручная проверка сценария в тестовой группе).
+  4. PR `Phase 3: tasks, reminders and assignees` → 👤 → merge → тег `v0.4.0`.
+
+---
+## Фаза 4 — Прод и переезд к руководителю (ветка `phase-4-prod`)
+
+**Гейт:** юридическое согласование (SPEC §19.5). Prod не запускается в реальных чатах, пока руководитель не подтвердит, что профиль (А или Б) и документы согласованы с юристом.
+
+**Приёмка (SPEC §22):** восстановление из бэкапа на чистом сервере по инструкции · руководитель успешно выполнил claim · бот работает в реальных группах.
+
+### Task 4.1: Бэкапы — регламент, оповещения, проверка восстановления
+
+**Файлы:** изменить `scripts/backup.sh`, `scripts/restore.sh`; создать `scripts/test-backup-restore.sh`, `docs/OPERATIONS.md` (раздел «Бэкапы»).
+
+- [ ] **Шаг 1:** `scripts/test-backup-restore.sh` полностью в Docker:
+  1. Поднять временный Postgres 17 и заполнить его фикстурой.
+  2. Выполнить `backup.sh` с тестовым age-ключом.
+  3. Поднять второй временный Postgres и восстановить в него через `restore.sh`.
+  4. Сравнить `count(*)` по всем таблицам.
+
+  Скрипт должен падать, если в восстановленной БД чего-то не хватает: проверить это, удалив одну таблицу из дампа. После проверки вернуть исходное состояние.
+- [ ] **Шаг 2:** cron на сервере `0 3 * * * /opt/stb-prod/scripts/backup.sh >> /var/log/stb-backup.log 2>&1` (03:00 UTC, SPEC §27.10). При неудаче `backup.sh` отправляет оповещение superadmin через Bot API.
+- [ ] **Шаг 3:** описать в `docs/OPERATIONS.md` ротацию, где хранится приватный ключ (вне сервера) и пошаговое восстановление на чистом сервере.
+- [ ] **Шаг 4: коммит и push:** `chore(ops): verify backup and restore round-trip`.
+
+### Task 4.2: Watchdog и финальный `/admin`
+
+**Файлы:** создать `src/ops/watchdog.ts`; изменить `src/app.ts`; тест `tests/integration/ops/watchdog.test.ts`.
+
+**Интерфейсы:** Produces `checkTickerGapOnStart(deps): Promise<void>` — если `app_state['ticker:heartbeat']` старше 2 мин, вызывается `errors.alert('ticker_gap', …)` с длительностью простоя (SPEC §18).
+
+- [ ] **Шаг 1: падающий тест.**
+  - Heartbeat 5 мин назад → при старте superadmin получает оповещение «ticker не работал 5 мин».
+  - Heartbeat 30 с назад → оповещения нет.
+- [ ] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
+- [ ] **Шаг 5:** сверить `/admin` с SPEC §18: версия, аптайм, pending по чатам, стоимость LLM за сегодня и месяц, proposals за 7 дней, precision, «Код владельца», «Удалить workspace», последние ошибки. Недостающее дописать с тестами.
+- [ ] **Шаг 6: коммит и push:** `feat(ops): alert on ticker downtime at startup`.
+
+### Task 4.3: Документы — OPERATIONS, MIGRATION_TO_OWNER, юридические шаблоны
+
+**Файлы:** создать `docs/OPERATIONS.md`, `docs/MIGRATION_TO_OWNER.md`, `docs/legal/consent_template.md`, `docs/legal/processing_policy_template.md`, `docs/legal/rkn_checklist.md`; изменить `docs/legal/privacy_notice_chat.md`, `docs/legal/privacy_full.md`.
+
+- [ ] **Шаг 1:** `docs/OPERATIONS.md`: логи (`docker compose logs -f app`), `/admin`, `/debug`, диск (`df -h`), обновление и откат (`scripts/deploy.sh`), бэкапы, типовые инциденты (бюджет LLM, заблокированный бот, privacy mode, падение OpenRouter, миграция group → supergroup), ротация токена.
+- [ ] **Шаг 2:** `docs/MIGRATION_TO_OWNER.md` — 8 шагов SPEC §17.3 с командами. **Первый пункт чек-листа — юридический гейт** (профиль А или Б и документы согласованы).
+- [ ] **Шаг 3:** шаблоны `docs/legal/*` (SPEC §19.5), каждый с пометкой «⚠️ Шаблон, проверить юристу». Содержание:
+  - какие данные обрабатываются, цели и сроки хранения (30 дней для текстов);
+  - передача за рубеж (OpenRouter) и псевдонимизация, включая то, что имена третьих лиц в MVP не заменяются;
+  - как запросить удаление;
+  - чек-лист уведомлений РКН (ст. 22, ст. 12).
+- [ ] **Шаг 4: коммит и push:** `docs: add operations runbook, owner migration guide and legal templates`.
+
+### Task 4.4: Профиль Б — БД в РФ через WireGuard
+
+**Файлы:** создать `docker/compose.db-remote.yml`, `docs/DEPLOY_PROFILE_B.md`.
+
+- [ ] **Шаг 1:** `compose.db-remote.yml` — только сервис `app` без `db`. `DATABASE_URL` указывает на туннельный адрес с `sslmode=require` (SPEC §19.4).
+- [ ] **Шаг 2:** `docs/DEPLOY_PROFILE_B.md`:
+  1. VPS в РФ с Postgres 17 (UTF-8 локаль для `pg_trgm`).
+  2. TLS-сертификат Postgres.
+  3. WireGuard между серверами: ключи, `wg0.conf`, `ufw`.
+  4. Проверка `psql "sslmode=require host=10.x.x.x"`.
+  5. Бэкапы на стороне РФ.
+  6. Проверка, что на ЕС-сервере нет данных (`docker volume ls`).
+- [ ] **Шаг 3:** проверка — CI собирает образ. Локально `docker compose -f docker/compose.db-remote.yml config` без ошибок.
+- [ ] **Шаг 4: коммит и push:** `docs(deploy): add strict profile B with remote database`.
+
+### Task 4.5 (👤): Юридический гейт, prod, переезд, закрытие фазы
+
+- [ ] **Шаг 1 (👤):** руководитель подтверждает, что профиль и документы согласованы с юристом. Подтверждение фиксируется в `docs/MIGRATION_TO_OWNER.md` (дата и выбранный профиль, без ПД).
+- [ ] **Шаг 2 (👤 и агент):** prod по `docs/DEPLOY.md`: `/opt/stb-prod`, чистая БД, **без** `BOOTSTRAP_OWNER_TG_ID`, релиз `v1.0.0-rc.1`.
+- [ ] **Шаг 3 (👤):** восстановление из бэкапа на чистом сервере по `docs/OPERATIONS.md` (приёмка).
+- [ ] **Шаг 4 (👤):**
+  1. `/admin → Код владельца`.
+  2. Руководитель выполняет `/start`, `/claim КОД` и выбирает пояс.
+  3. Руководитель добавляет бота в рабочие группы.
+  4. Проверочное поручение даёт карточку.
+  5. Бот передаётся в @BotFather, токен перевыпускается (SPEC §17.3).
+- [ ] **Шаг 5: закрытие фазы:** `CHANGELOG.md`, PR `Phase 4: production` → 👤 → merge → тег `v1.0.0`.
+
+---
+
+## Фаза 5 — Apple «Напоминания» (ветка `phase-5-apple`, только после гейта)
+
+**Гейт:** прототип SPEC §21.2. Если пункты 1–3 невозможны, фаза отменяется.
+
+**Приёмка:** задача из бота появляется на iPhone при следующем запуске автоматизации · отметка на iPhone закрывает задачу в боте.
+
+### Task 5.0 (👤): Прототип Shortcuts
+
+- [ ] Проверить на актуальной iOS пять пунктов SPEC §21.2 и записать результат в `docs/APPLE_SPIKE.md` с версией iOS и скриншотами без ПД. Решение «продолжать / отменить» принимает пользователь.
+
+### Task 5.1: Домен, Caddy, HTTPS, webhook-режим
+
+**Файлы:** создать `docker/Caddyfile`; изменить `docker/compose.yml` (сервис `caddy`, профиль `https`), `src/app.ts` (`TELEGRAM_MODE=webhook`), `docs/DEPLOY.md` (п. 13).
+
+- [ ] Тесты:
+  - при `TELEGRAM_MODE=webhook` `startApp` вызывает `setWebhook` с `secret_token`;
+  - `POST /telegram/webhook` без верного заголовка `X-Telegram-Bot-Api-Secret-Token` → 401.
+  - Детали сверить через Context7 → grammY `webhookCallback`.
+- [ ] 👤 Покупка домена и A-запись; `ufw allow 80,443`.
+- [ ] Коммит и push: `feat(http): add HTTPS via Caddy and Telegram webhook mode`.
+
+### Task 5.2: Токены устройств Apple
+
+**Файлы:** миграция `apple_devices` и `apple_task_state` (SPEC §6); создать `src/domain/apple/devices.ts`; изменить `src/bot/handlers/settings.ts` (раздел «Apple Напоминания»); тест `tests/integration/domain/appleDevices.test.ts`.
+
+- [ ] Тесты:
+  - токен показывается один раз, в БД хранится только sha256;
+  - отзыв работает;
+  - поиск устройства по токену выполняется с постоянным временем сравнения (`timingSafeEqual`).
+- [ ] Коммит и push: `feat(apple): add device tokens`.
+
+### Task 5.3: API `/api/apple/v1/*` и SyncTarget
+
+**Файлы:** создать `src/http/routes/apple.ts`, `src/domain/apple/sync.ts` (`SyncTarget` из SPEC §23 как `TaskHook`); тест `tests/integration/http/apple.test.ts`.
+
+- [ ] Тесты:
+  1. `GET /changes` без токена → 401.
+  2. С токеном → `upsert` открытых задач и задач в работе в формате SPEC §21.3: `ref #t12`, `notes` с `#t12`, `due` с offset, `version`.
+  3. Задачи `done` и `cancelled` → `completed: true` или `delete` по настройке `apple.scope`.
+  4. `POST /ack` с курсором → следующий `GET` возвращает только новые изменения.
+  5. `POST /report { completed: ['#t12'] }` → T12 `done` от имени owner (`actor_type='apple'`), owner получает тихое сообщение «Закрыто на iPhone: T12 …».
+  6. Больше 60 запросов в минуту на токен → 429.
+  7. В логах нет названий задач.
+- [ ] Rate limit — простой счётчик в памяти на токен (без новых зависимостей). Если нужен `@fastify/rate-limit`, сначала запросить разрешение у пользователя.
+- [ ] Коммит и push: `feat(apple): add changes, ack and report API`.
+
+### Task 5.4: Shortcut и инструкция
+
+- [ ] `docs/APPLE_SHORTCUT.md` по SPEC §21.4: импорт по iCloud-ссылке, Import Questions (адрес и токен), автоматизации (08:50, 12:00, 15:00, 18:00, 21:00; открытие и закрытие «Напоминаний»), правила конфликтов.
+- [ ] 👤 Приёмка на iPhone руководителя. PR → merge → тег `v1.1.0`.
+
+---
+
+## Фаза 6 — Mini App (только после отдельной спецификации)
+
+SPEC §22: React + Vite + `@telegram-apps/telegram-ui`, раздача через Fastify по `/webapp`, авторизация по `initData` (HMAC по токену бота, срок не больше 24 ч).
+
+- [ ] **6.0:** написать `docs/MINIAPP_SPEC.md` (экраны: список с фильтрами и поиском, карточка и редактирование, статистика, настройки; API; авторизация) и согласовать с пользователем. Зависимости фазы 6 (React, Vite, telegram-ui) перечислены в SPEC §22 и отдельного запроса не требуют.
+- [ ] **6.1+:** детальный план по `superpowers:writing-plans` отдельным файлом `docs/plans/phase-6-miniapp.md`. Первая задача — проверка `initData` (unit-тесты: валидная подпись, подделка, истёкший `auth_date`).
+
+## Фаза 7 — Расширения (по отдельному решению)
+
+Каждый пункт — отдельный мини-план после решения пользователя. Точки расширения заложены в фазах 0–3 (SPEC §23).
+
+- **Голосовые:** интерфейс `Transcriber` → `MessageContentExtractor` для `voice`; текст расшифровки идёт в тот же пайплайн. Провайдер выбирается позже.
+- **Автосоздание задач:** флаг `ai.autoCreate` (SPEC §16): proposals `create` с `confidence ≥ minConfidence` создаются сразу, owner получает карточку «Создано автоматически» `[↩️ Отменить]`.
+- **Импорт экспорта Telegram:** `pnpm import-export --file result.json --workspace <id> [--dry-run]` (SPEC §20.3). Офлайн-прогон пайплайна, бот ничего не пишет и не ставит реакции. Только после согласования с юристом; сам экспорт в репозиторий не коммитится.
+- **Несколько workspace через UI** в одном деплое.
+- **Российский LLM-провайдер** (YandexGPT/GigaChat) через `LLM_PROVIDER` и интерфейс `ExtractionProvider` (SPEC §19.3.6).
+
+---
+
+## Самопроверка плана по спецификации
+
+| SPEC | Где в плане |
+|---|---|
+| §0 правила агента | `CLAUDE.md`, «Как пользоваться планом», «Глобальные ограничения» |
+| §3 роли и права | 1.2 (матрица), проверки в 1.5, 1.6, 1.9, 2.13, 3.6–3.11 |
+| §4 стек | 0.1, D3 |
+| §5 архитектура, allowed_updates | 0.7, 0.8 |
+| §6 модель данных | 0.4, D5; `apple_*` — 5.2 |
+| §7 сбор сообщений | 1.6–1.8, 1.11 |
+| §8 батчинг | 2.9 |
+| §9 AI-пайплайн | 2.1–2.10, 2.12, 2.19 |
+| §10 сроки и пояса | 1.4, 2.5, 2.11, D17, D29 |
+| §11 карточки и действия | 2.11–2.15 |
+| §12 ручное создание, команды, списки, карточка, статистика | 3.6–3.10, 1.11, 3.14 |
+| §13 напоминания, сводка, тихие часы | 2.12 (quiet), 3.1–3.5, 3.11 |
+| §14 исполнители | 3.9 |
+| §15 жизненный цикл чатов | 1.6, 1.9, 1.11 |
+| §16 настройки | 1.1, 3.11 |
+| §17 окружения и переезд | 0.10, 1.5, 4.3, 4.5 |
+| §18 логи, ошибки, здоровье | 0.3, 0.5, 0.6, 4.2 |
+| §19 ПД и 152-ФЗ | 2.2, 1.12, 3.12, 4.1, 4.3, 4.4 |
+| §20 eval, импорт, обратная связь | 2.16–2.18, 3.13; импорт — фаза 7 (как в SPEC §22) |
+| §21 Apple | фаза 5 |
+| §22 фазы и приёмка | заголовки фаз и закрывающие задачи |
+| §23 точки расширения | `ExtractionProvider`/`DecisionProvider` (2.4), `TaskHook`/`SyncTarget` (2.13, 5.3), профили промптов (2.3), фаза 7 |
+| §24 CI/CD | 0.9, 0.10 |
+| §25 структура и callback-формат | 0.1, 1.3 |
+| §26 env | 0.2 |
+| §27 DEPLOY.md | 0.10, 5.1 |
+| §28 тестирование | во всех задачах; покрытие — 0.1 (vitest), 3.14 |
+| §29 нефункциональные | outbox и транзакции (2.10, 2.12, 3.3), задержка карточки (2.18), RAM и стоимость (`/admin`, 4.2) |
+| §30 допущения | D13, `resolveDue` (выходные без праздников), 2.18, 2.19, 4.5 |
