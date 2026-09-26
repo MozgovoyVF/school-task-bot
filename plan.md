@@ -218,7 +218,7 @@ gh repo create MozgovoyVF/school-task-bot --public --source . --remote origin --
 git switch -c phase-0-skeleton
 ```
 
-- [ ] **Шаг 3: `package.json`.** Версию pnpm сверить с `npm view pnpm version` (на 2026-09-26 — 12.6.0).
+- [x] **Шаг 3: `package.json`.** Версию pnpm сверить с `npm view pnpm version` (на 2026-09-26 — 12.6.0).
 
 ```json
 {
@@ -251,7 +251,7 @@ git switch -c phase-0-skeleton
 }
 ```
 
-- [ ] **Шаг 4: зависимости.** Сверить версии через Context7 или npm.
+- [x] **Шаг 4: зависимости.** Сверить версии через Context7 или npm.
 
 ```bash
 pnpm add grammy @grammyjs/runner @grammyjs/conversations @grammyjs/auto-retry @grammyjs/transformer-throttler drizzle-orm postgres zod openai luxon fastify pino
@@ -260,7 +260,7 @@ pnpm add -D typescript@~5.9.3 tsx vitest @vitest/coverage-v8 drizzle-kit eslint 
 
 Если pnpm предупреждает об отсутствующей peer-зависимости `vite` для vitest, добавить `pnpm add -D vite`.
 
-- [ ] **Шаг 5: `tsconfig.json` и `tsconfig.build.json`**
+- [x] **Шаг 5: `tsconfig.json` и `tsconfig.build.json`**
 
 ```json
 {
@@ -290,7 +290,7 @@ pnpm add -D typescript@~5.9.3 tsx vitest @vitest/coverage-v8 drizzle-kit eslint 
 { "extends": "./tsconfig.json", "include": ["src", "scripts", "eval"], "exclude": ["tests", "**/*.test.ts"] }
 ```
 
-- [ ] **Шаг 6: `eslint.config.js`** (flat config; синтаксис сверить через Context7 → typescript-eslint)
+- [x] **Шаг 6: `eslint.config.js`** (flat config; синтаксис сверить через Context7 → typescript-eslint)
 
 ```js
 import js from '@eslint/js';
@@ -329,7 +329,7 @@ export default tseslint.config(
 
 `.prettierrc.json`: `{ "singleQuote": true, "printWidth": 110, "trailingComma": "all" }`. `.prettierignore`: `dist`, `coverage`, `pnpm-lock.yaml`, `src/db/migrations`, `SPEC.md`, `plan.md`.
 
-- [ ] **Шаг 7: `vitest.config.ts`** (синтаксис `projects` сверить через Context7 → vitest)
+- [x] **Шаг 7: `vitest.config.ts`** (синтаксис `projects` сверить через Context7 → vitest)
 
 ```ts
 import { defineConfig } from 'vitest/config';
@@ -359,7 +359,7 @@ export default defineConfig({
 
 `tests/integration/globalSetup.ts` пока пустой (`export default async function setup() {}`). Он заполняется в задаче 0.4.
 
-- [ ] **Шаг 8: падающий тест архитектурного правила**
+- [x] **Шаг 8: падающий тест архитектурного правила**
 
 ```ts
 // tests/unit/architecture.test.ts
@@ -397,8 +397,8 @@ describe('repository', () => {
 });
 ```
 
-- [ ] **Шаг 9:** `pnpm test:unit`. Ожидается FAIL: модуль `../helpers/architecture.js` не найден.
-- [ ] **Шаг 10: реализация**
+- [x] **Шаг 9:** `pnpm test:unit`. Ожидается FAIL: модуль `../helpers/architecture.js` не найден.
+- [x] **Шаг 10: реализация**
 
 ```ts
 // tests/helpers/architecture.ts
@@ -413,8 +413,8 @@ export function findForbiddenCyrillic(files: Array<{ path: string; content: stri
 }
 ```
 
-- [ ] **Шаг 11:** `pnpm lint && pnpm typecheck && pnpm test:unit` — PASS. `README.md` (кратко: что это, ссылки на SPEC, CLAUDE, plan, команды) и `CHANGELOG.md` (`## [Unreleased]`).
-- [ ] **Шаг 12: коммит и push**
+- [x] **Шаг 11:** `pnpm lint && pnpm typecheck && pnpm test:unit` — PASS. `README.md` (кратко: что это, ссылки на SPEC, CLAUDE, plan, команды) и `CHANGELOG.md` (`## [Unreleased]`).
+- [x] **Шаг 12: коммит и push**
 
 ```bash
 git add -A && git commit -m "chore: scaffold TypeScript project tooling" && git push -u origin phase-0-skeleton
