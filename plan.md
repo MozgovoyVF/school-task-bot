@@ -733,7 +733,7 @@ describe('fingerprint', () => {
   - `dailyJob(name: string, atUtc: string, run: (deps: AppDeps) => Promise<void>): Job` — выполняется один раз за UTC-сутки после `atUtc`, отметка хранится в `app_state` под ключом `daily:<name>`;
   - `buildHttpServer(deps: { db: Db; clock: Clock; heartbeat: () => Date | null }): FastifyInstance`.
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
   - Ticker:
     1. `tickOnce` запускает jobs по порядку.
     2. Ошибка одной job не останавливает следующие и уходит в `deps.errors.report`.
@@ -744,10 +744,12 @@ describe('fingerprint', () => {
     1. Heartbeat 10 с назад → 200 `{ status: 'ok' }`.
     2. Heartbeat 61 с назад → 503.
     3. БД недоступна (закрытое соединение) → 503.
-- [ ] **Шаг 2:** FAIL.
-- [ ] **Шаг 3: реализация.** Цикл на `setTimeout`: следующий тик планируется после завершения текущего. `stop()` дожидается текущего тика. Heartbeat хранится и в памяти (для `/healthz`), и в `app_state` (для watchdog в 4.5).
-- [ ] **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(scheduler): add ticker, daily jobs and health endpoint`.
+- [x] **Шаг 2:** FAIL.
+- [x] **Шаг 3: реализация.** Цикл на `setTimeout`: следующий тик планируется после завершения текущего. `stop()` дожидается текущего тика. Heartbeat хранится и в памяти (для `/healthz`), и в `app_state` (для watchdog в 4.5).
+- [x] **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(scheduler): add ticker, daily jobs and health endpoint`.
+
+**Решение (ordering, `AppDeps` ещё не существует до 0.8):** `Job` и `createTicker`/`dailyJob` в этой задаче типизированы не против `AppDeps` (её ещё нет), а против локального `TickerDeps` (`src/scheduler/ticker.ts`): `{ db: Db; clock: Clock; logger: Logger; errors: ErrorReporter }`. `Job.run` объявлен через method-shorthand (`run(deps: TickerDeps): Promise<void>`), как и в зафиксированном контракте — это осознанно, а не то же самое, что свойство-стрелочная функция: у method-shorthand в интерфейсе bivariant-проверка параметров, что упрощает совместимость с будущими job из фаз 3+, типизированными против настоящего `AppDeps`. Когда в 0.8 появится реальный `AppDeps` (надмножество `TickerDeps`), задаче 0.8 нужно решить: (а) заменить `TickerDeps` на реальный `AppDeps` прямо в `ticker.ts`/`daily.ts` (проще всего, раз `AppDeps` уже надмножество), либо (б) сделать `Job`/`createTicker` дженериками `<D extends TickerDeps>`. Вариант (а) рекомендован. `dailyJob`'s колбэк `run: (deps: TickerDeps) => Promise<void>` — это function-type, а не method-shorthand, поэтому строго контравариантен (`strictFunctionTypes`): функции, явно типизированные под будущий `AppDeps`, не подойдут туда, пока 0.8 не поменяет тип параметра на `AppDeps`.
 
 ### Task 0.7: Скелет бота — `/start`, `/help`, superadmin, ошибки, `/admin`
 
