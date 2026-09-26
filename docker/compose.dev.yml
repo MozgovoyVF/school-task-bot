@@ -1,0 +1,19 @@
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: stb
+      POSTGRES_PASSWORD: stb
+      POSTGRES_DB: stb
+    ports:
+      - '5433:5432'
+    volumes:
+      - stb-dev-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U stb -d stb']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  stb-dev-pgdata:

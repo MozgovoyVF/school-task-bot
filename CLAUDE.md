@@ -72,7 +72,7 @@ docker compose -f docker/compose.yml -p stb-dev up -d   # как на серве
 |---|---|---|
 | grammY и плагины (runner, conversations v2, auto-retry, transformer-throttler) | https://grammy.dev | `/grammyjs/website` (общее), `/grammyjs/conversations` (диалоги) |
 | Telegram Bot API | https://core.telegram.org/bots/api | — |
-| Drizzle ORM / drizzle-kit | https://orm.drizzle.team | — |
+| Drizzle ORM / drizzle-kit | https://orm.drizzle.team | `/drizzle-team/drizzle-orm-docs` |
 | postgres.js | https://github.com/porsager/postgres | — |
 | PostgreSQL 17, pg_trgm | https://www.postgresql.org/docs/17/ | — |
 | zod v4 | https://zod.dev | — |
@@ -92,6 +92,7 @@ docker compose -f docker/compose.yml -p stb-dev up -d   # как на серве
 - **OpenRouter:** `usage.cost`, `usage.prompt_tokens` и `usage.completion_tokens` приходят в каждом ответе автоматически. Параметр `usage: { include: true }` устарел, его не передаём.
 - **TypeScript:** в npm latest уже 7.x, но по SPEC §4 держим **5.x** (`~5.9.3`). typescript-eslint поддерживает TS `<6.1`.
 - **@grammyjs/transformer-throttler** 1.2.1 совместим с grammy ^1.
+- **drizzle-orm 0.45.3 / drizzle-kit 0.31.11:** postgres.js-драйвер — `drizzle(client, { schema })` из `drizzle-orm/postgres-js`, миграции — `migrate(db, { migrationsFolder })` из `drizzle-orm/postgres-js/migrator`. При круговых ссылках между таблицами из разных файлов схемы (напр. `messages.batch_id → analysis_batches`, `analysis_batches.first_message_id → messages`) `drizzle-kit generate` работает без проблем (FK добавляются через `ALTER TABLE` после всех `CREATE TABLE`), но `tsc` падает с `TS7022` (циклический вывод типа таблицы). Лечится явной аннотацией возврата колбэка: `.references((): AnyPgColumn => other.id, {...})` вместо `.references(() => other.id, {...})`.
 
 ## 6. Стек (SPEC §4) и зависимости
 

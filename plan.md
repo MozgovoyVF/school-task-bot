@@ -609,8 +609,8 @@ export const memberships = pgTable('memberships', {
 
 Обязательные индексы и ограничения: `users.tg_user_id` unique; `chats.tg_chat_id` unique; `messages` unique `(chat_id, tg_message_id)` и индекс `(chat_id, analysis_status, sent_at)`; `tasks` — `(workspace_id, status, due_at)`, `(workspace_id, assignee_user_id, status)`, GIN `gin_trgm_ops` по `title` и `description`; индекс GIN trigram по `(payload->>'title')` у `proposals` (для dedup 2.8); `notifications.dedupe_key` unique и индекс `(status, fire_at)`; `analysis_batches` — индекс `(chat_id, status)`; `error_reports.fingerprint` pk; `app_state.key` pk.
 
-- [ ] **Шаг 1:** `docker/compose.dev.yml` с сервисом `db`: `postgres:17`, `POSTGRES_USER=stb`, `POSTGRES_PASSWORD=stb`, `POSTGRES_DB=stb`, порт `5433:5432`, volume `stb-dev-pgdata`, healthcheck `pg_isready`. Выполнить `pnpm db:up`.
-- [ ] **Шаг 2: падающий интеграционный тест**
+- [x] **Шаг 1:** `docker/compose.dev.yml` с сервисом `db`: `postgres:17`, `POSTGRES_USER=stb`, `POSTGRES_PASSWORD=stb`, `POSTGRES_DB=stb`, порт `5433:5432`, volume `stb-dev-pgdata`, healthcheck `pg_isready`. Выполнить `pnpm db:up`.
+- [x] **Шаг 2: падающий интеграционный тест**
 
 ```ts
 // tests/integration/db/schema.test.ts
@@ -647,21 +647,21 @@ describe('schema', () => {
 });
 ```
 
-- [ ] **Шаг 3:** `pnpm test:int` — FAIL (нет helpers и схемы).
-- [ ] **Шаг 4: миграции.** Порядок важен.
+- [x] **Шаг 3:** `pnpm test:int` — FAIL (нет helpers и схемы).
+- [x] **Шаг 4: миграции.** Порядок важен.
   1. `pnpm drizzle-kit generate --custom --name=extensions`, в файл вписать `CREATE EXTENSION IF NOT EXISTS pg_trgm;`.
   2. Описать схему.
   3. `pnpm db:generate` — сгенерировать основную миграцию. Проверить SQL глазами: частичный индекс, GIN, enum'ы.
 
   `drizzle.config.ts`: `dialect: 'postgresql'`, `schema: './src/db/schema/index.ts'`, `out: './src/db/migrations'`. Сверить через Context7 → drizzle.
-- [ ] **Шаг 5: `src/db/client.ts`, `src/db/migrate.ts`, helpers**
+- [x] **Шаг 5: `src/db/client.ts`, `src/db/migrate.ts`, helpers**
   - `createDb` использует `postgres(url, { max })` и `drizzle(client, { schema })`.
   - `runMigrations` вызывает `migrate(db, { migrationsFolder })` из `drizzle-orm/postgres-js/migrator`. Сверить через Context7.
   - `src/db/migrate.ts` — CLI: `loadEnv` → `createDb` → `runMigrations` → `close`.
   - `globalSetup`: подключиться к `postgres://stb:stb@localhost:5433/postgres` (или взять базу из `TEST_DATABASE_URL`), выполнить `DROP DATABASE IF EXISTS stb_test WITH (FORCE)` и `CREATE DATABASE stb_test`, применить миграции.
   - `truncateAll`: `TRUNCATE <все таблицы> RESTART IDENTITY CASCADE`. Список таблиц брать из `pg_tables where schemaname='public'`, кроме `__drizzle_migrations`.
-- [ ] **Шаг 6:** `pnpm test` — PASS.
-- [ ] **Шаг 7: коммит и push:** `feat(db): add drizzle schema, migrations and test database harness`.
+- [x] **Шаг 6:** `pnpm test` — PASS.
+- [x] **Шаг 7: коммит и push:** `feat(db): add drizzle schema, migrations and test database harness`.
 
 ### Task 0.5: Clock, Messenger, отчёты об ошибках
 

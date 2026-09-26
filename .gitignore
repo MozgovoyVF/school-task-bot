@@ -10,6 +10,7 @@ backups/
 *.dump
 *.sql
 *.sql.gz
+!src/db/migrations/**/*.sql
 *.age
 exports/
 result.json
