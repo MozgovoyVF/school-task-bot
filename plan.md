@@ -427,7 +427,7 @@ git add -A && git commit -m "chore: scaffold TypeScript project tooling" && git 
 **Интерфейсы:**
 - Produces: `EnvSchema`, `type Env`, `loadEnv(source?: Record<string, string | undefined>): Env`, `class EnvError extends Error { issues: string[] }`. Константы (см. шаг 3).
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
 
 ```ts
 import { describe, it, expect } from 'vitest';
@@ -491,8 +491,8 @@ describe('loadEnv', () => {
 });
 ```
 
-- [ ] **Шаг 2:** `pnpm test:unit tests/unit/config` — FAIL (модуль не найден).
-- [ ] **Шаг 3: реализация.** Переменные — ровно из SPEC §26 плюс `GIT_SHA` (D21).
+- [x] **Шаг 2:** `pnpm test:unit tests/unit/config` — FAIL (модуль не найден).
+- [x] **Шаг 3: реализация.** Переменные — ровно из SPEC §26 плюс `GIT_SHA` (D21).
   - Обязательны: `TELEGRAM_BOT_TOKEN`, `SUPERADMIN_TG_IDS`, `DATABASE_URL`.
   - `OPENROUTER_API_KEY` и `LLM_MODEL_PRIMARY` не обязательны. Если хотя бы одной нет, `deps.ai = null`, в лог пишется warn «AI analysis disabled».
   - Пустые строки заранее превращаются в `undefined`.
@@ -531,9 +531,9 @@ export const COMPLETION_SIGNALS = ['готово', 'сделала', 'сдела
 
 Примечание: `хорошо`, `понял` и `поняла` в стоп-листе допустимы: сообщение остаётся контекстом. «Готова» и «готов» — сигналы завершения, стоп-лист их не отсеивает (SPEC §7.3).
 
-- [ ] **Шаг 4:** `.env.example` — дословно SPEC §26 плюс строка `GIT_SHA=dev  # подставляется при сборке образа`.
-- [ ] **Шаг 5:** тесты зелёные, lint и typecheck проходят.
-- [ ] **Шаг 6: коммит и push:** `feat(config): validate environment with zod`.
+- [x] **Шаг 4:** `.env.example` — дословно SPEC §26 плюс строка `GIT_SHA=dev  # подставляется при сборке образа`.
+- [x] **Шаг 5:** тесты зелёные, lint и typecheck проходят.
+- [x] **Шаг 6: коммит и push:** `feat(config): validate environment with zod`.
 
 ### Task 0.3: Логгер с redaction
 
