@@ -27,11 +27,32 @@ function normalizeError(err: unknown): NormalizedError {
   return { name: 'NonError', message: String(err), stack: undefined };
 }
 
-function stackFrames(stack: string | undefined): string[] {
+/** V8 renders `err.stack` as `${name}: ${message}` (or just `name` when message is empty) followed by frame lines. */
+function errorHeader(name: string, message: string): string {
+  return message ? `${name}: ${message}` : name;
+}
+
+/**
+ * Strips the "Name: message" header off `stack` and returns the remaining
+ * frame lines. The header is stripped by its actual text length rather than
+ * by counting one line, because `message` can itself contain newlines (Zod
+ * issue lists, Postgres errors, `JSON.parse` SyntaxErrors, …) — splitting on
+ * `\n` and dropping only the first line would otherwise treat a later
+ * message line as if it were the first stack frame.
+ */
+function stackFrames(stack: string | undefined, name: string, message: string): string[] {
   if (!stack) return [];
-  return stack
+  const header = errorHeader(name, message);
+  let rest: string;
+  if (stack.startsWith(header)) {
+    rest = stack.slice(header.length);
+  } else {
+    // Unexpected stack shape (non-V8 engine, monkey-patched Error, …): fall back to dropping one line.
+    const firstNewline = stack.indexOf('\n');
+    rest = firstNewline === -1 ? '' : stack.slice(firstNewline + 1);
+  }
+  return rest
     .split('\n')
-    .slice(1)
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
 }
@@ -39,13 +60,13 @@ function stackFrames(stack: string | undefined): string[] {
 /**
  * Groups occurrences of "the same" error regardless of the numbers embedded
  * in the message (ids, counts, …): sha256 of the error name, the message
- * with digit runs blanked out, and the first stack frame after the
+ * with digit runs blanked out, and the first real stack frame after the
  * "Name: message" header — truncated to 16 hex chars.
  */
 export function fingerprint(err: unknown): string {
   const normalized = normalizeError(err);
   const normalizedMessage = normalized.message.replace(/\d+/g, '#');
-  const frame = stackFrames(normalized.stack)[0] ?? '';
+  const frame = stackFrames(normalized.stack, normalized.name, normalized.message)[0] ?? '';
   const input = `${normalized.name}:${normalizedMessage}:${frame}`;
   return createHash('sha256').update(input).digest('hex').slice(0, 16);
 }
@@ -67,7 +88,7 @@ function buildSample(normalized: NormalizedError, context: Context): ErrorSample
   return {
     name: normalized.name,
     message: sanitizeMessage(normalized.message),
-    topFrames: stackFrames(normalized.stack).slice(0, MAX_STACK_FRAMES),
+    topFrames: stackFrames(normalized.stack, normalized.name, normalized.message).slice(0, MAX_STACK_FRAMES),
     context,
   };
 }
@@ -168,10 +189,13 @@ export function createErrorReporter(deps: ErrorReporterDeps): ErrorReporter {
         const sample = buildSample(normalized, context);
         const decision = await upsertAndDecide(db, key, now, ONE_HOUR_MS, sample);
         if (!decision.shouldNotify) return;
+        // Reuse the already-sanitized sample.message (masked long digit runs, capped at 300 chars) for the
+        // outbound Telegram text too — the raw message could otherwise blow past Telegram's 4096-char limit
+        // (causing exactly the errors most worth escalating to fail to send) and would leak unmasked digits.
         const text = texts.errors.report(
           key,
           normalized.name,
-          normalized.message,
+          sample.message,
           context,
           decision.repeatCount > 0 ? decision.repeatCount : undefined,
         );

@@ -8,4 +8,7 @@ export interface Clock {
   now(): Date;
 }
 
-export const systemClock: Clock = { now: () => new Date() }; // eslint-disable-line no-restricted-syntax -- the single allowed place
+export const systemClock: Clock = {
+  // eslint-disable-next-line no-restricted-syntax -- the single allowed place
+  now: () => new Date(),
+};
