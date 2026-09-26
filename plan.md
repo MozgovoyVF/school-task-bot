@@ -678,7 +678,7 @@ describe('schema', () => {
   - `getState<T>(db, key, schema: z.ZodType<T>): Promise<T | null>`, `setState(db, key, value: unknown, now: Date): Promise<void>`;
   - `FakeMessenger implements Messenger` с полем `sent: Array<{ chatId: number; text: string; opts?: SendOptions }>`, методами `failNextWith(err: MessengerError)` и `reactions`, `edits`, `left`.
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
 
 ```ts
 // tests/unit/ops/fingerprint.test.ts
@@ -711,14 +711,14 @@ describe('fingerprint', () => {
 // 5. alert('budget:2026-09-23', …) дважды за час → одно сообщение.
 ```
 
-- [ ] **Шаг 2:** FAIL.
-- [ ] **Шаг 3: реализация.**
+- [x] **Шаг 2:** FAIL.
+- [x] **Шаг 3: реализация.**
   - Отпечаток: `sha256(name + ':' + message.replace(/\d+/g, '#') + ':' + первая строка stack после сообщения)`, первые 16 hex-символов.
   - `sample` — `{ name, message (≤300 символов, без цифр длиннее 6 подряд), topFrames (5), context }`.
   - Upsert по `fingerprint`: если `last_notified_at` пусто или старше часа, отправить и обновить `last_notified_at`.
   - Текст отчёта берётся из `texts.errors.report(...)` в `ru.ts`.
-- [ ] **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(ops): add error reporter with hourly throttling`.
+- [x] **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(ops): add error reporter with hourly throttling`.
 
 ### Task 0.6: Ticker, heartbeat, `/healthz`
 
