@@ -79,7 +79,7 @@ docker compose -f docker/compose.yml -p stb-dev up -d   # как на серве
 | OpenAI Node SDK (для OpenRouter) | https://github.com/openai/openai-node | — |
 | OpenRouter API | https://openrouter.ai/docs | — |
 | luxon | https://moment.github.io/luxon | — |
-| Fastify 5 | https://fastify.dev | — |
+| Fastify 5 | https://fastify.dev | `/fastify/fastify` |
 | pino | https://getpino.io | — |
 | vitest | https://vitest.dev | — |
 | typescript-eslint / ESLint flat config | https://typescript-eslint.io | — |
