@@ -541,7 +541,7 @@ export const COMPLETION_SIGNALS = ['готово', 'сделала', 'сдела
 
 **Интерфейсы:** Produces `createLogger(opts: { level: string; destination?: pino.DestinationStream }): Logger`, `type Logger = pino.Logger`.
 
-- [ ] **Шаг 1: падающий тест**
+- [x] **Шаг 1: падающий тест**
 
 ```ts
 import { describe, it, expect } from 'vitest';
@@ -574,10 +574,10 @@ describe('logger redaction', () => {
 });
 ```
 
-- [ ] **Шаг 2:** FAIL.
-- [ ] **Шаг 3: реализация.** pino с `redact.paths`: `text`, `*.text`, `*.*.text`, `*.*.*.text`, то же для `caption`, `first_name`, `last_name`, `username`; `*.TELEGRAM_BOT_TOKEN`, `*.OPENROUTER_API_KEY`, `*.TYPESAFE_API_KEY`, `*.authorization`, `*.token`, `*.apiKey`; `censor: '[REDACTED]'`. Синтаксис wildcard сверить через Context7 → pino.
-- [ ] **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(ops): add pino logger with PII redaction`.
+- [x] **Шаг 2:** FAIL.
+- [x] **Шаг 3: реализация.** pino с `redact.paths`: `text`, `*.text`, `*.*.text`, `*.*.*.text`, то же для `caption`, `first_name`, `last_name`, `username`; `*.TELEGRAM_BOT_TOKEN`, `*.OPENROUTER_API_KEY`, `*.TYPESAFE_API_KEY`, `*.authorization`, `*.token`, `*.apiKey`; `censor: '[REDACTED]'`. Синтаксис wildcard сверен через Context7 → pino (`/pinojs/pino/v10.1.0`): `*` matches exactly one level, no recursive wildcard, отсюда явные пути на глубину 0–3. Дополнительно: имена секретных ключей (например, `TELEGRAM_BOT_TOKEN`) сами содержат чувствительную подстроку, поэтому одного `censor` для значения недостаточно — само имя ключа осталось бы в выводе. `redact.remove` в pino общий на весь конфиг (не для отдельных путей), поэтому секретные ключи полностью вырезаются (ключ + значение) через `formatters.log` (выполняется до `redact`, подтверждено в документации pino), а PII-поля по-прежнему цензурируются через `redact.paths`, что и оставляет маркер `[REDACTED]` в выводе. `*.<SECRET_KEY>` пути в `redact.paths` сохранены как доп. защита.
+- [x] **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(ops): add pino logger with PII redaction`.
 
 ### Task 0.4: Схема БД, миграции, тестовая БД
 
