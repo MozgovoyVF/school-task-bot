@@ -920,13 +920,13 @@ JSON
 
 **Файлы:** создать `scripts/deploy.sh`, `scripts/backup.sh`, `scripts/restore.sh`, `docs/DEPLOY.md`; изменить `README.md`, `CHANGELOG.md`.
 
-- [ ] **Шаг 1: `scripts/deploy.sh <tag>`** (`set -euo pipefail`):
+- [x] **Шаг 1: `scripts/deploy.sh <tag>`** (`set -euo pipefail`):
   1. Прочитать предыдущий тег из `.deploy/current_tag`.
   2. Запустить `scripts/backup.sh`.
   3. `APP_TAG=<tag> docker compose -f docker/compose.yml --env-file .env -p "$COMPOSE_PROJECT" pull app && … up -d`.
   4. До 90 с опрашивать `curl -fsS http://127.0.0.1:${HTTP_PORT:-3000}/healthz`.
   5. Если проверка не прошла — откатиться на предыдущий тег и выйти с кодом 1. Если прошла — записать новый тег.
-- [ ] **Шаг 2: `scripts/backup.sh`:**
+- [x] **Шаг 2: `scripts/backup.sh`:**
   - `docker compose exec -T db pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" | gzip | age -r "$BACKUP_AGE_RECIPIENT" > backups/stb-$APP_ENV-$(date -u +%Y%m%dT%H%M%SZ).sql.gz.age`;
   - хранить 14 последних копий;
   - если файл не больше 50 МБ, отправить его superadmin через `curl -F document=@… https://api.telegram.org/bot$TOKEN/sendDocument`;
@@ -934,8 +934,8 @@ JSON
 
   `scripts/restore.sh <file.age> <identity-file>`: остановить `app`, пересоздать БД, выполнить `age -d -i … | gunzip | psql`, запустить `app` и проверить `/healthz`.
 - [ ] **Шаг 3: локальная проверка круговорота бэкапа.** Нужен `age` (`brew install age`, 👤 подтвердить установку). Бэкап compose.dev-базы → восстановление в новую базу → количество строк в `users` совпадает.
-- [ ] **Шаг 4: `docs/DEPLOY.md`** — все 14 пунктов SPEC §27. У каждого шага: точные команды, ожидаемый вывод и раздел «Если что-то пошло не так». Перед написанием п. 1 проверить актуальные тарифы VPS (Aéza, FirstByte, HostVDS, Fornex, Hetzner) через WebSearch и указать дату проверки. Каталоги на сервере: `/opt/stb-dev`, `/opt/stb-prod`. Команды compose: `docker compose -f docker/compose.yml --env-file .env -p stb-dev …`.
-- [ ] **Шаг 5: коммит и push:** `docs(deploy): add deploy/backup scripts and step-by-step DEPLOY guide`.
+- [x] **Шаг 4: `docs/DEPLOY.md`** — все 14 пунктов SPEC §27. У каждого шага: точные команды, ожидаемый вывод и раздел «Если что-то пошло не так». Перед написанием п. 1 проверить актуальные тарифы VPS (Aéza, FirstByte, HostVDS, Fornex, Hetzner) через WebSearch и указать дату проверки. Каталоги на сервере: `/opt/stb-dev`, `/opt/stb-prod`. Команды compose: `docker compose -f docker/compose.yml --env-file .env -p stb-dev …`.
+- [x] **Шаг 5: коммит и push:** `docs(deploy): add deploy/backup scripts and step-by-step DEPLOY guide`.
 - [ ] **Шаг 6: релиз-кандидат.** `gh workflow run release.yml -f tag=v0.1.0-rc.1 --ref phase-0-skeleton`, затем `gh run watch`.
 - [ ] **Шаг 7 (👤): развернуть dev-бота на VPS по `docs/DEPLOY.md`.** Агент сопровождает. Приёмка:
   1. `/start` в dev-боте работает.
