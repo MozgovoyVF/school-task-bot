@@ -362,6 +362,21 @@ gh workflow run release.yml -f tag=v0.1.0-rc.1 --ref <ветка>
 gh run watch
 ```
 
+GitHub запускает `workflow_dispatch` только для workflow, который уже есть в основной ветке
+(`main`). Пока `release.yml` не смержен в `main`, ручной запуск возвращает
+`HTTP 404: workflow release.yml not found on the default branch`. В этом случае релиз запускают
+пушем аннотированного тега на нужный коммит. Правило «rc-теги никогда не становятся `:latest`»
+действует и при таком запуске.
+
+```bash
+git tag -a v0.1.0-rc.1 -m "Release candidate" <commit>
+git push origin v0.1.0-rc.1
+gh run watch "$(gh run list --workflow release.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
+```
+
+Пакет в GHCR связан с публичным репозиторием и тоже публичный, поэтому `docker login ghcr.io`
+на сервере для `pull` не нужен.
+
 Теги `-rc` никогда не становятся `:latest`, поэтому после первого rc-релиза `:latest` в GHCR может
 вообще не существовать. Деплой на него и не опирается.
 
