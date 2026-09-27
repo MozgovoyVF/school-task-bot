@@ -107,7 +107,9 @@ export function registerChatMemberHandlers(bot: Bot<BotContext>, deps: ChatMembe
         : await rejectChat(lifecycleDeps, decoded.id, ctx.state.actor);
 
     if (!result.ok) {
-      await ctx.answerCallbackQuery(result.reason === 'forbidden' ? { text: texts.common.forbidden } : undefined);
+      await ctx.answerCallbackQuery(
+        result.reason === 'forbidden' ? { text: texts.common.forbidden } : undefined,
+      );
       return;
     }
     await ctx.answerCallbackQuery();

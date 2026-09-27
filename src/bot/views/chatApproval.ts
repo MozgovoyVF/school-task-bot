@@ -22,7 +22,10 @@ export function renderChatApprovalCard(chat: ChatRow, addedByName: string): Chat
     text: texts.chats.addedNotice(chat.title ?? texts.chats.untitledChat, addedByName),
     buttons: [
       [
-        { text: texts.chats.approveButton, data: encodeCallback({ entity: 'c', action: 'apr', id: chat.id }) },
+        {
+          text: texts.chats.approveButton,
+          data: encodeCallback({ entity: 'c', action: 'apr', id: chat.id }),
+        },
         { text: texts.chats.leaveButton, data: encodeCallback({ entity: 'c', action: 'rej', id: chat.id }) },
       ],
     ],

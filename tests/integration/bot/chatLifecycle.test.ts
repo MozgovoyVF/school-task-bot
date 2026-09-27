@@ -265,7 +265,7 @@ describe('group chat lifecycle', () => {
     expect(taskAfter).toBeDefined();
   });
 
-  it('migrate_to_chat_id updates the same row\'s tg_chat_id and type', async () => {
+  it("migrate_to_chat_id updates the same row's tg_chat_id and type", async () => {
     const harness = await createBotHarness();
     const OLD_GROUP = { id: -333, type: 'group' as const, title: 'Old Group' };
     const NEW_TG_ID = -1004444;

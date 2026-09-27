@@ -27,7 +27,10 @@ export const pendingChatsJob: Job = {
       try {
         await leaveExpiredPendingChat({ db: deps.db, messenger: deps.messenger, clock: deps.clock }, chat.id);
       } catch (err) {
-        deps.logger.error({ err, chatId: chat.id }, 'pendingChatsJob: failed to leave an expired pending chat');
+        deps.logger.error(
+          { err, chatId: chat.id },
+          'pendingChatsJob: failed to leave an expired pending chat',
+        );
       }
     }
   },

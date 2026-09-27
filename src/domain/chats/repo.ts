@@ -86,7 +86,11 @@ export async function listPendingChatsAwaitingOwner(db: DbOrTx, workspaceId: num
 }
 
 /** Stamps `pending_since`, but only once (idempotent — a racing second call is a no-op, returns `null`). */
-export async function setPendingSinceIfMissing(db: DbOrTx, chatId: number, now: Date): Promise<ChatRow | null> {
+export async function setPendingSinceIfMissing(
+  db: DbOrTx,
+  chatId: number,
+  now: Date,
+): Promise<ChatRow | null> {
   const [row] = await db
     .update(chats)
     .set({ pendingSince: now, updatedAt: now })
@@ -169,7 +173,11 @@ export async function markChatLeft(db: Db, chatId: number, now: Date): Promise<C
  * Returns `null` (no-op) if the chat is no longer `pending` by the time this
  * runs — the caller must not call `messenger.leaveChat` in that case.
  */
-export async function claimPendingChatForAutoLeave(db: Db, chatId: number, now: Date): Promise<ChatRow | null> {
+export async function claimPendingChatForAutoLeave(
+  db: Db,
+  chatId: number,
+  now: Date,
+): Promise<ChatRow | null> {
   return leaveChatRow(db, chatId, now, eq(chats.status, 'pending'));
 }
 

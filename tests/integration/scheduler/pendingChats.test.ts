@@ -6,7 +6,11 @@ import { createLogger } from '../../../src/ops/logger.js';
 import { loadEnv } from '../../../src/config/env.js';
 import { ensureDefaultWorkspace } from '../../../src/domain/workspaces/repo.js';
 import { upsertChatOnAdd, listExpiredPendingChats } from '../../../src/domain/chats/repo.js';
-import { approveChat, leaveExpiredPendingChat, type ChatLifecycleDeps } from '../../../src/domain/chats/lifecycle.js';
+import {
+  approveChat,
+  leaveExpiredPendingChat,
+  type ChatLifecycleDeps,
+} from '../../../src/domain/chats/lifecycle.js';
 import type { Actor } from '../../../src/domain/people/permissions.js';
 import { upsertTelegramUser } from '../../../src/domain/people/repo.js';
 import { chats, memberships } from '../../../src/db/schema/index.js';

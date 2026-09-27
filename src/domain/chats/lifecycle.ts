@@ -130,8 +130,7 @@ export async function onBotAdded(
 }
 
 export type ApproveChatResult =
-  | { ok: true; chat: ChatRow }
-  | { ok: false; reason: 'forbidden' | 'not_pending' };
+  { ok: true; chat: ChatRow } | { ok: false; reason: 'forbidden' | 'not_pending' };
 
 /**
  * `texts.chats.approveButton`. Permission-checked (`chat.approve` — Owner or
@@ -154,8 +153,7 @@ export async function approveChat(
 }
 
 export type RejectChatResult =
-  | { ok: true; chat: ChatRow }
-  | { ok: false; reason: 'forbidden' | 'not_pending' };
+  { ok: true; chat: ChatRow } | { ok: false; reason: 'forbidden' | 'not_pending' };
 
 /**
  * `texts.chats.leaveButton` on a *pending* chat's approval card. Shares its
@@ -165,7 +163,11 @@ export type RejectChatResult =
  * `pending`; an already-decided chat (active/paused/left) is left alone —
  * that is Task 1.9's `leaveChat`'s job, not this button's.
  */
-export async function rejectChat(deps: ChatLifecycleDeps, chatId: number, actor: Actor): Promise<RejectChatResult> {
+export async function rejectChat(
+  deps: ChatLifecycleDeps,
+  chatId: number,
+  actor: Actor,
+): Promise<RejectChatResult> {
   if (!can(actor, 'chat.approve')) return { ok: false, reason: 'forbidden' };
 
   const chat = await getChatById(deps.db, chatId);
@@ -284,7 +286,10 @@ export interface RequestPendingApprovalsDeps {
  * add time (`onBotAdded`) — this only notifies the Owner. A no-op if the
  * workspace somehow still has no Owner.
  */
-export async function requestPendingApprovals(deps: RequestPendingApprovalsDeps, workspaceId: number): Promise<void> {
+export async function requestPendingApprovals(
+  deps: RequestPendingApprovalsDeps,
+  workspaceId: number,
+): Promise<void> {
   const owner = await getOwner(deps.db, workspaceId);
   if (!owner) return;
 
@@ -307,7 +312,10 @@ export async function requestPendingApprovals(deps: RequestPendingApprovalsDeps,
       // must not run on a chat the Owner was never actually told about — roll the stamp back so a later
       // call (e.g. the next /claim, or a retry) can still reach them.
       await clearPendingSince(deps.db, chat.id);
-      deps.logger.error({ err, chatId: chat.id }, 'requestPendingApprovals: failed to send the approval card');
+      deps.logger.error(
+        { err, chatId: chat.id },
+        'requestPendingApprovals: failed to send the approval card',
+      );
     }
   }
 }
