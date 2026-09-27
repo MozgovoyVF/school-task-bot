@@ -124,12 +124,20 @@ export async function createBotHarness(opts?: {
    * plan.md D41's Important fix and `tests/integration/bot/timezone.test.ts`.
    */
   workspaceTimezone?: string;
+  /**
+   * Overrides the harness's default silent logger — for a test that needs
+   * to assert on emitted log lines (e.g. `group.ts`'s debug log on an edit
+   * to an already-analyzed message), pass a logger built with a capturing
+   * `destination` (see `tests/integration/ops/errorReporter.test.ts`'s
+   * `capturingLogger`).
+   */
+  logger?: ReturnType<typeof createLogger>;
 }): Promise<BotHarness> {
   const db = getTestDb();
   await truncateAll(db);
 
   const clock = fixedClock(opts?.clock ?? '2026-09-23T12:00:00+03:00');
-  const logger = createLogger({ level: 'silent' });
+  const logger = opts?.logger ?? createLogger({ level: 'silent' });
   const messenger = new FakeMessenger();
   const superadminIds = opts?.superadminIds ?? DEFAULT_SUPERADMIN_IDS;
 

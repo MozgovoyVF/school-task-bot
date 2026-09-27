@@ -74,8 +74,12 @@ function privateChat(from: TgUserLike): Chat.PrivateChat {
 }
 
 type NonChannelChat = Chat.PrivateChat | Chat.GroupChat | Chat.SupergroupChat;
-/** Fields callers may override via `extra`; identity fields (`chat`/`from`/`message_id`/`date`) stay controlled. */
-type MessageExtra = Partial<Omit<Message, 'chat' | 'from' | 'message_id' | 'date'>>;
+/**
+ * Fields callers may override via `extra`; `chat`/`from`/`date` stay controlled by the builder's own
+ * params. `message_id` is deliberately left overridable (unlike those three) — Task 1.8's edited-message
+ * tests need an edit to reuse the exact `message_id` of a message sent earlier in the same test.
+ */
+type MessageExtra = Partial<Omit<Message, 'chat' | 'from' | 'date'>>;
 
 function groupChat(chat: TgChatLike): Chat.GroupChat | Chat.SupergroupChat {
   return chat.type === 'supergroup'

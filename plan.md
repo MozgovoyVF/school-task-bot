@@ -1327,7 +1327,7 @@ describe('stage 0 heuristics (SPEC §7.3)', () => {
   - `saveIncomingMessage(db, { chat: ChatRow; incoming: IncomingMessage; authorUserId: number; status: 'pending' | 'skipped' }): Promise<MessageRow | null>` — `ON CONFLICT (chat_id, tg_message_id) DO NOTHING`;
   - `applyEdit(db, { chatId, tgMessageId, text, editedAt }): Promise<'updated_pending' | 'updated_analyzed' | 'not_found'>`.
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
   1. Активный чат, текст «Маша, подготовь расписание» → строка `pending`, автор есть в `users` и в `memberships`. При `first_name='Мария Иванова'` получается `display_name='Мария'` (D28).
   2. «ок» → `skipped`.
   3. Сообщения ботов не сохраняются.
@@ -1340,10 +1340,10 @@ describe('stage 0 heuristics (SPEC §7.3)', () => {
   10. `edited_message` для `analyzed` → текст обновлён, `edited_at` проставлен, в лог пишется debug.
   11. Текст 5000 символов сохранён целиком.
   12. `/task` в группе этим обработчиком не сохраняется: он уходит обработчику задачи 3.10, до фазы 3 — в заглушку, которая только пишет в лог. Прочие команды игнорируются.
-- [ ] **Шаг 2:** FAIL.
-- [ ] **Шаг 3: реализация** по SPEC §7.2.
-- [ ] **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(intake): store group messages and handle edits`.
+- [x] **Шаг 2:** FAIL.
+- [x] **Шаг 3: реализация** по SPEC §7.2.
+- [x] **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(intake): store group messages and handle edits`.
 
 ### Task 1.9: `/chats` — управление чатами
 
