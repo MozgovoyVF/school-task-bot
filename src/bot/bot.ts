@@ -17,14 +17,14 @@ import { registerDmHandlers } from './handlers/dm.js';
 import { registerAdminHandlers } from './handlers/admin.js';
 
 /**
- * The subset of the eventual `AppDeps` (Task 0.8, `src/deps.ts` — not built
- * yet, this task runs before 0.8) that bot construction and this task's
- * handlers/middleware actually need. This is a plain data parameter (not a
+ * The subset of `AppDeps` (`src/deps.ts`) that bot construction and its
+ * handlers/middleware actually need. It is a plain data parameter (not a
  * function-typed parameter being assigned elsewhere, unlike Task 0.6's
- * `TickerDeps`/`dailyJob` case — see plan.md decision D30), so when Task 0.8
- * calls `createBot(deps)` with the real, wider `AppDeps`-typed object,
- * ordinary structural assignability satisfies `BotDeps` with no special
- * handling needed. No decisions-table entry required for this one.
+ * `TickerDeps`/`dailyJob` case — see plan.md decision D30), so `src/app.ts`
+ * calls `createBot(deps)` with the full, wider `AppDeps` object and ordinary
+ * structural assignability satisfies `BotDeps`. It is kept narrower than
+ * `AppDeps` on purpose so `tests/helpers/botHarness.ts` only has to build
+ * these six fields (plan.md decision D34).
  */
 export interface BotDeps {
   config: Env;
