@@ -10,6 +10,7 @@ import type { Clock } from '../time/clock.js';
 import type { Logger } from '../ops/logger.js';
 import type { ErrorReporter } from '../ops/errorReporter.js';
 import type { Messenger } from '../domain/messenger.js';
+import type { WorkspaceRow } from '../domain/workspaces/repo.js';
 import type { BotContext } from './context.js';
 import { createErrorsMiddleware } from './middleware/errors.js';
 import { createContextMiddleware } from './middleware/context.js';
@@ -24,7 +25,10 @@ import { registerAdminHandlers } from './handlers/admin.js';
  * calls `createBot(deps)` with the full, wider `AppDeps` object and ordinary
  * structural assignability satisfies `BotDeps`. It is kept narrower than
  * `AppDeps` on purpose so `tests/helpers/botHarness.ts` only has to build
- * these six fields (plan.md decision D34).
+ * these fields (plan.md decision D34). `workspace` was added in Task 1.2 —
+ * `createContextMiddleware` (`src/bot/middleware/context.ts`) needs it to
+ * resolve a DM actor's membership (MVP has a single default workspace,
+ * SPEC §5.2).
  */
 export interface BotDeps {
   config: Env;
@@ -33,6 +37,7 @@ export interface BotDeps {
   logger: Logger;
   errors: ErrorReporter;
   messenger: Messenger;
+  workspace: WorkspaceRow;
 }
 
 /**

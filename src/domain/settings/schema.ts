@@ -161,7 +161,10 @@ export function parseSettings(raw: unknown, logger?: Logger): Settings {
     if (parsed.success) {
       result[key] = parsed.data;
     } else {
-      logger?.warn({ branch: key, issues: parsed.error.issues }, 'invalid workspace settings branch, using defaults');
+      logger?.warn(
+        { branch: key, issues: parsed.error.issues },
+        'invalid workspace settings branch, using defaults',
+      );
       // `undefined` always short-circuits to the field's own `.default(...)`.
       result[key] = fieldSchema.parse(undefined);
     }

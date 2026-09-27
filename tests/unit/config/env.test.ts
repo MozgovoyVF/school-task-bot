@@ -43,6 +43,7 @@ describe('loadEnv', () => {
 
   it('rejects invalid values', () => {
     expect(() => loadEnv({ ...base, SUPERADMIN_TG_IDS: 'abc' })).toThrow(/SUPERADMIN_TG_IDS/);
+    expect(() => loadEnv({ ...base, SUPERADMIN_TG_IDS: ' , ,' })).toThrow(/SUPERADMIN_TG_IDS/);
     expect(() => loadEnv({ ...base, DEFAULT_TIMEZONE: 'Mars/Base' })).toThrow(/DEFAULT_TIMEZONE/);
     expect(() => loadEnv({ ...base, APP_ENV: 'staging' })).toThrow(/APP_ENV/);
     expect(() => loadEnv({ ...base, AI_PREFILTER_THRESHOLD: '1.5' })).toThrow(/AI_PREFILTER_THRESHOLD/);

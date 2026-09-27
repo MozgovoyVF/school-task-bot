@@ -8,6 +8,8 @@ import type { FastifyInstance } from 'fastify';
 import type { Env } from './config/env.js';
 import { createDb } from './db/client.js';
 import { runMigrations } from './db/migrate.js';
+import { ensureDefaultWorkspace } from './domain/workspaces/repo.js';
+import { bootstrapOwner } from './domain/people/repo.js';
 import { createBot } from './bot/bot.js';
 import { createGrammyMessenger } from './bot/messenger.js';
 import type { Messenger } from './domain/messenger.js';
@@ -60,6 +62,17 @@ export async function startApp(env: Env, overrides?: StartAppOverrides): Promise
     await runMigrations(db);
   }
 
+  // MVP has a single default workspace (SPEC §5.2); the bot's context
+  // middleware needs it to resolve a DM actor's membership. `bootstrapOwner`
+  // (Task 1.2) creates the Owner's membership from `BOOTSTRAP_OWNER_TG_ID`
+  // when the workspace doesn't have one yet — a no-op ('skipped'/'exists')
+  // on every run after the first.
+  const workspace = await ensureDefaultWorkspace(db, {
+    name: env.DEFAULT_WORKSPACE_NAME,
+    timezone: env.DEFAULT_TIMEZONE,
+  });
+  await bootstrapOwner(db, { workspaceId: workspace.id, tgUserId: env.BOOTSTRAP_OWNER_TG_ID });
+
   // `createBot` (src/bot/bot.ts) needs a fully-built `Messenger`/`ErrorReporter`
   // *before* it constructs its own `Bot` — its middleware closes over `deps`
   // synchronously — so there is no `bot.api` yet to hand to
@@ -95,7 +108,17 @@ export async function startApp(env: Env, overrides?: StartAppOverrides): Promise
     logger.warn('AI analysis disabled: OPENROUTER_API_KEY or LLM_MODEL_PRIMARY is not set');
   }
 
-  const deps: AppDeps = { config: env, db, clock, logger, errors, messenger, ai: null, taskHooks: [] };
+  const deps: AppDeps = {
+    config: env,
+    db,
+    clock,
+    logger,
+    errors,
+    messenger,
+    workspace,
+    ai: null,
+    taskHooks: [],
+  };
 
   const bot = createBot(deps, { botInfo: overrides?.botInfo });
 

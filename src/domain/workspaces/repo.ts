@@ -20,7 +20,10 @@ export async function ensureDefaultWorkspace(
   const [existing] = await db.select().from(workspaces).limit(1);
   if (existing) return existing;
 
-  const [created] = await db.insert(workspaces).values({ name: input.name, timezone: input.timezone }).returning();
+  const [created] = await db
+    .insert(workspaces)
+    .values({ name: input.name, timezone: input.timezone })
+    .returning();
   if (!created) throw new Error('failed to create default workspace');
   return created;
 }

@@ -1040,7 +1040,7 @@ describe('settings', () => {
   - `type Action = 'proposal.receive' | 'proposal.decide' | 'task.createDm' | 'task.viewAll' | 'task.viewOwn' | 'task.startOwn' | 'task.doneOwn' | 'task.edit' | 'reminders.receive' | 'chat.approve' | 'admin.tech' | 'transfer.generate'`;
   - `can(actor: Actor, action: Action, target?: { assigneeUserId?: number | null }): boolean`.
 
-- [ ] **Шаг 1: падающие тесты** (матрица SPEC §3)
+- [x] **Шаг 1: падающие тесты** (матрица SPEC §3)
 
 ```ts
 import { describe, it, expect } from 'vitest';
@@ -1090,10 +1090,10 @@ describe('permission matrix (SPEC §3)', () => {
 - `bootstrapOwner`: если owner нет → `'created'`; если есть → `'exists'`; если `BOOTSTRAP_OWNER_TG_ID` не задан → `'skipped'`;
 - middleware `context` для апдейта из группы находит workspace по чату, для DM — по членству (в MVP это `default`).
 
-- [ ] **Шаг 2:** FAIL.
-- [ ] **Шаг 3: реализация.** `can` — чистая функция по таблице выше. В `context.ts` строится `ctx.state.actor`: пользователь, его membership в workspace чата или DM, `isSuperadmin`. `bootstrapOwner` вызывается из `startApp` после `ensureDefaultWorkspace`.
-- [ ] **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(people): add users, memberships, bootstrap owner and permission matrix`.
+- [x] **Шаг 2:** FAIL.
+- [x] **Шаг 3: реализация.** `can` — чистая функция по таблице выше. В `context.ts` строится `ctx.state.actor`: пользователь, его membership в workspace чата или DM, `isSuperadmin`. `bootstrapOwner` вызывается из `startApp` после `ensureDefaultWorkspace`.
+- [x] **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(people): add users, memberships, bootstrap owner and permission matrix`.
 
 ### Task 1.3: Кодек callback-данных и клавиатуры
 

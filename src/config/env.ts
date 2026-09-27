@@ -42,6 +42,10 @@ function tgIdList() {
         return id;
       });
     if (ids.some((id) => id === null)) return z.NEVER;
+    if (ids.length === 0) {
+      ctx.addIssue({ code: 'custom', message: 'must list at least one Telegram ID' });
+      return z.NEVER;
+    }
     return ids as number[];
   });
 }

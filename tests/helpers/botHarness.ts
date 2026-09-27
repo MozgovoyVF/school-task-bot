@@ -5,6 +5,8 @@ import type { BotContext } from '../../src/bot/context.js';
 import { createErrorReporter } from '../../src/ops/errorReporter.js';
 import { createLogger } from '../../src/ops/logger.js';
 import { loadEnv } from '../../src/config/env.js';
+import { ensureDefaultWorkspace } from '../../src/domain/workspaces/repo.js';
+import { DEFAULT_WORKSPACE_NAME } from '../../src/config/constants.js';
 import { getTestDb, truncateAll } from './db.js';
 import { fixedClock } from './clock.js';
 import { FakeMessenger } from './fakeMessenger.js';
@@ -102,7 +104,11 @@ export async function createBotHarness(opts?: {
   });
 
   const errors = createErrorReporter({ db, messenger, clock, logger, superadminIds });
-  const deps: BotDeps = { config, db, clock, logger, errors, messenger };
+  const workspace = await ensureDefaultWorkspace(db, {
+    name: DEFAULT_WORKSPACE_NAME,
+    timezone: 'Europe/Moscow',
+  });
+  const deps: BotDeps = { config, db, clock, logger, errors, messenger, workspace };
   const bot = createBot(deps, { botInfo: defaultBotInfo() });
 
   const calls: RecordedCall[] = [];
