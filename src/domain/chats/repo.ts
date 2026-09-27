@@ -1,4 +1,4 @@
-import { and, eq, isNotNull, isNull, lte, ne, type SQL } from 'drizzle-orm';
+import { and, eq, isNotNull, isNull, lte, ne, sql, type SQL } from 'drizzle-orm';
 import type { Db, DbOrTx } from '../../db/client.js';
 import { chats, messages } from '../../db/schema/index.js';
 
@@ -194,6 +194,58 @@ export async function claimNoticeSlot(db: DbOrTx, chatId: number, now: Date): Pr
 /** Resets a claimed notice slot after a failed send, so a later `publishNoticeOnce` call can retry. */
 export async function clearNoticeSlot(db: DbOrTx, chatId: number): Promise<void> {
   await db.update(chats).set({ noticeSentAt: null }).where(eq(chats.id, chatId));
+}
+
+/** All chats attached to `workspaceId`, for `/chats`' list view (Task 1.9) — ordered by title, then `id` for a stable tie-break (untitled chats, or same-named ones). */
+export async function listChatsForWorkspace(db: DbOrTx, workspaceId: number): Promise<ChatRow[]> {
+  return db.select().from(chats).where(eq(chats.workspaceId, workspaceId)).orderBy(chats.title, chats.id);
+}
+
+/**
+ * Flips `analysis_enabled` in place (`/chats`' analysis toggle button, Task
+ * 1.9, `texts.chats.analysisButton`): a single atomic `UPDATE ... SET
+ * analysis_enabled = NOT analysis_enabled` rather than a read-then-write,
+ * so two racing toggles can't clobber each other. Guarded by `status !=
+ * 'left'` — toggling a preference on a chat the bot is no longer in is
+ * meaningless. Returns `null` if the chat doesn't exist or is `left`.
+ */
+export async function toggleChatAnalysis(db: DbOrTx, chatId: number, now: Date): Promise<ChatRow | null> {
+  const [row] = await db
+    .update(chats)
+    .set({ analysisEnabled: sql`not ${chats.analysisEnabled}`, updatedAt: now })
+    .where(and(eq(chats.id, chatId), ne(chats.status, 'left')))
+    .returning();
+  return row ?? null;
+}
+
+/** Flips `reactions_enabled` in place (`/chats`' reactions toggle button, Task 1.9, `texts.chats.reactionsButton`) — same shape as {@link toggleChatAnalysis}. */
+export async function toggleChatReactions(db: DbOrTx, chatId: number, now: Date): Promise<ChatRow | null> {
+  const [row] = await db
+    .update(chats)
+    .set({ reactionsEnabled: sql`not ${chats.reactionsEnabled}`, updatedAt: now })
+    .where(and(eq(chats.id, chatId), ne(chats.status, 'left')))
+    .returning();
+  return row ?? null;
+}
+
+/** `/chats`' pause button (SPEC §15.4, Task 1.9, `texts.chats.pauseButton`): `active` → `paused` only (compare-and-swap, same shape as `setChatActive`). */
+export async function pauseChatRow(db: DbOrTx, chatId: number, now: Date): Promise<ChatRow | null> {
+  const [row] = await db
+    .update(chats)
+    .set({ status: 'paused', updatedAt: now })
+    .where(and(eq(chats.id, chatId), eq(chats.status, 'active')))
+    .returning();
+  return row ?? null;
+}
+
+/** `/chats`' resume button (Task 1.9, `texts.chats.resumeButton`): `paused` → `active` only — the inverse of {@link pauseChatRow}. */
+export async function resumeChatRow(db: DbOrTx, chatId: number, now: Date): Promise<ChatRow | null> {
+  const [row] = await db
+    .update(chats)
+    .set({ status: 'active', updatedAt: now })
+    .where(and(eq(chats.id, chatId), eq(chats.status, 'paused')))
+    .returning();
+  return row ?? null;
 }
 
 /** `migrate_to_chat_id` (group → supergroup upgrade, CLAUDE.md §12): same row, new `tg_chat_id`/`type`. */

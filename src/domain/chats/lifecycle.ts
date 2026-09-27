@@ -29,8 +29,12 @@ import {
   getChatByTgId,
   listPendingChatsAwaitingOwner,
   markChatLeft,
+  pauseChatRow,
+  resumeChatRow,
   setChatActive,
   setPendingSinceIfMissing,
+  toggleChatAnalysis,
+  toggleChatReactions,
   updateChatOnMigrate,
   upsertChatOnAdd,
   type ChatRow,
@@ -244,6 +248,118 @@ export async function onBotRemoved(
 /** `migrate_to_chat_id` (group → supergroup upgrade, CLAUDE.md §12): same row, new `tg_chat_id`/`type`. */
 export async function migrateChat(db: Db, oldTgChatId: number, newTgChatId: number): Promise<ChatRow | null> {
   return updateChatOnMigrate(db, oldTgChatId, newTgChatId);
+}
+
+export type SetAnalysisResult =
+  { ok: true; chat: ChatRow } | { ok: false; reason: 'forbidden' | 'not_found' };
+
+/**
+ * `/chats`' analysis toggle button (SPEC §15.4, Task 1.9,
+ * `texts.chats.analysisButton`): flips `analysis_enabled` in place —
+ * permission-checked (`chat.approve`, the same gate `approveChat`/
+ * `rejectChat`/the rest of `/chats`' actions use, since SPEC §3's
+ * permission table has no separate row for chat *management* and a
+ * superadmin already decides whether the bot may run in a chat at all).
+ * `reason: 'not_found'` covers both "no such chat" and "chat is `left`"
+ * (`toggleChatAnalysis`'s guard) — a forged callback against either case is
+ * a no-op, not an error.
+ */
+export async function setAnalysis(
+  deps: Pick<ChatLifecycleDeps, 'db' | 'clock'>,
+  chatId: number,
+  actor: Actor,
+): Promise<SetAnalysisResult> {
+  if (!can(actor, 'chat.approve')) return { ok: false, reason: 'forbidden' };
+
+  const chat = await toggleChatAnalysis(deps.db, chatId, deps.clock.now());
+  if (!chat) return { ok: false, reason: 'not_found' };
+  return { ok: true, chat };
+}
+
+export type SetReactionsResult =
+  { ok: true; chat: ChatRow } | { ok: false; reason: 'forbidden' | 'not_found' };
+
+/** `/chats`' reactions toggle button (Task 1.9, `texts.chats.reactionsButton`) — same shape as {@link setAnalysis}, flips `reactions_enabled`. */
+export async function setReactions(
+  deps: Pick<ChatLifecycleDeps, 'db' | 'clock'>,
+  chatId: number,
+  actor: Actor,
+): Promise<SetReactionsResult> {
+  if (!can(actor, 'chat.approve')) return { ok: false, reason: 'forbidden' };
+
+  const chat = await toggleChatReactions(deps.db, chatId, deps.clock.now());
+  if (!chat) return { ok: false, reason: 'not_found' };
+  return { ok: true, chat };
+}
+
+export type PauseChatResult = { ok: true; chat: ChatRow } | { ok: false; reason: 'forbidden' | 'not_active' };
+
+/**
+ * `/chats`' pause button (SPEC §15.4, `texts.chats.pauseButton`): `active`
+ * → `paused` (messages stop being saved — SPEC §15's `paused` semantics
+ * live in the intake path, not here). Idempotent: a double-tap, or a
+ * forged callback against a chat that is already `paused`/`pending`/`left`,
+ * hits `pauseChatRow`'s `WHERE status='active'` and returns `not_active`
+ * without touching anything, same as `approveChat`'s `not_pending`.
+ */
+export async function pauseChat(
+  deps: Pick<ChatLifecycleDeps, 'db' | 'clock'>,
+  chatId: number,
+  actor: Actor,
+): Promise<PauseChatResult> {
+  if (!can(actor, 'chat.approve')) return { ok: false, reason: 'forbidden' };
+
+  const chat = await pauseChatRow(deps.db, chatId, deps.clock.now());
+  if (!chat) return { ok: false, reason: 'not_active' };
+  return { ok: true, chat };
+}
+
+export type ResumeChatResult =
+  { ok: true; chat: ChatRow } | { ok: false; reason: 'forbidden' | 'not_paused' };
+
+/** `/chats`' resume button (Task 1.9, `texts.chats.resumeButton`): `paused` → `active` — the inverse of {@link pauseChat}. */
+export async function resumeChat(
+  deps: Pick<ChatLifecycleDeps, 'db' | 'clock'>,
+  chatId: number,
+  actor: Actor,
+): Promise<ResumeChatResult> {
+  if (!can(actor, 'chat.approve')) return { ok: false, reason: 'forbidden' };
+
+  const chat = await resumeChatRow(deps.db, chatId, deps.clock.now());
+  if (!chat) return { ok: false, reason: 'not_paused' };
+  return { ok: true, chat };
+}
+
+export type LeaveChatResult = { ok: true; chat: ChatRow } | { ok: false; reason: 'forbidden' | 'not_found' };
+
+/**
+ * `/chats`' leave button (SPEC §15.4, Task 1.9, `texts.chats.manageLeaveButton`),
+ * taken after the confirmation prompt (`bot/views/chats.ts`'s
+ * `renderLeaveConfirm`) — unlike
+ * `rejectChat` (only ever acts on a still-`pending` chat, from that chat's
+ * own approval card), this is the Owner deciding to leave a chat the bot is
+ * *already active in* (or `paused`). Shares its "tell Telegram to leave,
+ * mark the row `left`" side effect with `rejectChat` via `leaveChatInternal`
+ * (`repo.ts`'s `leaveChatRow`, Task 1.6's preflight note) rather than
+ * duplicating it. The `status === 'left'` precheck here — on top of
+ * `leaveChatInternal`'s own `markChatLeft` guard — stops a double-tap (or a
+ * forged callback replayed after the chat already left) from calling
+ * `messenger.leaveChat` a second time on a chat Telegram already removed
+ * the bot from.
+ */
+export async function leaveChat(
+  deps: Pick<ChatLifecycleDeps, 'db' | 'messenger' | 'clock'>,
+  chatId: number,
+  actor: Actor,
+): Promise<LeaveChatResult> {
+  if (!can(actor, 'chat.approve')) return { ok: false, reason: 'forbidden' };
+
+  const chat = await getChatById(deps.db, chatId);
+  if (!chat || chat.status === 'left') return { ok: false, reason: 'not_found' };
+
+  const updated = await leaveChatInternal(deps, chatId);
+  if (!updated) return { ok: false, reason: 'not_found' };
+  return { ok: true, chat: updated };
 }
 
 /**

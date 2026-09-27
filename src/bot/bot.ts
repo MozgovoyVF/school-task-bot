@@ -19,6 +19,7 @@ import { registerDmHandlers } from './handlers/dm.js';
 import { registerAdminHandlers } from './handlers/admin.js';
 import { registerTransferHandlers } from './handlers/transfer.js';
 import { registerChatMemberHandlers } from './handlers/chatMember.js';
+import { registerChatsHandlers } from './handlers/chats.js';
 import { registerGroupHandlers } from './handlers/group.js';
 import { registerTimezoneConversation } from './conversations/timezone.js';
 
@@ -93,6 +94,7 @@ export function createBot(
   registerAdminHandlers(bot, deps, startedAt);
   registerTransferHandlers(bot, deps);
   registerChatMemberHandlers(bot, deps);
+  registerChatsHandlers(bot, deps);
   registerGroupHandlers(bot, deps);
 
   bot.catch((err) => {

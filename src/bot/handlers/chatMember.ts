@@ -53,13 +53,18 @@ function isActiveMemberStatus(status: string): boolean {
  *   SPEC's lifecycle only cares about "in" vs. "not in".
  * - `message:migrate_to_chat_id`: a group → supergroup upgrade
  *   (CLAUDE.md §12) — updates the same `chats` row's `tg_chat_id`/`type`.
- * - `v1:c:*` callbacks: the approve/leave buttons (`texts.chats.approveButton`/
- *   `.leaveButton`) on the approval card (`bot/views/chatApproval.ts`).
- *   DM-only, same as `/transfer`'s
+ * - `v1:c:*` callbacks whose action is `apr`/`rej`: the approve/leave buttons
+ *   (`texts.chats.approveButton`/`.leaveButton`) on the approval card
+ *   (`bot/views/chatApproval.ts`). DM-only, same as `/transfer`'s
  *   `v1:o:*` (`src/bot/handlers/transfer.ts`) — the card is only ever sent
  *   via DM, so a group-posted callback with this data is always a forgery.
  *   Permission (`chat.approve`) is re-checked inside `approveChat`/`rejectChat`
  *   themselves (CLAUDE.md §8: callback_data is never trusted on its own).
+ *   Every other `v1:c:*` action (`/chats`' management card, Task 1.9's
+ *   `bot/handlers/chats.ts`) falls through via `next()` instead of being
+ *   silently swallowed here — this handler and Task 1.9's share the same
+ *   `c` entity/regex, and grammY only runs the next matching `bot.callbackQuery`
+ *   registration if this one calls `next()`.
  */
 export function registerChatMemberHandlers(bot: Bot<BotContext>, deps: ChatMemberHandlersDeps): void {
   const lifecycleDeps = toLifecycleDeps(deps);
@@ -89,7 +94,7 @@ export function registerChatMemberHandlers(bot: Bot<BotContext>, deps: ChatMembe
     await migrateChat(deps.db, ctx.chat.id, ctx.message.migrate_to_chat_id);
   });
 
-  bot.callbackQuery(/^v1:c:/, async (ctx) => {
+  bot.callbackQuery(/^v1:c:/, async (ctx, next) => {
     if (ctx.chat?.type !== 'private') {
       await ctx.answerCallbackQuery();
       return;
@@ -97,7 +102,7 @@ export function registerChatMemberHandlers(bot: Bot<BotContext>, deps: ChatMembe
 
     const decoded = decodeCallback(ctx.callbackQuery.data);
     if (!decoded || (decoded.action !== 'apr' && decoded.action !== 'rej')) {
-      await ctx.answerCallbackQuery();
+      await next();
       return;
     }
 

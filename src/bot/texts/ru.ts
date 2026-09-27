@@ -274,6 +274,47 @@ export const texts = {
     unknownAdder: 'неизвестно',
     approveButton: '✅ Разрешить',
     leaveButton: '🚪 Покинуть чат',
+    /** `/chats`' list header (Task 1.9). */
+    listHeader: '💬 Чаты',
+    /** Shown instead of a list when the bot is in no chats at all. */
+    listEmpty: 'Бот пока не состоит ни в одном чате.',
+    statusActive: '🟢 активен',
+    statusPaused: '⏸ пауза',
+    statusPending: '⏳ ждёт разрешения',
+    statusLeft: '🚪 покинут',
+    /** One line of `/chats`' list, e.g. "🟢 активен — Учителя французского". */
+    listLine(title: string, statusLabel: string): string {
+      return `${statusLabel} — ${escapeHtml(title)}`;
+    },
+    /** `/chats`' per-chat card heading. */
+    cardTitle(title: string): string {
+      return `💬 ${escapeHtml(title)}`;
+    },
+    cardStatusLine(statusLabel: string): string {
+      return `Статус: ${statusLabel}`;
+    },
+    /** Shown on a `pending` chat's card instead of manage buttons — it is decided from the approval card, not here. */
+    pendingCardHint:
+      'Решение ещё не принято — используйте карточку с кнопками «Разрешить»/«Покинуть чат», присланную ранее.',
+    /** Shown on a `left` chat's card — nothing left to manage. */
+    leftCardHint: 'Бота больше нет в этом чате.',
+    analysisButton(enabled: boolean): string {
+      return `Анализ: ${enabled ? 'вкл' : 'выкл'}`;
+    },
+    reactionsButton(enabled: boolean): string {
+      return `Реакции: ${enabled ? 'вкл' : 'выкл'}`;
+    },
+    pauseButton: '⏸ Пауза',
+    resumeButton: '▶️ Возобновить',
+    /** `/chats`' per-chat card leave button — deliberately distinct wording from `leaveButton` above (the pending-approval card's reject button). */
+    manageLeaveButton: '🚪 Покинуть',
+    backButton: '◀️ Назад',
+    /** `«Точно покинуть „…“?»` — the confirmation prompt before `leaveChat` actually runs. */
+    leaveConfirmPrompt(title: string): string {
+      return `Точно покинуть „${escapeHtml(title)}“?`;
+    },
+    leaveConfirmYes: '✅ Да, покинуть',
+    leaveConfirmNo: '❌ Отмена',
   },
   privacy: {
     /**

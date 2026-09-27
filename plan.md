@@ -1351,17 +1351,17 @@ describe('stage 0 heuristics (SPEC §7.3)', () => {
 
 **Интерфейсы:** Produces `renderChatList(chats: ChatRow[]): { text: string; buttons: Buttons }`, `renderChatCard(chat: ChatRow): { text: string; buttons: Buttons }`; domain-функции `setAnalysis`, `setReactions`, `pauseChat`, `resumeChat`, `leaveChat` в `src/domain/chats/lifecycle.ts`.
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
   - Views (inline snapshot): список со статусами (`🟢 активен`, `⏸ пауза`, `⏳ ждёт разрешения`, `🚪 покинут`). Карточка с кнопками `[Анализ: вкл] [Реакции: вкл] [⏸ Пауза] [🚪 Покинуть] [◀️ Назад]`, каждый `callback_data` не длиннее 64 байт.
   - Integration:
     - owner переключает анализ → БД обновлена, карточка отредактирована;
     - member → `forbidden`;
     - «Покинуть» требует подтверждения («Точно покинуть „…“?»), после него `leaveChat`, `left`, pending-сообщения удалены;
     - «Пауза» → `paused`, «Возобновить» → `active`.
-- [ ] **Шаг 2:** FAIL.
-- [ ] **Шаг 3: реализация.**
-- [ ] **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(chats): add /chats management`.
+- [x] **Шаг 2:** FAIL.
+- [x] **Шаг 3: реализация.**
+- [x] **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(chats): add /chats management`.
 
 ### Task 1.10: `/people` — участники, имена, алиасы
 
