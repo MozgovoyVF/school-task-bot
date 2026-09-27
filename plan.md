@@ -968,7 +968,7 @@ JSON
   - `mergeSettings(current: Settings, patch: DeepPartial<Settings>): Settings` — бросает `ZodError`, если результат невалиден;
   - `ensureDefaultWorkspace(db, { name, timezone }): Promise<WorkspaceRow>`, `getWorkspace(db, id)`, `getSettings(db, workspaceId): Promise<Settings>`, `updateSettings(db, workspaceId, patch): Promise<Settings>`, `listWorkspaces(db)`.
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
 
 ```ts
 import { describe, it, expect } from 'vitest';
@@ -1016,14 +1016,14 @@ describe('settings', () => {
 
 Интеграционные тесты: `ensureDefaultWorkspace`, вызванный дважды, создаёт одну строку · `updateSettings` сохраняет значение, `getSettings` возвращает объединённый результат.
 
-- [ ] **Шаг 2:** FAIL.
-- [ ] **Шаг 3: реализация.**
+- [x] **Шаг 2:** FAIL.
+- [x] **Шаг 3: реализация.**
   - Формат `HH:mm` проверяется регуляркой `/^([01]\d|2[0-3]):[0-5]\d$/`, дата — `/^\d{4}-\d{2}-\d{2}$/` плюс `DateTime.fromISO().isValid`.
   - `weekdays` — ISO 1..7 (D10).
   - `reactions.onDetect` и `onAccept` — `string | null`.
   - `parseSettings` при ошибке разбирает каждую ветку отдельно и откатывает к defaults только невалидную.
-- [ ] **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(settings): add workspace settings schema with defaults`.
+- [x] **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(settings): add workspace settings schema with defaults`.
 
 ### Task 1.2: Люди, контекст запроса, матрица прав
 
