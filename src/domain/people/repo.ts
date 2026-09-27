@@ -43,8 +43,15 @@ export async function upsertTelegramUser(db: DbOrTx, tg: TelegramUserInput): Pro
   return row;
 }
 
-async function getUserByTgId(db: DbOrTx, tgUserId: number): Promise<UserRow | null> {
+/** Looks up a `users` row by Telegram id. `undefined`/no row → `null`. */
+export async function getUserByTgId(db: DbOrTx, tgUserId: number): Promise<UserRow | null> {
   const [row] = await db.select().from(users).where(eq(users.tgUserId, tgUserId)).limit(1);
+  return row ?? null;
+}
+
+/** Looks up a `users` row by internal id. */
+export async function getUserById(db: DbOrTx, id: number): Promise<UserRow | null> {
+  const [row] = await db.select().from(users).where(eq(users.id, id)).limit(1);
   return row ?? null;
 }
 

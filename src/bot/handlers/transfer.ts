@@ -2,6 +2,7 @@ import type { Bot } from 'grammy';
 import type { Db } from '../../db/client.js';
 import type { Clock } from '../../time/clock.js';
 import type { Logger } from '../../ops/logger.js';
+import type { Messenger } from '../../domain/messenger.js';
 import { can } from '../../domain/people/permissions.js';
 import {
   createClaimCode,
@@ -20,6 +21,7 @@ export interface TransferHandlersDeps {
   db: Db;
   clock: Clock;
   logger: Logger;
+  messenger: Messenger;
 }
 
 /**
@@ -127,6 +129,9 @@ export function registerTransferHandlers(bot: Bot<BotContext>, deps: TransferHan
     }
 
     await ctx.reply(texts.claim.success, { parse_mode: 'HTML' });
-    await afterOwnerChanged({ db: deps.db, logger: deps.logger }, result.workspaceId);
+    await afterOwnerChanged(
+      { db: deps.db, logger: deps.logger, messenger: deps.messenger, clock: deps.clock },
+      result.workspaceId,
+    );
   });
 }

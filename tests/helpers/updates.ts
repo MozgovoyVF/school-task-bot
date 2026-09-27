@@ -1,6 +1,7 @@
 import type {
   CallbackQuery,
   Chat,
+  ChatMember,
   ChatMemberUpdated,
   Message,
   MessageEntity,
@@ -160,18 +161,58 @@ export function callback(from: TgUserLike, data: string, message?: Message): Upd
   return { update_id: updateId(), callback_query: query };
 }
 
+export type ChatMemberStatus = 'left' | 'kicked' | 'member' | 'administrator';
+
+/**
+ * Builds a minimal-but-valid {@link ChatMember} for `status`. `'administrator'`
+ * and `'kicked'` (`ChatMemberAdministrator`/`ChatMemberBanned`) each require
+ * several fields with no meaningful default for a test fixture — every
+ * boolean privilege is filled with `false` (`until_date: 0` for `'kicked'`,
+ * i.e. banned forever), since the lifecycle handlers under test only ever
+ * look at `status`, never at these.
+ */
+function toChatMember(status: ChatMemberStatus, user: TgUserLike): ChatMember {
+  const u = toUser(user);
+  switch (status) {
+    case 'left':
+      return { status: 'left', user: u };
+    case 'kicked':
+      return { status: 'kicked', user: u, until_date: 0 };
+    case 'member':
+      return { status: 'member', user: u };
+    case 'administrator':
+      return {
+        status: 'administrator',
+        user: u,
+        can_be_edited: false,
+        is_anonymous: false,
+        can_manage_chat: true,
+        can_delete_messages: false,
+        can_manage_video_chats: false,
+        can_restrict_members: false,
+        can_promote_members: false,
+        can_change_info: false,
+        can_invite_users: false,
+        can_post_stories: false,
+        can_edit_stories: false,
+        can_delete_stories: false,
+        can_send_welcome_messages: false,
+      };
+  }
+}
+
 function chatMemberUpdate(
   chat: TgChatLike,
   by: TgUserLike,
-  oldStatus: 'left' | 'member',
-  newStatus: 'left' | 'member',
+  oldStatus: ChatMemberStatus,
+  newStatus: ChatMemberStatus,
 ): ChatMemberUpdated {
   return {
     chat: groupChat(chat),
     from: toUser(by),
     date: FIXED_UNIX_DATE + 200,
-    old_chat_member: { status: oldStatus, user: toUser(DEFAULT_BOT_USER) },
-    new_chat_member: { status: newStatus, user: toUser(DEFAULT_BOT_USER) },
+    old_chat_member: toChatMember(oldStatus, DEFAULT_BOT_USER),
+    new_chat_member: toChatMember(newStatus, DEFAULT_BOT_USER),
   };
 }
 
@@ -180,7 +221,35 @@ export function botAdded(chat: TgChatLike, by: TgUserLike): Update {
   return { update_id: updateId(), my_chat_member: chatMemberUpdate(chat, by, 'left', 'member') };
 }
 
-/** The bot (`DEFAULT_BOT_USER`) was removed from `chat` by `by`. */
+/** The bot (`DEFAULT_BOT_USER`) left/was removed from `chat` by `by` (a normal `left` transition). */
 export function botRemoved(chat: TgChatLike, by: TgUserLike): Update {
   return { update_id: updateId(), my_chat_member: chatMemberUpdate(chat, by, 'member', 'left') };
+}
+
+/** The bot (`DEFAULT_BOT_USER`) was kicked/banned from `chat` by `by`. */
+export function botKicked(chat: TgChatLike, by: TgUserLike): Update {
+  return { update_id: updateId(), my_chat_member: chatMemberUpdate(chat, by, 'member', 'kicked') };
+}
+
+/** The bot (`DEFAULT_BOT_USER`) was promoted to administrator in `chat` by `by` (still "in" the chat throughout). */
+export function botPromoted(chat: TgChatLike, by: TgUserLike): Update {
+  return { update_id: updateId(), my_chat_member: chatMemberUpdate(chat, by, 'member', 'administrator') };
+}
+
+/**
+ * A group → supergroup upgrade (CLAUDE.md §12): the service message Telegram
+ * sends in the *old* group chat, carrying `migrate_to_chat_id`. `oldChat.type`
+ * should be `'group'` (the upgrade only ever starts from a plain group).
+ */
+export function chatMigrated(oldChat: TgChatLike, newTgChatId: number, by: TgUserLike): Update {
+  return {
+    update_id: updateId(),
+    message: {
+      message_id: messageId(),
+      date: FIXED_UNIX_DATE + 300,
+      chat: groupChat(oldChat),
+      from: toUser(by),
+      migrate_to_chat_id: newTgChatId,
+    },
+  };
 }

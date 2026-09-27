@@ -259,6 +259,34 @@ export const texts = {
       ].join('\n');
     },
   },
+  chats: {
+    /**
+     * Approval card sent to the Owner and every superadmin (SPEC §15.1) when
+     * `my_chat_member` adds the bot to a chat that isn't auto-activated
+     * (`src/domain/chats/lifecycle.ts`'s `onBotAdded`/`requestPendingApprovals`).
+     */
+    addedNotice(title: string, addedByName: string): string {
+      return `Бота добавили в „${escapeHtml(title)}“ (добавил: ${escapeHtml(addedByName)}).`;
+    },
+    /** Fallback for `addedNotice`'s title, on the off chance a chat has none. */
+    untitledChat: 'без названия',
+    /** Fallback for `addedNotice`'s "добавил: …", when the adder has no known name. */
+    unknownAdder: 'неизвестно',
+    approveButton: '✅ Разрешить',
+    leaveButton: '🚪 Покинуть чат',
+  },
+  privacy: {
+    /**
+     * SPEC §15.2 — published once per chat by `publishNoticeOnce`
+     * (`src/domain/chats/lifecycle.ts`), unless overridden by
+     * `settings.privacyNoticeText`.
+     */
+    chatNotice:
+      '👋 Я — бот-секретарь школы. Я читаю сообщения этого чата, чтобы находить задачи и договорённости и ' +
+      'напоминать о них руководителю. Текст сообщений хранится не дольше 30 дней, затем удаляется; сохраняются ' +
+      'только подтверждённые задачи. Для анализа текст передаётся сервису обработки (ИИ) без фамилий, @имён и ' +
+      'контактов. Подробнее: /privacy. Вопросы — к руководителю.',
+  },
   claim: {
     /** Sent when `/claim` is invoked with no code argument. */
     usage: 'Введите код после команды, например: <code>/claim ABCD2345</code>.',

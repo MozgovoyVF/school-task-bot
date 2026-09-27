@@ -1,9 +1,8 @@
-import { eq } from 'drizzle-orm';
 import type { MiddlewareFn } from 'grammy';
 import type { Env } from '../../config/env.js';
 import type { Db } from '../../db/client.js';
 import type { Clock } from '../../time/clock.js';
-import { chats } from '../../db/schema/index.js';
+import { getChatByTgId } from '../../domain/chats/repo.js';
 import { getMembership, markDmStarted, upsertTelegramUser } from '../../domain/people/repo.js';
 import { getWorkspace, type WorkspaceRow } from '../../domain/workspaces/repo.js';
 import type { Actor, BotContext } from '../context.js';
@@ -55,7 +54,7 @@ export function createContextMiddleware(deps: ContextMiddlewareDeps): Middleware
     if (ctx.chat?.type === 'private') {
       workspace = deps.workspace;
     } else if (ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup') {
-      const [chatRow] = await deps.db.select().from(chats).where(eq(chats.tgChatId, ctx.chat.id)).limit(1);
+      const chatRow = await getChatByTgId(deps.db, ctx.chat.id);
       if (chatRow?.workspaceId != null) {
         workspace = await getWorkspace(deps.db, chatRow.workspaceId);
       }

@@ -18,6 +18,7 @@ import { createLogger } from './ops/logger.js';
 import { systemClock } from './time/clock.js';
 import type { Clock } from './time/clock.js';
 import { createTicker } from './scheduler/ticker.js';
+import { pendingChatsJob } from './scheduler/jobs/pendingChats.js';
 import { buildHttpServer } from './http/server.js';
 import type { AppDeps } from './deps.js';
 
@@ -122,12 +123,12 @@ export async function startApp(env: Env, overrides?: StartAppOverrides): Promise
 
   const bot = createBot(deps, { botInfo: overrides?.botInfo });
 
-  const ticker = createTicker(deps, []);
+  const ticker = createTicker(deps, [pendingChatsJob]);
   // One synchronous tick before we start serving traffic, so `/healthz`
   // doesn't 503 on a cold start waiting for the first interval tick.
   // `start()` then keeps the heartbeat refreshed going forward; the extra
-  // immediate tick it fires is harmless (the phase-0 job list is empty, and
-  // ticks are otherwise idempotent).
+  // immediate tick it fires is harmless (every job here — just
+  // `pendingChatsJob` as of Task 1.6 — is idempotent).
   await ticker.tickOnce();
   ticker.start();
 

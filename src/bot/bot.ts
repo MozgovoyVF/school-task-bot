@@ -18,6 +18,7 @@ import { createContextMiddleware } from './middleware/context.js';
 import { registerDmHandlers } from './handlers/dm.js';
 import { registerAdminHandlers } from './handlers/admin.js';
 import { registerTransferHandlers } from './handlers/transfer.js';
+import { registerChatMemberHandlers } from './handlers/chatMember.js';
 import { registerTimezoneConversation } from './conversations/timezone.js';
 
 /**
@@ -90,6 +91,7 @@ export function createBot(
   registerDmHandlers(bot);
   registerAdminHandlers(bot, deps, startedAt);
   registerTransferHandlers(bot, deps);
+  registerChatMemberHandlers(bot, deps);
 
   bot.catch((err) => {
     void deps.errors.report(err.error, { updateId: err.ctx.update.update_id });

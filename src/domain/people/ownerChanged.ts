@@ -1,25 +1,30 @@
 import type { DbOrTx } from '../../db/client.js';
 import type { Logger } from '../../ops/logger.js';
+import type { Messenger } from '../messenger.js';
+import type { Clock } from '../../time/clock.js';
+import { requestPendingApprovals } from '../chats/lifecycle.js';
 
 /**
- * `afterOwnerChanged`'s dependencies. `db` is unused by this task's
- * log-only body but is threaded through now, since Task 1.6 needs it for
- * `requestPendingApprovals` (re-sending pending-chat approval requests to
- * the new owner) and Task 1.11 for `syncCommands` — both dependency-bearing
- * follow-ups this same function grows into (plan.md's Task 1.5 brief).
+ * `afterOwnerChanged`'s dependencies. `messenger`/`clock` were added in
+ * Task 1.6 for `requestPendingApprovals` (re-sending pending-chat approval
+ * requests to the new owner); Task 1.11's `syncCommands` follow-up
+ * (plan.md's Task 1.5 brief) may need further fields of its own.
  */
 export interface OwnerChangedDeps {
   db: DbOrTx;
   logger: Logger;
+  messenger: Messenger;
+  clock: Clock;
 }
 
 /**
  * Runs after a successful `/claim` (ownership transfer or first bootstrap).
- * This task's body only logs the event — no PII, only the workspace id
- * (CLAUDE.md §8). Task 1.6 adds `requestPendingApprovals` here, Task 1.11
- * adds `syncCommands`, each covered by its own test.
+ * Logs the event — no PII, only the workspace id (CLAUDE.md §8) — and asks
+ * `requestPendingApprovals` (`src/domain/chats/lifecycle.ts`, Task 1.6) to
+ * send the new Owner approval requests for any chat that was left `pending`
+ * with no Owner to ask yet. Task 1.11 adds `syncCommands` here too.
  */
-// eslint-disable-next-line @typescript-eslint/require-await -- kept async: this grows real awaits in Tasks 1.6/1.11
 export async function afterOwnerChanged(deps: OwnerChangedDeps, workspaceId: number): Promise<void> {
   deps.logger.info({ workspaceId }, 'owner changed');
+  await requestPendingApprovals(deps, workspaceId);
 }
