@@ -1276,7 +1276,7 @@ describe('zones', () => {
   - `interface IncomingMessage { tgChatId: number; tgMessageId: number; from: { id: number; first_name: string; last_name?: string; username?: string; is_bot: boolean }; sentAt: Date; text: string; replyToTgMessageId: number | null; replyQuote: string | null; isForward: boolean; forwardOriginName: string | null; isTaskCommand: boolean; commandArgs: string | null }`;
   - `normalizeIncoming(msg: Message, botUsername: string): IncomingMessage | null`.
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
 
 ```ts
 // heuristics
@@ -1307,15 +1307,15 @@ describe('stage 0 heuristics (SPEC §7.3)', () => {
 // 10. текст 5000 символов → text сохраняется целиком (обрезка до 2000 — только в buildInput).
 ```
 
-- [ ] **Шаг 2:** FAIL.
-- [ ] **Шаг 3: реализация.**
+- [x] **Шаг 2:** FAIL.
+- [x] **Шаг 3: реализация.**
   - Нормализация текста: NFC → lowercase → trim → схлопнуть пробелы → убрать пунктуацию по краям.
   - Длина считается как `Array.from(s).length`.
   - Порядок правил: сигналы завершения (любое слово текста совпадает с `COMPLETION_SIGNALS`) → `pending`; стоп-лист (весь нормализованный текст целиком) → `skipped`; длина меньше 3 → `skipped`; только эмодзи и пунктуация (`/^[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Regional_Indicator}‍️\p{P}\p{S}\s]+$/u`) → `skipped`; иначе `pending`.
   - `\p{Emoji_Component}` не использовать: он включает цифры (`CLAUDE.md` §12).
   - Метки медиа (`[фото]`) берутся из `texts.media` в `ru.ts`.
-- [ ] **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(intake): add message normalization and stage-0 heuristics`.
+- [x] **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(intake): add message normalization and stage-0 heuristics`.
 
 ### Task 1.8: Приём сообщений в группах и правки
 

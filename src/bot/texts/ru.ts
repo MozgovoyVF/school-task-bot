@@ -287,6 +287,17 @@ export const texts = {
       'только подтверждённые задачи. Для анализа текст передаётся сервису обработки (ИИ) без фамилий, @имён и ' +
       'контактов. Подробнее: /privacy. Вопросы — к руководителю.',
   },
+  /**
+   * Labels prefixed to a media message's caption when normalizing incoming
+   * messages (SPEC §7.2, `src/bot/handlers/normalize.ts`'s `normalizeIncoming`).
+   */
+  media: {
+    photo: '[фото]',
+    document: '[документ]',
+    video: '[видео]',
+    audio: '[аудио]',
+    gif: '[gif]',
+  },
   claim: {
     /** Sent when `/claim` is invoked with no code argument. */
     usage: 'Введите код после команды, например: <code>/claim ABCD2345</code>.',
