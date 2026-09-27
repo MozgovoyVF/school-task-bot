@@ -4,6 +4,7 @@
  * `src/config/constants.ts`. Telegram uses `parse_mode: 'HTML'` everywhere,
  * so any dynamic value interpolated into a string here must be escaped first.
  */
+import type { RU_ZONES, ZoneLabel } from '../../time/zones.js';
 
 /** Minimal HTML escaping for values interpolated into `parse_mode: 'HTML'` messages. */
 function escapeHtml(input: string): string {
@@ -37,6 +38,45 @@ function formatUptime(totalSeconds: number): string {
   parts.push(`${secs}с`);
   return parts.join(' ');
 }
+
+/** `+2`/`−1`/`+5:30` — the signed part of a zone label, using U+2212 MINUS SIGN (not a hyphen) for negatives. */
+function formatSignedOffset(offsetMinutes: number): string {
+  const sign = offsetMinutes < 0 ? '−' : '+';
+  const abs = Math.abs(offsetMinutes);
+  const hours = Math.floor(abs / 60);
+  const minutes = abs % 60;
+  return minutes === 0
+    ? `${sign}${String(hours)}`
+    : `${sign}${String(hours)}:${String(minutes).padStart(2, '0')}`;
+}
+
+/**
+ * Renders a {@link ZoneLabel} (`src/time/zones.ts`, kept Cyrillic-free per
+ * CLAUDE.md §8) as `МСК`, `МСК+2`, `МСК−1` for RU zones (D17) or `UTC+2` for
+ * everything else.
+ */
+export function formatZoneLabel(label: ZoneLabel): string {
+  if (label.kind === 'msk') {
+    return label.offsetMinutes === 0 ? 'МСК' : `МСК${formatSignedOffset(label.offsetMinutes)}`;
+  }
+  return `UTC${formatSignedOffset(label.offsetMinutes)}`;
+}
+
+/** Russian city names for `RU_ZONES`' `/timezone` quick-pick buttons, keyed by IANA zone name. */
+const ZONE_CITY_LABELS: Record<(typeof RU_ZONES)[number], string> = {
+  'Europe/Kaliningrad': 'Калининград',
+  'Europe/Moscow': 'Москва',
+  'Europe/Samara': 'Самара',
+  'Asia/Yekaterinburg': 'Екатеринбург',
+  'Asia/Omsk': 'Омск',
+  'Asia/Novosibirsk': 'Новосибирск',
+  'Asia/Krasnoyarsk': 'Красноярск',
+  'Asia/Irkutsk': 'Иркутск',
+  'Asia/Yakutsk': 'Якутск',
+  'Asia/Vladivostok': 'Владивосток',
+  'Asia/Magadan': 'Магадан',
+  'Asia/Kamchatka': 'Камчатка',
+};
 
 export const texts = {
   errors: {
@@ -74,7 +114,14 @@ export const texts = {
     forbidden: 'У вас нет доступа к этой команде.',
   },
   start: {
-    /** `/start`/`/help` response for a recognized superadmin. */
+    /**
+     * `/start`'s welcome overview for a recognized superadmin. Shown on every
+     * `/start` once the user already has a timezone set — Task 1.4's
+     * first-run flow (`src/bot/conversations/timezone.ts`) runs the
+     * `/timezone` picker instead the very first time, then sends
+     * `texts.help.*` (a distinct, command-reference text — see that
+     * namespace) once the zone is saved.
+     */
     superadmin(): string {
       return [
         '👋 Здравствуйте! Я — Секретарь школы.',
@@ -85,12 +132,72 @@ export const texts = {
         '/help — эта справка',
       ].join('\n');
     },
-    /** `/start`/`/help` response for anyone the bot does not yet recognize (no owner/member concept before phase 1). */
+    /** `/start`'s welcome overview for anyone the bot does not yet recognize (no owner/member concept before phase 1). */
     stranger(): string {
       return (
         'Этот бот работает для сотрудников школы французского языка и настраивается её руководителем. ' +
         'Если вы сотрудник и должны иметь доступ, обратитесь, пожалуйста, к руководителю школы.'
       );
+    },
+  },
+  /**
+   * `/help`'s role-appropriate command reference (SPEC §7.2's `/help` row:
+   * «Справка по роли»). Deliberately distinct in wording/purpose from
+   * `texts.start.*`'s welcome overview: `/start` greets and (on first run)
+   * offers timezone selection, `/help` is a short reminder of what's
+   * available right now. Also sent once, from
+   * `src/bot/conversations/timezone.ts`, right after that first-run zone
+   * selection completes (SPEC §10.10: "...краткая справка по роли").
+   *
+   * Only `superadmin`/`staff`/`stranger` are distinguished: through Task 1.4,
+   * Owner and Member have no commands of their own yet (those arrive in
+   * later phases — see plan.md's Phase 1 task list), so both currently get
+   * the same `staff` text; `can()` (`src/domain/people/permissions.ts`) has
+   * nothing yet to differentiate between them here.
+   */
+  help: {
+    /** `/help` for a superadmin. */
+    superadmin(): string {
+      return [
+        '📋 Доступные команды:',
+        '/admin — панель администратора',
+        '/timezone — часовой пояс',
+        '/help — эта справка',
+      ].join('\n');
+    },
+    /** `/help` for a recognized Owner or Member (no role-specific commands exist yet — see the doc comment above). */
+    staff(): string {
+      return ['📋 Доступные команды:', '/timezone — часовой пояс', '/help — эта справка'].join('\n');
+    },
+    /** `/help` for anyone the bot does not yet recognize. */
+    stranger(): string {
+      return (
+        'Пока вы не привязаны ни к одной школе в этом боте. Если вы сотрудник и должны иметь доступ, ' +
+        'обратитесь, пожалуйста, к руководителю школы. Часовой пояс на будущее можно задать командой /timezone.'
+      );
+    },
+  },
+  timezone: {
+    /** Prompt shown above the `/timezone` quick-pick keyboard (first `/start` and `/timezone`). */
+    prompt: 'Выберите часовой пояс:',
+    /** The quick-pick keyboard's first, emphasized button: keeps the workspace default (Moscow). */
+    keepMoscow: 'Оставить: Москва',
+    /** Button label for one of `RU_ZONES`, e.g. "Екатеринбург (МСК+2)". */
+    zoneButtonLabel(zone: (typeof RU_ZONES)[number], label: ZoneLabel): string {
+      return `${ZONE_CITY_LABELS[zone]} (${formatZoneLabel(label)})`;
+    },
+    /** Button that switches from the quick-pick keyboard to manual text entry. */
+    manualButton: 'Ввести вручную',
+    /** Sent after tapping "Ввести вручную", asking for free-form input. */
+    manualPrompt:
+      'Введите часовой пояс: смещение (например, +5 или UTC+5), название IANA (Europe/Moscow) или «мск».',
+    /** Sent when free-form input, or an unexpected update while a button was expected, could not be parsed as a zone. */
+    invalid: 'Не удалось распознать часовой пояс. Попробуйте, например: +5, UTC+5, Europe/Moscow или мск.',
+    /** Sent when an update arrives that is neither a tap on one of the offered buttons nor (during manual entry) text. */
+    pickButtonHint: 'Пожалуйста, нажмите одну из кнопок ниже.',
+    /** Confirmation after `users.timezone` is saved; `label` is `formatZoneLabel`'s output (already HTML-safe: only letters/digits/±/МСК/UTC). */
+    saved(label: string): string {
+      return `Часовой пояс сохранён: <b>${escapeHtml(label)}</b>.`;
     },
   },
   admin: {

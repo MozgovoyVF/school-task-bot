@@ -137,6 +137,17 @@ export function forwardedDm(from: TgUserLike, text: string, extra?: MessageExtra
   };
 }
 
+/**
+ * The DM message a bot's own keyboard would have been attached to, in the private chat with `chat`
+ * (its `id` equals `chat.id` — a DM's chat id is the user's own Telegram id). Real callback queries
+ * for a bot-sent keyboard always carry this (`callback_query.message`) — grammY's `ctx.chat` reads
+ * it (`ctx.msg?.chat`), and `@grammyjs/conversations`' default session storage keys off `ctx.chat.id`,
+ * so a `callback()` update meant to resume an active DM conversation needs this as its `message`.
+ */
+export function botKeyboardMessage(chat: TgUserLike): Message {
+  return baseMessage(privateChat(chat), DEFAULT_BOT_USER, '');
+}
+
 /** A callback query from an inline keyboard button, optionally attached to the originating `message`. */
 export function callback(from: TgUserLike, data: string, message?: Message): Update {
   const query: CallbackQuery = {

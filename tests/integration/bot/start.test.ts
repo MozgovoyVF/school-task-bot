@@ -8,31 +8,28 @@ import { users } from '../../../src/db/schema/index.js';
 const SUPERADMIN = { id: 900000001, firstName: 'Anna' };
 const STRANGER = { id: 42, firstName: 'Ivan' };
 
+/**
+ * The full first-run `/timezone`-picker flow (button taps, `users.timezone`
+ * persistence, the role-help follow-up) is covered end to end in
+ * `tests/integration/bot/timezone.test.ts` (Task 1.4). These tests stick to
+ * `/start`'s own entry-point responsibilities: marking `dm_started_at`, and
+ * gating into that picker versus the plain welcome text.
+ */
 describe('/start', () => {
-  it('shows the superadmin help text and marks dm_started_at', async () => {
+  it('marks dm_started_at on first contact, regardless of role', async () => {
     const harness = await createBotHarness();
 
     await harness.send(dmText(SUPERADMIN, '/start'));
-
-    expect(harness.replies(SUPERADMIN.id)).toEqual([texts.start.superadmin()]);
 
     const [row] = await harness.db.select().from(users).where(eq(users.tgUserId, SUPERADMIN.id));
     expect(row?.dmStartedAt).not.toBeNull();
   });
 
-  it('shows a neutral text for a non-superadmin stranger', async () => {
+  it("offers the /timezone picker instead of the welcome text on a brand-new user's first /start", async () => {
     const harness = await createBotHarness();
 
     await harness.send(dmText(STRANGER, '/start'));
 
-    expect(harness.replies(STRANGER.id)).toEqual([texts.start.stranger()]);
-  });
-
-  it('/help renders the same overview as /start', async () => {
-    const harness = await createBotHarness();
-
-    await harness.send(dmText(SUPERADMIN, '/help'));
-
-    expect(harness.replies(SUPERADMIN.id)).toEqual([texts.start.superadmin()]);
+    expect(harness.replies(STRANGER.id)).toEqual([texts.timezone.prompt]);
   });
 });

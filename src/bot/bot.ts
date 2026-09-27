@@ -1,5 +1,6 @@
 import { Bot } from 'grammy';
 import type { UserFromGetMe } from 'grammy/types';
+import type { ApiClientOptions } from 'grammy';
 import { autoRetry } from '@grammyjs/auto-retry';
 import { apiThrottler } from '@grammyjs/transformer-throttler';
 import { sequentialize } from '@grammyjs/runner';
@@ -16,6 +17,7 @@ import { createErrorsMiddleware } from './middleware/errors.js';
 import { createContextMiddleware } from './middleware/context.js';
 import { registerDmHandlers } from './handlers/dm.js';
 import { registerAdminHandlers } from './handlers/admin.js';
+import { registerTimezoneConversation } from './conversations/timezone.js';
 
 /**
  * The subset of `AppDeps` (`src/deps.ts`) that bot construction and its
@@ -52,13 +54,26 @@ export interface BotDeps {
  * `src/app.ts`) because middleware order is fixed at `bot.use()` time.
  * `opts.botInfo` lets tests (and hosting setups that want to skip the extra
  * `getMe` round-trip) pre-seed the bot's own identity instead of grammY
- * fetching it on `bot.init()`/`bot.start()`. `bot.catch` is the last-resort
- * fallback for anything `errors` middleware itself fails to handle — it only
- * reports, it does not attempt a user-facing reply (see
+ * fetching it on `bot.init()`/`bot.start()`. `opts.client` is forwarded as
+ * grammY's `client` config; `tests/helpers/botHarness.ts` uses its `fetch`
+ * option to fake HTTP responses for the API calls that `@grammyjs/conversations`
+ * makes through a freshly constructed `Api` instance (`hydrateContext` in
+ * that plugin builds `new Api(token, options)` straight from `options`,
+ * bypassing every transformer installed via `bot.api.config.use()` below —
+ * confirmed by reading `@grammyjs/conversations`' `plugin.js`, since neither
+ * its docs nor CLAUDE.md's pre-verified facts mention this). `bot.catch` is
+ * the last-resort fallback for anything `errors` middleware itself fails to
+ * handle — it only reports, it does not attempt a user-facing reply (see
  * `src/bot/middleware/errors.ts` for that).
  */
-export function createBot(deps: BotDeps, opts?: { botInfo?: UserFromGetMe }): Bot<BotContext> {
-  const bot = new Bot<BotContext>(deps.config.TELEGRAM_BOT_TOKEN, { botInfo: opts?.botInfo });
+export function createBot(
+  deps: BotDeps,
+  opts?: { botInfo?: UserFromGetMe; client?: ApiClientOptions },
+): Bot<BotContext> {
+  const bot = new Bot<BotContext>(deps.config.TELEGRAM_BOT_TOKEN, {
+    botInfo: opts?.botInfo,
+    client: opts?.client,
+  });
 
   bot.api.config.use(autoRetry());
   bot.api.config.use(apiThrottler());
@@ -70,6 +85,7 @@ export function createBot(deps: BotDeps, opts?: { botInfo?: UserFromGetMe }): Bo
   bot.use(createContextMiddleware(deps));
   bot.use(conversations());
 
+  registerTimezoneConversation(bot, deps);
   registerDmHandlers(bot);
   registerAdminHandlers(bot, deps, startedAt);
 
