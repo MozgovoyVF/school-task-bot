@@ -1,12 +1,13 @@
 name: Release
 
+# See plan.md decision D38 for the rules below.
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to build and push (e.g. v0.1.0 or v0.1.0-rc.1)'
+        description: 'Image tag to build and push (e.g. v0.1.0 or v0.1.0-rc.1); the image is built from the ref this run is dispatched on'
         required: true
         type: string
 
@@ -18,20 +19,32 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
+      # Always build the commit this run was triggered for: the pushed tag's commit on `push`,
+      # the head of the dispatched ref on `workflow_dispatch`. The `tag` input is only the IMAGE
+      # tag and is never checked out -- a manual run typically cuts the first release before any
+      # git tag exists.
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+          ref: ${{ github.sha }}
 
-      - name: Resolve tag and whether ":latest" should be updated
+      - name: Resolve image tag and whether ":latest" should move
         id: vars
+        env:
+          # Passed through env, never interpolated into the script (script injection).
+          RAW_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         run: |
-          TAG="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          # Release-candidate tags pushed via manual dispatch never become ":latest".
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "$TAG" == *-rc* ]]; then
-            echo "push_latest=false" >> "$GITHUB_OUTPUT"
+          if [[ ! "$RAW_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
+            echo "::error::tag '$RAW_TAG' must look like v1.2.3 or v1.2.3-rc.4"
+            exit 1
+          fi
+          IMAGE=ghcr.io/mozgovoyvf/school-task-bot
+          echo "tag=$RAW_TAG" >> "$GITHUB_OUTPUT"
+          # Decided from the tag string alone, regardless of trigger: release candidates never
+          # become ":latest", final releases always do.
+          if [[ "$RAW_TAG" == *-rc.* ]]; then
+            printf 'tags=%s:%s\n' "$IMAGE" "$RAW_TAG" >> "$GITHUB_OUTPUT"
           else
-            echo "push_latest=true" >> "$GITHUB_OUTPUT"
+            printf 'tags=%s:%s,%s:latest\n' "$IMAGE" "$RAW_TAG" "$IMAGE" >> "$GITHUB_OUTPUT"
           fi
 
       - uses: docker/setup-buildx-action@v4
@@ -42,23 +55,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push versioned tag
+      # One build, pushed under every tag at once, so ":latest" and ":<tag>" are the same digest.
+      # GIT_SHA carries the release tag (human-readable in /admin); the exact commit is kept in
+      # the OCI revision label (`docker inspect`), since a manually dispatched release has no git tag.
+      - name: Build and push
         uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/Dockerfile
           push: true
-          tags: ghcr.io/mozgovoyvf/school-task-bot:${{ steps.vars.outputs.tag }}
-          build-args: |
-            GIT_SHA=${{ steps.vars.outputs.tag }}
-
-      - name: Build and push ":latest"
-        if: steps.vars.outputs.push_latest == 'true'
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: docker/Dockerfile
-          push: true
-          tags: ghcr.io/mozgovoyvf/school-task-bot:latest
+          tags: ${{ steps.vars.outputs.tags }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.vars.outputs.tag }}
           build-args: |
             GIT_SHA=${{ steps.vars.outputs.tag }}

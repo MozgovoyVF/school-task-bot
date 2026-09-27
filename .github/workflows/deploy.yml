@@ -1,7 +1,6 @@
 name: Deploy
 
-# Manual only: there is no VPS yet (SPEC §24), this workflow just needs to exist and be
-# syntactically valid until Task 0.10's scripts/deploy.sh and the server are in place.
+# Manual only (SPEC §24): runs scripts/deploy.sh <tag> on the VPS over SSH.
 on:
   workflow_dispatch:
     inputs:
@@ -22,6 +21,17 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     steps:
+      # The tag ends up in a remote shell command: validate it strictly before anything else and
+      # never interpolate `${{ inputs.* }}` into a script (script injection; plan.md decision D38).
+      - name: Validate inputs
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
+            echo "::error::tag must look like v1.2.3 or v1.2.3-rc.4"
+            exit 1
+          fi
+
       - name: Configure SSH
         run: |
           mkdir -p ~/.ssh
@@ -30,6 +40,12 @@ jobs:
           ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
 
       - name: Run deploy script on VPS
+        env:
+          TAG: ${{ inputs.tag }}
+          TARGET_ENV: ${{ inputs.environment }}
+          SSH_TARGET: ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
-            "cd /opt/stb-${{ inputs.environment }} && ./scripts/deploy.sh ${{ inputs.tag }}"
+          # TAG was validated above and TARGET_ENV is a `choice` input; %q quotes both anyway for
+          # the remote shell.
+          REMOTE_CMD=$(printf 'cd /opt/stb-%q && ./scripts/deploy.sh %q' "$TARGET_ENV" "$TAG")
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "$SSH_TARGET" "$REMOTE_CMD"
