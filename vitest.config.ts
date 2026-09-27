@@ -16,7 +16,17 @@ export default defineConfig({
     ],
     coverage: {
       provider: 'v8',
-      include: ['src/domain/**', 'src/ai/pipeline/**'],
+      include: [
+        'src/ai/pipeline/**',
+        'src/ai/pseudonymize.ts',
+        'src/ai/schemas.ts',
+        'src/time/**',
+        'src/domain/notifications/**',
+        'src/domain/proposals/**',
+        'src/domain/chats/retention.ts',
+        'src/domain/people/claim.ts',
+        'src/domain/people/erase.ts',
+      ],
       thresholds: { lines: 80, functions: 80, branches: 75 },
     },
   },
