@@ -37,11 +37,10 @@ function findZoneButtonData(keyboard: RenderedButton[][], action: string, id: nu
   throw new Error(`no button for action=${action} id=${String(id)}`);
 }
 
-const MOSCOW_ID = RU_ZONES.indexOf('Europe/Moscow');
 const YEKATERINBURG_ID = RU_ZONES.indexOf('Asia/Yekaterinburg');
 
 describe('/start (first run)', () => {
-  it('shows the zone picker with "Оставить: Москва" as the default, saves the tapped zone, and follows up with the role help', async () => {
+  it('shows the zone picker with "Оставить: Москва" as the default (workspace.timezone), saves the tapped zone, and follows up with the role help', async () => {
     const harness = await createBotHarness();
     const at = harness.clock.now();
 
@@ -49,8 +48,12 @@ describe('/start (first run)', () => {
 
     expect(harness.replies(SUPERADMIN.id)).toEqual([texts.timezone.prompt]);
     const keyboard = lastKeyboard(harness, SUPERADMIN.id);
-    expect(keyboard[0]?.[0]?.text).toBe(texts.timezone.keepMoscow);
-    const data = findZoneButtonData(keyboard, 'sel', MOSCOW_ID);
+    expect(keyboard[0]?.[0]?.text).toBe(
+      texts.timezone.keepDefault(
+        texts.timezone.zoneButtonLabel('Europe/Moscow', zoneLabel('Europe/Moscow', at)),
+      ),
+    );
+    const data = findZoneButtonData(keyboard, 'def', 0);
 
     await harness.send(callback(SUPERADMIN, data, botKeyboardMessage(SUPERADMIN)));
 
@@ -62,6 +65,33 @@ describe('/start (first run)', () => {
       texts.help.superadmin(),
     ]);
     expect(harness.calls.some((c) => c.method === 'answerCallbackQuery')).toBe(true);
+  });
+
+  it('reflects a non-Moscow workspace.timezone in the default button, not a hardcoded "Москва" (plan.md D41)', async () => {
+    const harness = await createBotHarness({ workspaceTimezone: 'Asia/Yekaterinburg' });
+    const at = harness.clock.now();
+
+    await harness.send(dmText(SUPERADMIN, '/start'));
+
+    const keyboard = lastKeyboard(harness, SUPERADMIN.id);
+    const expectedLabel = texts.timezone.zoneButtonLabel(
+      'Asia/Yekaterinburg',
+      zoneLabel('Asia/Yekaterinburg', at),
+    );
+    expect(keyboard[0]?.[0]?.text).toBe(texts.timezone.keepDefault(expectedLabel));
+    expect(keyboard[0]?.[0]?.text).not.toContain('Москва');
+    // The workspace zone is no longer Moscow, so Moscow itself is not excluded from the grid
+    // (only whichever zone actually equals `workspace.timezone` is) — it stays selectable there too.
+    expect(() => findZoneButtonData(keyboard, 'sel', RU_ZONES.indexOf('Europe/Moscow'))).not.toThrow();
+
+    const data = findZoneButtonData(keyboard, 'def', 0);
+    await harness.send(callback(SUPERADMIN, data, botKeyboardMessage(SUPERADMIN)));
+
+    const [row] = await harness.db.select().from(users).where(eq(users.tgUserId, SUPERADMIN.id));
+    expect(row?.timezone).toBe('Asia/Yekaterinburg');
+    expect(harness.replies(SUPERADMIN.id)).toContain(
+      texts.timezone.saved(formatZoneLabel(zoneLabel('Asia/Yekaterinburg', at))),
+    );
   });
 
   it('saves a non-default zone tapped from the grid and marks dm_started_at', async () => {
@@ -87,7 +117,7 @@ describe('/start (first run)', () => {
   it('does not re-offer the picker on a later /start once a timezone is set', async () => {
     const harness = await createBotHarness();
     await harness.send(dmText(SUPERADMIN, '/start'));
-    const data = findZoneButtonData(lastKeyboard(harness, SUPERADMIN.id), 'sel', MOSCOW_ID);
+    const data = findZoneButtonData(lastKeyboard(harness, SUPERADMIN.id), 'def', 0);
     await harness.send(callback(SUPERADMIN, data, botKeyboardMessage(SUPERADMIN)));
     harness.reset();
 

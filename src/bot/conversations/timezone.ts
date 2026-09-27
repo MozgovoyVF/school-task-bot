@@ -15,28 +15,34 @@ export const TIMEZONE_CONVERSATION_ID = 'timezone';
 
 type TimezoneConversation = Conversation<BotContext, BotContext>;
 
-const MOSCOW_INDEX = RU_ZONES.indexOf('Europe/Moscow');
 const CALLBACK_RE = /^v1:z:/;
 
 /**
- * `texts.timezone.keepMoscow` first, then the rest of `RU_ZONES` (Moscow
- * itself excluded — the first button already covers it) two per row, then a
- * manual-entry button. `id` is `RU_ZONES`' array index (not a DB id — this
- * codec is only used here for a fixed, in-memory list, which the
- * `callback_data` format's "always an internal id" rule (CLAUDE.md §8) is
- * fine with).
+ * `texts.timezone.keepDefault` first — reflecting `workspaceZone` (SPEC §10,
+ * point 10: the workspace's *actual configured* zone, not a hardcoded
+ * literal; D41's Important fix) — then the rest of `RU_ZONES` (whichever
+ * entry equals `workspaceZone`, if any, is excluded — the first button
+ * already covers it) two per row, then a manual-entry button. `id` is
+ * `RU_ZONES`' array index (not a DB id — this codec is only used here for a
+ * fixed, in-memory list, which the `callback_data` format's "always an
+ * internal id" rule (CLAUDE.md §8) is fine with); the "keep default" button
+ * uses a separate `def` action instead, since `workspaceZone` may not be an
+ * `RU_ZONES` member at all (an operator can set `DEFAULT_TIMEZONE` to any
+ * IANA zone) and so may have no index to encode.
  */
-function buildZonePickerButtons(at: Date): Buttons {
+function buildZonePickerButtons(at: Date, workspaceZone: string): Buttons {
   const keep = {
-    text: texts.timezone.keepMoscow,
-    data: encodeCallback({ entity: 'z', action: 'sel', id: MOSCOW_INDEX }),
+    text: texts.timezone.keepDefault(
+      texts.timezone.zoneButtonLabel(workspaceZone, zoneLabel(workspaceZone, at)),
+    ),
+    data: encodeCallback({ entity: 'z', action: 'def', id: 0 }),
   };
   const manual = {
     text: texts.timezone.manualButton,
     data: encodeCallback({ entity: 'z', action: 'man', id: 0 }),
   };
 
-  const grid = RU_ZONES.map((zone, id) => ({ zone, id })).filter(({ zone }) => zone !== 'Europe/Moscow');
+  const grid = RU_ZONES.map((zone, id) => ({ zone, id })).filter(({ zone }) => zone !== workspaceZone);
   const gridButtons = grid.map(({ zone, id }) => ({
     text: texts.timezone.zoneButtonLabel(zone, zoneLabel(zone, at)),
     data: encodeCallback({ entity: 'z', action: 'sel', id }),
@@ -62,12 +68,22 @@ async function readManualZone(conversation: TimezoneConversation, ctx: BotContex
   }
 }
 
-/** Quick-pick loop: keeps re-showing the keyboard until a valid `v1:z:*` button is tapped (or `texts.timezone.manualButton` hands off to {@link readManualZone}). */
-async function pickZone(conversation: TimezoneConversation, ctx: BotContext, at: Date): Promise<string> {
+/**
+ * Quick-pick loop: keeps re-showing the keyboard until a valid `v1:z:*`
+ * button is tapped — `def` resolves to `workspaceZone` as-is (SPEC §10,
+ * point 10 / D41), `sel:<id>` to `RU_ZONES[id]`, and `man` hands off to
+ * {@link readManualZone}.
+ */
+async function pickZone(
+  conversation: TimezoneConversation,
+  ctx: BotContext,
+  at: Date,
+  workspaceZone: string,
+): Promise<string> {
   for (;;) {
     await ctx.reply(texts.timezone.prompt, {
       parse_mode: 'HTML',
-      reply_markup: toInlineKeyboard(buildZonePickerButtons(at)),
+      reply_markup: toInlineKeyboard(buildZonePickerButtons(at, workspaceZone)),
     });
     const pick = await conversation.waitForCallbackQuery(CALLBACK_RE, {
       otherwise: (otherCtx) => otherCtx.reply(texts.timezone.pickButtonHint, { parse_mode: 'HTML' }),
@@ -77,6 +93,7 @@ async function pickZone(conversation: TimezoneConversation, ctx: BotContext, at:
     const decoded = decodeCallback(pick.callbackQuery.data);
     if (!decoded) continue;
 
+    if (decoded.action === 'def') return workspaceZone;
     if (decoded.action === 'man') return readManualZone(conversation, ctx);
 
     const zone = RU_ZONES[decoded.id];
@@ -100,8 +117,17 @@ function buildTimezoneConversation(db: Db) {
     const userId = await conversation.external((outsideCtx) => outsideCtx.state.user?.id ?? null);
     if (userId == null) return;
 
+    // SPEC §10, point 10: the "keep default" option must be the workspace's
+    // *actual configured* zone (D41's Important fix) — `state.workspace` is
+    // always resolved for a DM update (`src/bot/middleware/context.ts`); the
+    // fallback only guards the type (`WorkspaceRow | null`), it is not
+    // expected to be exercised in practice.
+    const workspaceZone = await conversation.external(
+      (outsideCtx) => outsideCtx.state.workspace?.timezone ?? 'Europe/Moscow',
+    );
+
     const at = new Date(await conversation.now());
-    const zone = await pickZone(conversation, ctx, at);
+    const zone = await pickZone(conversation, ctx, at, workspaceZone);
     await conversation.external(() => setUserTimezone(db, userId, zone));
 
     const label = formatZoneLabel(zoneLabel(zone, at));
@@ -114,7 +140,7 @@ function buildTimezoneConversation(db: Db) {
   };
 }
 
-/** Registers the `timezone` conversation and the `/timezone` command that enters it (SPEC §7.2). */
+/** Registers the `timezone` conversation and the `/timezone` command that enters it (SPEC §12.2). */
 export function registerTimezoneConversation(bot: Bot<BotContext>, deps: { db: Db }): void {
   bot.use(
     createConversation(buildTimezoneConversation(deps.db), {

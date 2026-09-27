@@ -141,7 +141,7 @@ export const texts = {
     },
   },
   /**
-   * `/help`'s role-appropriate command reference (SPEC §7.2's `/help` row:
+   * `/help`'s role-appropriate command reference (SPEC §12.2's `/help` row:
    * «Справка по роли»). Deliberately distinct in wording/purpose from
    * `texts.start.*`'s welcome overview: `/start` greets and (on first run)
    * offers timezone selection, `/help` is a short reminder of what's
@@ -180,11 +180,26 @@ export const texts = {
   timezone: {
     /** Prompt shown above the `/timezone` quick-pick keyboard (first `/start` and `/timezone`). */
     prompt: 'Выберите часовой пояс:',
-    /** The quick-pick keyboard's first, emphasized button: keeps the workspace default (Moscow). */
-    keepMoscow: 'Оставить: Москва',
-    /** Button label for one of `RU_ZONES`, e.g. "Екатеринбург (МСК+2)". */
-    zoneButtonLabel(zone: (typeof RU_ZONES)[number], label: ZoneLabel): string {
-      return `${ZONE_CITY_LABELS[zone]} (${formatZoneLabel(label)})`;
+    /**
+     * The quick-pick keyboard's first, emphasized button: keeps the
+     * *workspace's actual configured* default (SPEC §10, point 10: «по
+     * умолчанию пояс workspace») — `label` is `zoneButtonLabel`'s output for
+     * `workspace.timezone`, not a hardcoded "Москва" (D41's Important fix:
+     * `workspace.timezone` only *seeds* as `Europe/Moscow`, an operator can
+     * set `DEFAULT_TIMEZONE` to any IANA zone).
+     */
+    keepDefault(label: string): string {
+      return `Оставить: ${label}`;
+    },
+    /**
+     * Button label for a timezone, e.g. "Екатеринбург (МСК+2)" for a
+     * `RU_ZONES` member, or just "UTC+4" for any other IANA zone (used both
+     * for the quick-pick grid, always a `RU_ZONES` member, and for
+     * `keepDefault`'s workspace zone, which is not guaranteed to be one).
+     */
+    zoneButtonLabel(zone: string, label: ZoneLabel): string {
+      const city = (ZONE_CITY_LABELS as Partial<Record<string, string>>)[zone];
+      return city === undefined ? formatZoneLabel(label) : `${city} (${formatZoneLabel(label)})`;
     },
     /** Button that switches from the quick-pick keyboard to manual text entry. */
     manualButton: 'Ввести вручную',

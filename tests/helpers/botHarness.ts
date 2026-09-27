@@ -116,6 +116,14 @@ function createFakeFetch(calls: RecordedCall[]): typeof fetch {
 export async function createBotHarness(opts?: {
   clock?: string;
   superadminIds?: number[];
+  /**
+   * The test workspace's `timezone` (default `'Europe/Moscow'`, matching
+   * `DEFAULT_TIMEZONE`'s own default — `src/config/env.ts`). Set this to a
+   * non-Moscow zone in a test that needs to tell "hardcoded Moscow" apart
+   * from "correctly defaults to the workspace's configured zone" — see
+   * plan.md D41's Important fix and `tests/integration/bot/timezone.test.ts`.
+   */
+  workspaceTimezone?: string;
 }): Promise<BotHarness> {
   const db = getTestDb();
   await truncateAll(db);
@@ -135,7 +143,7 @@ export async function createBotHarness(opts?: {
   const errors = createErrorReporter({ db, messenger, clock, logger, superadminIds });
   const workspace = await ensureDefaultWorkspace(db, {
     name: DEFAULT_WORKSPACE_NAME,
-    timezone: 'Europe/Moscow',
+    timezone: opts?.workspaceTimezone ?? 'Europe/Moscow',
   });
   const deps: BotDeps = { config, db, clock, logger, errors, messenger, workspace };
   const calls: RecordedCall[] = [];
