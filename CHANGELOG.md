@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.1.0] — 2026-09-27
+
+Phase 0 (skeleton): project tooling, zod env config, pino logger with PII redaction, Drizzle
+schema and migrations, error reporter, ticker and `/healthz`, bot skeleton (`/start`, `/help`,
+`/admin`, `/testerror`), Docker image and compose files, CI/release workflows, deploy and backup
+scripts. Accepted on the dev VPS on 2026-09-27.
+
 ### Added
 
 - `scripts/deploy.sh` — pulls a new image tag, waits for `/healthz` up to 90s, rolls back to the

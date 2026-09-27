@@ -4,6 +4,13 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # SPEC §4: TypeScript 5.x (typescript-eslint supports <6.1).
+      - dependency-name: typescript
+        update-types: ['version-update:semver-major']
+      # Runtime is Node.js 24 LTS; types must match it.
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
 
   - package-ecosystem: github-actions
     directory: /
