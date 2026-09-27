@@ -73,7 +73,7 @@
 | D6 | `dedupe_key` уведомлений | `task:{id}:v{version}:{kind}:{recipient}:{fire_date}`: к формату SPEC §13.2 добавлена версия задачи. Без неё перенос срока в пределах того же дня упирается в уже отправленное напоминание. Для сводки: `summary:{workspace}:{recipient}:{date}`, для snooze: `snooze:{task}:{recipient}:{fireAtISO}`. | **решаем при подходе к Task 3.1** |
 | D7 | Планирование уведомлений | Уведомления с моментом отправки в прошлом не создаются. Создаётся только ближайший `overdue`, следующий job добавляет после отправки (цепочка), пока задача не закрыта. Для срока со временем первый `overdue` — ближайшее `overdueTime` строго после срока, возможно в тот же день (буквально по SPEC §13.2). Для all-day — со следующего дня. | **решаем при подходе к Task 3.1** |
 | D8 | `pre_due` для срока со временем | Условие «до срока > 24 ч» проверяется в момент планирования: при создании задачи и при каждом изменении срока. | принято |
-| D9 | Review | Owner продолжает получать напоминания по задаче с `review_pending=true`. Исключается только исполнитель (SPEC §13.2). | принято |
+| D9 | Review | ~~Owner продолжает получать напоминания по задаче с `review_pending=true`.~~ Не применяется: режим проверки отменён (D40). | отменено D40 |
 | D10 | Тихие часы | Проверяются в поясе получателя. `weekdays` — ISO 1..7 (пн..вс). Окна могут переходить через полночь, `dateRanges` включительны. Подавленные `pre_due`, `overdue` и `summary` получают `status='cancelled'` и `last_error='quiet'`, цепочка `overdue` при этом продолжается. Карточки, созданные в тихий период, после его окончания приходят одним сообщением «За время тишины найдено N предложений». | принято |
 | D11 | Истечение proposals | Ежедневная job переводит в `expired` предложения старше `ai.proposalExpiryDays` (7) дней. До этого они видны в `/inbox` и сводке. Фраза SPEC §11.2 «не истекают автоматически» трактуется как «не исчезают раньше срока». | **решаем при подходе к Task 2.15** |
 | D12 | `paused` и `analysis_enabled=false` | Оба выключают сохранение сообщений (SPEC §7.2). Разница: при `paused` бот игнорирует чат полностью, включая `/task`. При `analysis_enabled=false` `/task` продолжает работать. | принято (пользователь, 2026-09-27) |
@@ -88,7 +88,7 @@
 | D21 | Версия | Build-arg `GIT_SHA` превращается в env `GIT_SHA` (показывается в `/admin`, по умолчанию `dev`). | принято |
 | D22 | Сборка | `tsc` собирает в `dist/`. `rootDir` — корень репозитория, чтобы собирались и `scripts/`, и `eval/`. Запуск: `node dist/src/index.js`. Промпты и миграции копируются в образ как файлы. | принято |
 | D23 | Быстрые сроки в меню | `Сегодня`, `Завтра`, `Пт`, `След. пн` дают all-day срок на эту дату. `Пт` в пятницу означает сегодня, в субботу и воскресенье — следующую пятницу. | принято |
-| D24 | Цвет строки списка | Приоритет значков: 🟣 на проверке > 🔴 просрочено > 🔵 в работе > 🟡 сегодня > ⚪ позже или без срока. | принято |
+| D24 | Цвет строки списка | Приоритет значков: 🔴 просрочено > 🔵 в работе > 🟡 сегодня > ⚪ позже или без срока (🟣 «на проверке» убран, D40). | принято |
 | D25 | Уведомление в чате | Метка `notice_sent_at` сбрасывается, когда бота удаляют из чата: при повторном добавлении уведомление публикуется снова. | принято |
 | D26 | Форумные темы | `reply_to_message` на служебное сообщение создания темы не считается ответом. | принято |
 | D27 | Промпт | Файл промпта делится маркером `<!-- DATA -->`: выше — system (инструкции и профиль, стабильный префикс для кеширования), ниже — шаблон user-сообщения с данными. Few-shot идут парами user/assistant между ними. Содержание — черновик SPEC §9.9. Изменение промпта после первого eval — это новый файл версии (`extractor.v2.md`), старый не правится. | принято |
@@ -104,7 +104,8 @@
 | D37 | `.env.example` не покрывал переменные, нужные `docker/compose.yml`'s `db` и `scripts/deploy.sh`/`backup.sh`/`restore.sh` (найдено ревью Task 0.10) | Ни SPEC §26, ни `.env.example` не перечисляют `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `COMPOSE_PROJECT` — а без них `docker/compose.yml`'s `db` (образ `postgres:17`, официальный entrypoint которого отказывается стартовать без `POSTGRES_PASSWORD`) не поднимается вообще, то есть `docker compose ... up -d` после буквального `cp .env.example .env` был нерабочим с момента Task 0.8. Эти четыре переменные — исключительно compose-уровня: `src/config/env.ts`/`EnvSchema` их не читает и не валидирует (они не часть бизнес-конфигурации приложения), поэтому формально они вне периметра SPEC §26 («переменные окружения приложения»). Решение: добавить их в `.env.example` отдельным блоком с пометкой «только для Docker Compose» и ссылкой на это решение, а не оставлять только как ручной шаг в `docs/DEPLOY.md` (иначе агент/оператор, который не читает `docs/DEPLOY.md` дословно, получит нерабочий `docker compose up` без объяснения причины). `docs/DEPLOY.md` §8 при этом сохраняет явное объяснение, зачем этот блок нужен и что подставить. `scripts/deploy.sh`/`backup.sh`/`restore.sh` дополнительно сами подгружают `.env` (`set -a && source .env && set +a`) из каталога, где лежат сами скрипты, — это устраняет необходимость вручную экспортировать переменные перед их запуском (документированная в брифе Task 0.10 команда `cd /opt/stb-dev && ./scripts/deploy.sh <tag>` теперь действительно работает как есть). | принято |
 | D38 | Цепочка релиз → первый деплой → откат, порты двух стеков, чтение `.env` скриптами, открытый Postgres в dev-compose, точка входа `db:migrate` (финальное ревью фазы 0) | **Релиз (`release.yml`).** Всегда собирается `github.sha`: коммит тега при `push`, голова ветки при `workflow_dispatch`. Input `tag` — только тег образа, его никогда не делают `git checkout`: первый ручной релиз (`gh workflow run release.yml -f tag=v0.1.0-rc.1 --ref <ветка>`) идёт до появления git-тегов. Тег проверяется регуляркой `^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$` и передаётся в скрипт через `env:`, а не подстановкой `${{ }}` (script injection). Правило «`-rc` не становится `:latest`» теперь решается **только по строке тега**, независимо от триггера: раньше оно срабатывало лишь на `workflow_dispatch`, и `git push` rc-тега двигал `:latest` на кандидат. Финальный тег публикуется одной сборкой сразу под `:<tag>` и `:latest` (один `build-push-action` с несколькими `tags`), поэтому digest у них один. `GIT_SHA` в релизных образах сознательно остаётся тегом релиза (читаемо в `/admin`), а в `ci.yml` — `github.sha` (там тега нет, образ не публикуется). Чтобы коммит релиза не терялся (у ручного релиза нет git-тега), в образ добавлены OCI-метки `org.opencontainers.image.revision=<sha>` и `org.opencontainers.image.version=<tag>`. **Тег при деплое.** `docker/compose.yml` использует `${APP_TAG:?…}` вместо `${APP_TAG:-latest}`: без тега любая команда compose падает с понятной ошибкой и не дрейфует молча на текущий `:latest`. Побочный эффект (проверен на Compose v5.1.1): переменная нужна даже для `exec db`/`logs`/`ps`. Поэтому скрипты берут тег из `.deploy/current_tag` (`scripts/lib/common.sh`), а для ручных команд добавлен `scripts/compose.sh` (тег из `APP_TAG` или `.deploy/current_tag`). В `.deploy/current_tag` с первого деплоя всегда лежит конкретный задеплоенный тег, никогда `latest`: `docs/DEPLOY.md` §8 делает первый деплой на явный тег вроде `v0.1.0-rc.1`, потому что после rc-релиза `:latest` в GHCR может не существовать. `deploy.sh` отказывается деплоить `latest`. `restore.sh` поднимает `app` на теге из `.deploy/current_tag`, а без него отказывается работать ещё до остановки приложения. `backup.sh` без него шлёт алерт. `deploy.yml` тоже валидирует тег и передаёт его через `env:` и `printf %q`. **Порты.** `HTTP_PORT` в `.env` — только порт на хосте. В `docker/compose.yml` и `docker/compose.dev.yml` у `app` задано `environment: HTTP_PORT: '3000'`, которое перекрывает `env_file` (проверено: в контейнере 3000 при `HTTP_PORT=3001` в `.env`). Поэтому приложение, `HEALTHCHECK` образа и маппинг всегда сходятся на 3000 внутри контейнера. Два стека на одном VPS (SPEC §17.1): dev `HTTP_PORT=3000`, prod `HTTP_PORT=3001`. **`.env` в скриптах.** `scripts/*.sh` больше не делают `source .env`, это заменяет механизм из D37. Значения вроде `SUPERADMIN_TG_IDS=111, 222` и значения с пробелами валидны для compose и `EnvSchema`, но ломали bash ещё до установки `ERR`-трапа, и ночной бэкап падал без алерта. `env_get` в `scripts/lib/common.sh` читает строку `KEY=VALUE` буквально, по подмножеству правил dotenv из compose: комментарии, `export`, кавычки, комментарий через ` #` в конце, CRLF; подстановки `${VAR}` нет. Покрыт тестом `tests/unit/scripts/envGet.test.ts`. Попутно найдено: compose (v5.1.1) читает `KEY=   # заметка` как значение `# заметка`, а в `.env.example` так были оформлены пустые ключи (`BOOTSTRAP_OWNER_TG_ID`, `LLM_MODEL_PRIMARY`, `PUBLIC_BASE_URL`, `BACKUP_AGE_RECIPIENT`, `POSTGRES_PASSWORD`). Из-за этого `BOOTSTRAP_OWNER_TG_ID` с текстом комментария валил `EnvSchema`. Комментарии к пустым ключам перенесены на строку выше, тест проверяет, что ни одно значение `.env.example` не начинается с `#`. В `backup.sh` трап и `fail()` ставятся до чтения `.env`. Без алерта остаются только случаи, когда алертить нечем (нет читаемого `.env` или в нём нет `TELEGRAM_BOT_TOKEN`/`SUPERADMIN_TG_IDS`); тогда ошибка уходит в stderr и лог cron. **Безопасность dev-compose.** Порты `db` и `app` в `docker/compose.dev.yml` публикуются только на `127.0.0.1`: опубликованные Docker'ом порты обходят `ufw`, а `docs/DEPLOY.md` §14 запускает этот файл на VPS, где Postgres-суперпользователь `stb`/`stb`. **`pnpm db:migrate`.** Проверка точки входа вынесена в `src/ops/entrypoint.ts` (`isEntrypoint`) и сравнивает `pathToFileURL(realpath(argv[1])).href` вместо `` `file://${argv[1]}` ``. Раньше на пути с кириллицей (этот репозиторий) CLI молча завершался с кодом 0, ничего не применив. | принято |
 | D39 | `src/bot/middleware/context.ts` резолвит workspace группового чата прямым запросом к таблице `chats` (Task 1.2, ревью) | `src/domain/chats/repo.ts` — канонический репозиторий для таблицы `chats` — появляется только в Task 1.6. Task 1.2 (`src/domain/people/permissions.ts`, контекст запроса) уже требует резолюцию `actor.role`/`state.workspace` для апдейтов из группового чата, а не только для DM, поэтому `src/bot/middleware/context.ts` делает прямой `select` по `chats.tg_chat_id` (единственная строка, только чтение) как временный костыль — по аналогии с тем, как D31 держал `Actor`/`Role` локально в `context.ts` до появления `permissions.ts`. Когда в Task 1.6 появится `src/domain/chats/repo.ts`, этот прямой запрос в `context.ts` нужно заменить на вызов репозитория (например `getChatByTgId`/аналог) — поведение не меняется, меняется только слой, через который идёт запрос. Заодно закрывает D31 (см. её строку): `Role`/`Actor` в `context.ts` удалены и реэкспортированы из `permissions.ts`, `actor.role` резолвится через `getMembership()`. | принято |
-| D40 | `/start` первого запуска, роли в `/help`, и `@grammyjs/conversations` ломает `tests/helpers/botHarness.ts` (Task 1.4) | **Кого пускает в диалог выбора пояса.** SPEC §7.2 помечает `/start` как «все» («Регистрация DM, выбор пояса, краткая справка по роли»), без исключения для «незнакомца» (`actor.role === null && !isSuperadmin`) — поэтому `src/bot/handlers/dm.ts` входит в диалог `timezone` (`entry: 'start'`) для **любого** `ctx.state.user`, если `users.timezone` ещё `null`, независимо от роли; только когда пояс уже сохранён, `/start` показывает обычный `texts.start.*`. Сигнал «первый ли это `/start`» — именно `user.timezone === null`, а не `dm_started_at` (тот выставляется до входа в диалог и не годится как признак). **Роли в `/help`.** `src/bot/texts/ru.ts`'s `texts.help` различает только `superadmin`/`staff`(Owner и Member вместе)/`stranger` — до Task 1.4 у Owner и Member нет собственных команд (они появляются в задачах 1.5/1.9/1.10 и позже), поэтому `can()` (`src/domain/people/permissions.ts`) сейчас нечем развести между ними в тексте справки; когда у Owner/Member появятся разные команды, `texts.help.staff` нужно будет расщепить и обусловить через `can()`. `/help` теперь содержательно отличается от `/start`: `/start` — приветствие (+ в первый раз запускает выбор пояса), `/help` — обзор доступных команд; раньше (фаза 0) они были побайтово идентичны, это фиксировалось как заведомый долг в ledger фазы 0. **`@grammyjs/conversations` обходит транспортные transformers.** Прочитан исходник `@grammyjs/conversations@2.1.1`'s `plugin.js` (`hydrateContext`): для каждого контекста внутри диалога плагин строит **новый** `Api`-инстанс через `new Api(protoApi.token, protoApi.options)`, где `protoApi = ctx.api` снаружи диалога, — берутся только `token`/`options` конструктора, но не трансформеры, установленные через `bot.api.config.use()` (`autoRetry`, `apiThrottler`, и prежний фейковый transformer `tests/helpers/botHarness.ts`). Это не задокументировано ни в CLAUDE.md §5, ни в официальных доках плагина (проверено через Context7 `/grammyjs/conversations` — ни в разделах про `external`/`waitForCallbackQuery`, ни в разделе «Testing»), и не проявлялось раньше, потому что Task 1.4 — первая задача, использующая `createConversation`. В тестах это било реальными HTTP-запросами на `https://api.telegram.org` с фиктивным токеном → `404`. Исправлено добавлением `client.fetch` (`ApiClientOptions.fetch`, тоже часть `options`, а значит наследуется новым `Api`) в `createBot`'s `opts` (`src/bot/bot.ts`) — `tests/helpers/botHarness.ts` передаёт туда `createFakeFetch(calls)`, который фейкует HTTP-уровень (a не transformer-уровень) и пишет в тот же общий массив `calls`, что и прежний `createRecordingTransformer`; последний остаётся как есть — он по-прежнему перехватывает обычные (не диалоговые) вызовы раньше, чем запрос вообще доходит до `fetch`, так что оба механизма не конфликтуют и существующие тесты не меняют поведение. **`ctx.state` недоступен внутри диалога.** По той же причине (диалог гидратирует контексты только базовым `Context`, без наших собственных middleware) `ctx.state`, который выставляет `createContextMiddleware`, недоступен на `ctx`, который получает функция-билдер диалога — только на «внешнем» `ctx`, который передаётся в колбэк `conversation.external((outsideCtx) => …)`. `src/bot/conversations/timezone.ts` поэтому читает `userId`/`actor` только так, а не напрямую с параметра `ctx`. **Фикстура `callback()` без `message` не резолвит `ctx.chat`.** `@grammyjs/conversations`' дефолтное хранилище сессий ключуется по `ctx.chat.id`; у grammY `ctx.chat` для callback-запроса берётся из `callback_query.message.chat` (`ctx.msg?.chat`). Реальный Telegram всегда прикладывает `message` к callback-запросу на кнопку, отправленную ботом в чат (не инлайн-режим, которым этот бот не пользуется), но `tests/helpers/updates.ts`'s `callback(from, data, message?)` принимал `message` как необязательный, и без него апдейт не находил активный диалог (тихо проглатывался, без ошибки и без ответа). Добавлен `botKeyboardMessage(chat)` в `tests/helpers/updates.ts` — минимальное сообщение от имени бота в приватном чате `chat`, которое тесты диалога передают третьим аргументом в `callback(...)`. | принято |
+| D40 | Уведомления только руководителю (решение пользователя, 2026-09-27) | Бот ничего не присылает сотрудникам в личку. Отменяются: уведомление о назначении, кнопки «Беру в работу» и «Готово» у исполнителя, режим проверки (review: «Готово» → «Принять»/«Вернуть»), напоминания исполнителю (`reminders.notifyAssignees`), сводка для сотрудников (`summary.forMembers`), команда `/my`, флаг `memberships.notify_assignments`. Это отличие от SPEC §3 (строки Member), §13.2, §13.4, §14 и §16. **Остаётся:** исполнитель как поле задачи (карточка, фильтр «по исполнителю», `/stats`), `/task` от сотрудника в группе (предложение руководителю), `/start`, `/timezone` и `/privacy` для всех. Пояс сотрудника по-прежнему нужен для расчёта сроков из его сообщений. Выполнение, о котором сотрудник пишет в группе («сделала»), ловит AI (Task 2.10). Задача 3.9 удалена. Колонки `tasks.review_*` и `memberships.notify_assignments` удаляются миграцией в Task 3.11, поля `summary.forMembers` и `reminders.notifyAssignees` убираются из схемы настроек там же. Уже выполненные задачи 1.2 и 1.4 не переделываются: строки прав Member в матрице и выбор пояса в `/start` безвредны. | принято |
+| D40 | `/start` первого запуска, роли в `/help`, и `@grammyjs/conversations` ломает `tests/helpers/botHarness.ts` (Task 1.4) | **Кого пускает в диалог выбора пояса.** SPEC §12.2 (таблица команд) помечает `/start` как «все» («Регистрация DM, выбор пояса, краткая справка по роли»), без исключения для «незнакомца» (`actor.role === null && !isSuperadmin`) — поэтому `src/bot/handlers/dm.ts` входит в диалог `timezone` (`entry: 'start'`) для **любого** `ctx.state.user`, если `users.timezone` ещё `null`, независимо от роли; только когда пояс уже сохранён, `/start` показывает обычный `texts.start.*`. Сигнал «первый ли это `/start`» — именно `user.timezone === null`, а не `dm_started_at` (тот выставляется до входа в диалог и не годится как признак). **Роли в `/help`.** `src/bot/texts/ru.ts`'s `texts.help` различает только `superadmin`/`staff`(Owner и Member вместе)/`stranger` — до Task 1.4 у Owner и Member нет собственных команд (они появляются в задачах 1.5/1.9/1.10 и позже), поэтому `can()` (`src/domain/people/permissions.ts`) сейчас нечем развести между ними в тексте справки; когда у Owner/Member появятся разные команды, `texts.help.staff` нужно будет расщепить и обусловить через `can()`. `/help` теперь содержательно отличается от `/start`: `/start` — приветствие (+ в первый раз запускает выбор пояса), `/help` — обзор доступных команд; раньше (фаза 0) они были побайтово идентичны, это фиксировалось как заведомый долг в ledger фазы 0. **`@grammyjs/conversations` обходит транспортные transformers.** Прочитан исходник `@grammyjs/conversations@2.1.1`'s `plugin.js` (`hydrateContext`): для каждого контекста внутри диалога плагин строит **новый** `Api`-инстанс через `new Api(protoApi.token, protoApi.options)`, где `protoApi = ctx.api` снаружи диалога, — берутся только `token`/`options` конструктора, но не трансформеры, установленные через `bot.api.config.use()` (`autoRetry`, `apiThrottler`, и prежний фейковый transformer `tests/helpers/botHarness.ts`). Это не задокументировано ни в CLAUDE.md §5, ни в официальных доках плагина (проверено через Context7 `/grammyjs/conversations` — ни в разделах про `external`/`waitForCallbackQuery`, ни в разделе «Testing»), и не проявлялось раньше, потому что Task 1.4 — первая задача, использующая `createConversation`. В тестах это било реальными HTTP-запросами на `https://api.telegram.org` с фиктивным токеном → `404`. Исправлено добавлением `client.fetch` (`ApiClientOptions.fetch`, тоже часть `options`, а значит наследуется новым `Api`) в `createBot`'s `opts` (`src/bot/bot.ts`) — `tests/helpers/botHarness.ts` передаёт туда `createFakeFetch(calls)`, который фейкует HTTP-уровень (a не transformer-уровень) и пишет в тот же общий массив `calls`, что и прежний `createRecordingTransformer`; последний остаётся как есть — он по-прежнему перехватывает обычные (не диалоговые) вызовы раньше, чем запрос вообще доходит до `fetch`, так что оба механизма не конфликтуют и существующие тесты не меняют поведение. **`ctx.state` недоступен внутри диалога.** По той же причине (диалог гидратирует контексты только базовым `Context`, без наших собственных middleware) `ctx.state`, который выставляет `createContextMiddleware`, недоступен на `ctx`, который получает функция-билдер диалога — только на «внешнем» `ctx`, который передаётся в колбэк `conversation.external((outsideCtx) => …)`. `src/bot/conversations/timezone.ts` поэтому читает `userId`/`actor` только так, а не напрямую с параметра `ctx`. **Фикстура `callback()` без `message` не резолвит `ctx.chat`.** `@grammyjs/conversations`' дефолтное хранилище сессий ключуется по `ctx.chat.id`; у grammY `ctx.chat` для callback-запроса берётся из `callback_query.message.chat` (`ctx.msg?.chat`). Реальный Telegram всегда прикладывает `message` к callback-запросу на кнопку, отправленную ботом в чат (не инлайн-режим, которым этот бот не пользуется), но `tests/helpers/updates.ts`'s `callback(from, data, message?)` принимал `message` как необязательный, и без него апдейт не находил активный диалог (тихо проглатывался, без ошибки и без ответа). Добавлен `botKeyboardMessage(chat)` в `tests/helpers/updates.ts` — минимальное сообщение от имени бота в приватном чате `chat`, которое тесты диалога передают третьим аргументом в `callback(...)`. | принято |
 
 ## Контрольные точки пользователя (👤)
 
@@ -171,7 +172,7 @@ export type Role = 'owner' | 'member';
 export interface Actor { userId: number | null; isSuperadmin: boolean; role: Role | null; dmStarted: boolean }
 
 // src/domain/tasks/service.ts
-export interface TaskChange { type: 'created' | 'updated' | 'status_changed' | 'review_requested' | 'review_accepted' | 'review_returned' | 'deleted'; diff: Record<string, [unknown, unknown]> }
+export interface TaskChange { type: 'created' | 'updated' | 'status_changed' | 'deleted'; diff: Record<string, [unknown, unknown]> }
 export interface TaskHook { name: string; afterChange(tx: Tx, task: TaskRow | null, change: TaskChange, deps: Pick<AppDeps, 'clock' | 'config'>): Promise<void> }
 ```
 
@@ -1364,12 +1365,12 @@ describe('stage 0 heuristics (SPEC §7.3)', () => {
 
 **Файлы:** создать `src/bot/handlers/people.ts`, `src/bot/views/people.ts`, `src/bot/conversations/editPerson.ts`; тесты `tests/unit/domain/aliases.test.ts`, `tests/integration/bot/people.test.ts`.
 
-**Интерфейсы:** Produces `parseAliases(input: string): string[]` в `src/domain/people/repo.ts`, а также `updatePerson(db, { membershipId, displayName?, aliases?, notifyAssignments? })`.
+**Интерфейсы:** Produces `parseAliases(input: string): string[]` в `src/domain/people/repo.ts`, а также `updatePerson(db, { membershipId, displayName?, aliases? })` (без `notifyAssignments`, D40).
 
 - [ ] **Шаг 1: падающие тесты**
   - `parseAliases('Маша, Машенька ,маша,, ')` → `['Маша', 'Машенька']` (регистронезависимая дедупликация, пустые убираются).
   - Больше 10 алиасов или алиас длиннее 30 символов → ошибка.
-  - `/people` (owner) → список: имя, алиасы, пояс, 🔔 уведомления вкл/выкл, статус DM.
+  - `/people` (owner) → список: имя, алиасы, пояс (без переключателя уведомлений, D40).
   - Редактирование имени и алиасов через диалог сохраняется.
   - member → `forbidden`.
 - [ ] **Шаг 2:** FAIL.
@@ -1384,7 +1385,7 @@ describe('stage 0 heuristics (SPEC §7.3)', () => {
 **Интерфейсы:**
 - Produces:
   - `checkPrivacyMode(deps, me: UserFromGetMe): Promise<void>` — при `can_read_all_group_messages === false` пишет warn в лог и вызывает `errors.alert('privacy_mode', texts.admin.privacyModeOn)`;
-  - `syncCommands(deps, api)` — `setMyCommands` для scope: все личные чаты (`/start /help /my /timezone /privacy`), все группы (`/task /privacy`), чат owner (полный список SPEC §12.2), чаты superadmin (плюс `/admin /debug /reanalyze`).
+  - `syncCommands(deps, api)` — `setMyCommands` для scope: все личные чаты (`/start /help /timezone /privacy`; `/my` нет, D40), все группы (`/task /privacy`), чат owner (полный список SPEC §12.2), чаты superadmin (плюс `/admin /debug /reanalyze`).
 
 - [ ] **Шаг 1: падающие тесты**
   - `getMe` с `can_read_all_group_messages: false` → superadmin получает инструкцию «Отключите privacy mode и **заново добавьте бота** в группы».
@@ -2375,13 +2376,14 @@ describe('eval dataset (SPEC §20.1)', () => {
 - [ ] **Шаг 3:** критерий включения (SPEC §9.4): теряется не больше 2% позитивных кейсов и стоимость заметно снижается. Иначе `AI_PREFILTER=off`. Решение — в `COMPARISON.md`.
 
 ---
-## Фаза 3 — Задачи, напоминания, исполнители (ветка `phase-3-tasks`)
+## Фаза 3 — Задачи и напоминания руководителю (ветка `phase-3-tasks`)
 
 **Решение по ходу:** перед Task 3.1 обсудить с пользователем D6 (`dedupe_key` с версией) и D7 (правила планирования overdue).
 
 **Приёмка (SPEC §22):**
 - unit-тесты расписания: часовые пояса, all-day, переходы DST, тихие часы, изменение срока;
-- сквозной сценарий: задача → напоминание накануне → snooze → due → «Готово» от исполнителя → Review → «Принять» → архив;
+- сквозной сценарий: задача → напоминание накануне → snooze → due → «Выполнено» от руководителя → архив (без review, D40);
+- сотрудникам бот ничего не присылает в личку (D40);
 - сводка приходит в 09:00 в поясе Owner.
 
 ### Task 3.1: Планировщик уведомлений задачи (чистая функция)
@@ -2390,24 +2392,23 @@ describe('eval dataset (SPEC §20.1)', () => {
 
 **Интерфейсы:**
 - Produces:
-  - `interface PlanRecipient { userId: number; zone: string; role: 'owner' | 'assignee' }`;
+  - `interface PlanRecipient { userId: number; zone: string }` — получатель всегда только owner (D40);
   - `interface PlannedNotification { kind: 'pre_due' | 'due' | 'overdue'; recipientUserId: number; fireAt: Date; dedupeKey: string }`;
-  - `planTaskNotifications(a: { task: { id: number; version: number; dueAt: Date | null; dueAllDay: boolean; dueTz: string | null; status: string; reviewPending: boolean }; recipients: PlanRecipient[]; reminders: Settings['reminders']; now: Date }): PlannedNotification[]`;
+  - `planTaskNotifications(a: { task: { id: number; version: number; dueAt: Date | null; dueAllDay: boolean; dueTz: string | null; status: string }; recipients: PlanRecipient[]; reminders: Settings['reminders']; now: Date }): PlannedNotification[]`;
   - `nextOverdueAfter(a: { task; recipient: PlanRecipient; reminders; after: Date }): PlannedNotification | null` — используется для цепочки в 3.3.
 
-- [ ] **Шаг 1: падающие тесты** (SPEC §13.2, D6–D9)
+- [ ] **Шаг 1: падающие тесты** (SPEC §13.2, D6–D8, D40)
 
 ```ts
 import { describe, it, expect } from 'vitest';
 import { planTaskNotifications, type PlanRecipient } from '../../../src/domain/notifications/plan.js';
 
-const reminders = { preDueTime: '10:00', allDayDueTime: '10:00', overdueTime: '10:00', notifyAssignees: true, groupOverdueThreshold: 3 };
-const owner: PlanRecipient = { userId: 10, zone: 'Europe/Moscow', role: 'owner' };
-const maria: PlanRecipient = { userId: 20, zone: 'Europe/Moscow', role: 'assignee' };
+const reminders = { preDueTime: '10:00', allDayDueTime: '10:00', overdueTime: '10:00', groupOverdueThreshold: 3 };
+const owner: PlanRecipient = { userId: 10, zone: 'Europe/Moscow' };
 const FRI_18_MSK = new Date('2026-09-25T15:00:00Z');
 const FRI_ALLDAY_MSK = new Date('2026-09-25T20:59:00Z');
-const task = (o: Partial<{ id: number; version: number; dueAt: Date | null; dueAllDay: boolean; dueTz: string | null; status: string; reviewPending: boolean }> = {}) =>
-  ({ id: 1, version: 1, dueAt: FRI_18_MSK, dueAllDay: false, dueTz: 'Europe/Moscow', status: 'open', reviewPending: false, ...o });
+const task = (o: Partial<{ id: number; version: number; dueAt: Date | null; dueAllDay: boolean; dueTz: string | null; status: string }> = {}) =>
+  ({ id: 1, version: 1, dueAt: FRI_18_MSK, dueAllDay: false, dueTz: 'Europe/Moscow', status: 'open', ...o });
 const plan = (t: ReturnType<typeof task>, now: string, recipients: PlanRecipient[] = [owner], r = reminders) =>
   planTaskNotifications({ task: t, recipients, reminders: r, now: new Date(now) })
     .map((n) => [n.kind, n.recipientUserId, n.fireAt.toISOString(), n.dedupeKey]);
@@ -2432,7 +2433,7 @@ describe('planTaskNotifications', () => {
     expect(plan(task({ dueAt: FRI_ALLDAY_MSK, dueAllDay: true }), '2026-09-24T12:00:00Z').map((x) => x[0])).toEqual(['due', 'overdue']);
   });
   it('uses the recipient zone for all-day dates', () => {
-    const yekt: PlanRecipient = { userId: 10, zone: 'Asia/Yekaterinburg', role: 'owner' };
+    const yekt: PlanRecipient = { userId: 10, zone: 'Asia/Yekaterinburg' };
     expect(plan(task({ dueAt: FRI_ALLDAY_MSK, dueAllDay: true }), '2026-09-23T03:00:00Z', [yekt]).map((x) => x[2])).toEqual([
       '2026-09-24T05:00:00.000Z', '2026-09-25T05:00:00.000Z', '2026-09-26T05:00:00.000Z',
     ]);
@@ -2447,7 +2448,7 @@ describe('planTaskNotifications', () => {
     expect(plan(task({ dueAt: due0900 }), '2026-09-23T09:00:00Z').at(-1)?.[2]).toBe('2026-09-25T07:00:00.000Z');
   });
   it('handles DST in the recipient zone', () => {
-    const berlin: PlanRecipient = { userId: 10, zone: 'Europe/Berlin', role: 'owner' };
+    const berlin: PlanRecipient = { userId: 10, zone: 'Europe/Berlin' };
     const t = task({ dueAt: new Date('2026-10-25T22:59:00Z'), dueAllDay: true, dueTz: 'Europe/Berlin' });
     expect(plan(t, '2026-10-20T10:00:00Z', [berlin]).map((x) => x[2])).toEqual([
       '2026-10-24T08:00:00.000Z', '2026-10-25T09:00:00.000Z', '2026-10-26T09:00:00.000Z',
@@ -2458,11 +2459,8 @@ describe('planTaskNotifications', () => {
     expect(plan(task({ status: 'done' }), '2026-09-23T09:00:00Z')).toEqual([]);
     expect(plan(task({ status: 'cancelled' }), '2026-09-23T09:00:00Z')).toEqual([]);
   });
-  it('reminds in_progress tasks; skips the assignee (not the owner) during review (D9)', () => {
+  it('reminds in_progress tasks the same way', () => {
     expect(plan(task({ status: 'in_progress' }), '2026-09-23T09:00:00Z')).toHaveLength(3);
-    const r = plan(task({ reviewPending: true }), '2026-09-23T09:00:00Z', [owner, maria]);
-    expect(r.every((x) => x[1] === 10)).toBe(true);
-    expect(r).toHaveLength(3);
   });
   it('embeds the task version in dedupe keys (D6) and honours custom times', () => {
     const r = plan(task({ version: 3 }), '2026-09-23T09:00:00Z', [owner], { ...reminders, preDueTime: '09:00' });
@@ -2486,19 +2484,15 @@ describe('planTaskNotifications', () => {
 
 **Интерфейсы:**
 - Produces:
-  - `resolveRecipients(tx, task: TaskRow, settings: Settings): Promise<PlanRecipient[]>`:
-    - owner получает уведомления, если `dm_started_at` не пусто и `dm_blocked=false`;
-    - исполнитель-member — если он не owner, `settings.reminders.notifyAssignees=true`, DM начат и не заблокирован;
-    - пояс получателя: `users.timezone`, иначе пояс workspace;
+  - `resolveRecipients(tx, task: TaskRow, settings: Settings): Promise<PlanRecipient[]>` — только owner (D40), если `dm_started_at` не пусто и `dm_blocked=false`; иначе пустой список. Пояс: `users.timezone`, иначе пояс workspace;
   - `remindersHook: TaskHook` — отменяет все `scheduled` уведомления задачи (включая snooze: «любое изменение → отмена всех», SPEC §13.2), затем вставляет план `ON CONFLICT (dedupe_key) DO NOTHING`.
 
 - [ ] **Шаг 1: падающие тесты**
-  1. Создание задачи со сроком → строки `notifications` для owner и исполнителя (DM начат).
-  2. Исполнитель не начал DM → только owner. `notifyAssignees=false` → только owner. Исполнитель и есть owner → одна копия.
+  1. Создание задачи со сроком и исполнителем-сотрудником → строки `notifications` только для owner (D40).
+  2. Owner не начал DM или заблокировал бота → уведомлений нет.
   3. Изменение срока → старые строки `cancelled`, новые `scheduled` с `v2` в ключе.
   4. Перенос срока в пределах того же дня после уже отправленного `due` → новая строка создаётся без конфликта (D6).
   5. `done` или `cancelled` → все `scheduled` отменены.
-  6. Review у исполнителя → его уведомления `cancelled`, у owner остаются (D9).
 - [ ] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
 - [ ] **Шаг 5: коммит и push:** `feat(notifications): reschedule reminders on every task change`.
 
@@ -2509,9 +2503,9 @@ describe('planTaskNotifications', () => {
 **Интерфейсы:**
 - Produces:
   - `notifyJob: Job`;
-  - `renderReminder(v: { kind: 'pre_due' | 'due' | 'overdue' | 'snooze'; task: TaskListItem; viewerZone: string; forAssignee: boolean }): { text: string; buttons: Buttons }` — кнопки `[✅ Готово] [⏰ +1 час] [📅 Завтра] [🕐 Выбрать время]` (SPEC §13.3);
+  - `renderReminder(v: { kind: 'pre_due' | 'due' | 'overdue' | 'snooze'; task: TaskListItem; viewerZone: string }): { text: string; buttons: Buttons }` — кнопки `[✅ Готово] [⏰ +1 час] [📅 Завтра] [🕐 Выбрать время]` (SPEC §13.3);
   - `renderOverdueDigest(items: TaskListItem[], viewerZone): { text; buttons }`;
-  - `interface TaskListItem { id: number; title: string; assigneeName: string | null; dueAt: Date | null; dueAllDay: boolean; dueTz: string | null; status: string; reviewPending: boolean }` и `getTaskListItem(db, taskId): Promise<TaskListItem | null>` в `src/domain/tasks/queries.ts` (задачи 3.5 и 3.7 дополняют этот файл).
+  - `interface TaskListItem { id: number; title: string; assigneeName: string | null; dueAt: Date | null; dueAllDay: boolean; dueTz: string | null; status: string }` и `getTaskListItem(db, taskId): Promise<TaskListItem | null>` в `src/domain/tasks/queries.ts` (задачи 3.5 и 3.7 дополняют этот файл).
 
 - [ ] **Шаг 1: падающие тесты** (интеграционные, FakeMessenger, `fixedClock`)
   1. Scheduled `due` с `fire_at <= now` → отправлено, `status='sent'`, `sent_tg_message_id` заполнен.
@@ -2522,7 +2516,6 @@ describe('planTaskNotifications', () => {
   6. Тихие часы: `pre_due`, `overdue` и `summary` → `cancelled`, `last_error='quiet'`, цепочка `overdue` продолжается. `due` и `snooze` отправляются (SPEC §13.5).
   7. `send` бросает `rate_limited` или `network` → `attempts++`, `fire_at` сдвигается по `nextAttemptAt`. После 5 неудач → `failed`.
   8. `forbidden` (403) → `users.dm_blocked=true`, все `scheduled` этого пользователя `cancelled`.
-  9. У исполнителя в review уведомление в момент отправки не уходит.
 - [ ] **Шаг 2:** FAIL.
 - [ ] **Шаг 3: реализация.** Одна транзакция: `SELECT … WHERE status='scheduled' AND fire_at <= $now ORDER BY fire_at LIMIT 50 FOR UPDATE SKIP LOCKED` (SPEC §13.1) → проверка актуальности → группировка → отправка через throttled messenger → обновление статусов. Сводки (`kind='summary'`) рендерятся в момент отправки (3.5).
 - [ ] **Шаг 4:** PASS.
@@ -2546,12 +2539,12 @@ describe('planTaskNotifications', () => {
     - `today18` → `2026-09-23T15:00Z`; при `now=18:30 МСК` → `null`;
     - `dayafter` → `2026-09-25T07:00Z`.
   - Кнопки:
-    1. «⏰ +1 час» от исполнителя → snooze только для исполнителя, срок задачи не изменился, у owner новых уведомлений нет (SPEC §13.3).
+    1. «⏰ +1 час» от owner → snooze-уведомление, срок задачи не изменился (SPEC §13.3).
     2. «🕐 Выбрать время» → `[Через 3 ч] [Сегодня 18:00] [Послезавтра] [Ввести…]`. «Ввести…» → текст → `parseDateText` → превью → snooze.
-    3. «✅ Готово» от owner → задача `done`. От исполнителя → review (3.9).
-    4. Кнопка напоминания по чужой задаче (подделанный callback) → `forbidden`.
+    3. «✅ Готово» от owner → задача `done`.
+    4. Кнопку напоминания нажимает не owner (подделанный или пересланный callback) → `forbidden`.
 - [ ] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(reminders): add done and per-recipient snooze buttons`.
+- [ ] **Шаг 5: коммит и push:** `feat(reminders): add done and snooze buttons`.
 
 ### Task 3.5: Утренняя сводка
 
@@ -2559,25 +2552,23 @@ describe('planTaskNotifications', () => {
 
 **Интерфейсы:**
 - Produces:
-  - `summarySections(db, { workspaceId, viewerUserId, scope: 'owner' | 'member', now, zone }): Promise<{ overdue: TaskListItem[]; today: TaskListItem[]; review: TaskListItem[]; inboxCount: number; noDue: TaskListItem[]; noDueTotal: number }>`;
-  - `renderSummary(s, { date: Date; zone: string; scope }): { text: string; buttons: Buttons }`;
-  - `ensureSummariesJob: Job` — для owner (и для исполнителей при `summary.forMembers`) держит одну scheduled-сводку на следующее `summary.time` в поясе получателя; ключ `summary:{ws}:{user}:{date}`.
+  - `summarySections(db, { workspaceId, now, zone }): Promise<{ overdue: TaskListItem[]; today: TaskListItem[]; inboxCount: number; noDue: TaskListItem[]; noDueTotal: number }>` — секции «Ждут вашей проверки» нет (D40);
+  - `renderSummary(s, { date: Date; zone: string }): { text: string; buttons: Buttons }`;
+  - `ensureSummariesJob: Job` — для owner держит одну scheduled-сводку на следующее `summary.time` в поясе получателя; ключ `summary:{ws}:{user}:{date}`.
 
 - [ ] **Шаг 1: падающие тесты**
   - View:
-    - все секции в порядке SPEC §13.4, заголовок `☀️ Доброе утро! Сводка на пт, 25 сен`;
+    - секции в порядке SPEC §13.4 без «Ждут вашей проверки» (D40), заголовок `☀️ Доброе утро! Сводка на пт, 25 сен`;
     - пустые секции не выводятся;
     - всё пусто → `Задач на сегодня нет 🎉`;
     - «Без срока»: топ-5 самых старых и `ещё 2 → /tasks`;
     - кнопки `[📋 Все задачи] [📥 Разобрать]`;
     - при 200 задачах текст не длиннее 4096 символов (секции обрезаются с «ещё N»).
-    - для `scope='member'` нет секций inbox и review.
   - Integration:
     1. Owner в поясе Asia/Yekaterinburg, `summary.time='09:00'`. Тик в `03:59Z` → ничего; тик в `04:00Z` → сводка отправлена, создана запись на завтра.
     2. `summary.enabled=false` → записи не создаются, уже созданные отменены.
     3. Смена `summary.time` через `/settings` → scheduled-сводка пересоздана.
-    4. `forMembers=true` → исполнитель с начатым DM получает сводку по своим задачам.
-    5. Тихий день (`dateRanges`) → сводка подавлена, на следующий день приходит.
+    4. Тихий день (`dateRanges`) → сводка подавлена, на следующий день приходит.
 - [ ] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
 - [ ] **Шаг 5: коммит и push:** `feat(summary): add daily morning summary`.
 
@@ -2587,7 +2578,7 @@ describe('planTaskNotifications', () => {
 
 **Интерфейсы:**
 - Produces:
-  - `renderTaskCard(t: TaskCardView, viewerZone: string, viewer: 'owner' | 'assignee'): { text; buttons }` — формат SPEC §12.4;
+  - `renderTaskCard(t: TaskCardView, viewerZone: string): { text; buttons }` — формат SPEC §12.4;
   - `TaskService.cancel`, `restore` (→ `open`), `deleteForever` (удаляет задачу, события и уведомления);
   - общий редактор полей `editFieldsConversation`, который делят 2.14 и 3.6: после 2.14 вынести общие шаги в `src/bot/conversations/editFields.ts`.
 
@@ -2595,7 +2586,6 @@ describe('planTaskNotifications', () => {
   - View:
     - snapshot карточки owner с кнопками `[✅ Выполнено] [▶️ В работу] / [✏️ Изменить] [⏰ Отложить] / [🗑 Отменить] [📜 История]`;
     - у архивной задачи кнопки `[♻️ Восстановить] [🗑 Удалить навсегда]`;
-    - у исполнителя только `[▶️ В работу] [✅ Готово]`.
   - Действия:
     1. «Выполнено» → `done`, `completed_at`, `completed_by`, событие `status_changed`, напоминания отменены.
     2. «В работу» → `in_progress`.
@@ -2610,22 +2600,21 @@ describe('planTaskNotifications', () => {
 - [ ] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
 - [ ] **Шаг 5: коммит и push:** `feat(tasks): add task card with status, edit, archive and delete actions`.
 
-### Task 3.7: Списки и фильтры — `/tasks`, `/today`, `/overdue`, `/archive`, `/my`
+### Task 3.7: Списки и фильтры — `/tasks`, `/today`, `/overdue`, `/archive`
 
 **Файлы:** изменить `src/domain/tasks/queries.ts`; создать `src/bot/views/taskList.ts`, `src/bot/handlers/lists.ts`; тесты `tests/unit/bot/views/taskList.test.ts`, `tests/integration/domain/taskQueries.test.ts`, `tests/integration/bot/lists.test.ts`.
 
 **Интерфейсы:**
 - Produces:
-  - `type ListFilter = { kind: 'open' } | { kind: 'today' } | { kind: 'overdue' } | { kind: 'no_due' } | { kind: 'review' } | { kind: 'assignee'; userId: number | 'none' | 'all' } | { kind: 'chat'; chatId: number } | { kind: 'archive' } | { kind: 'my'; userId: number } | { kind: 'today_and_overdue' }`;
+  - `type ListFilter = { kind: 'open' } | { kind: 'today' } | { kind: 'overdue' } | { kind: 'no_due' } | { kind: 'assignee'; userId: number | 'none' | 'all' } | { kind: 'chat'; chatId: number } | { kind: 'archive' } | { kind: 'today_and_overdue' }`;
   - Consumes: `TaskListItem` из 3.3;
   - `listTasks(db, { workspaceId, filter, page, pageSize = 5, now, zone }): Promise<{ items: TaskListItem[]; total: number; pages: number }>`;
-  - `rowMarker(item, now, zone): '🟣' | '🔴' | '🔵' | '🟡' | '⚪'` (D24);
+  - `rowMarker(item, now, zone): '🔴' | '🔵' | '🟡' | '⚪'` (D24);
   - `renderTaskList(r, { filter, page, zone, now }): { text; buttons }`.
-  - Callback: `v1:l:<f>:<page>[:<arg>]`, где `f` ∈ `all|tod|ovd|nod|rev|asg|cht|arc|my|tov`.
+  - Callback: `v1:l:<f>:<page>[:<arg>]`, где `f` ∈ `all|tod|ovd|nod|asg|cht|arc|tov`.
 
 - [ ] **Шаг 1: падающие тесты**
   - `rowMarker`:
-    - review → 🟣, даже если задача просрочена;
     - просрочено → 🔴;
     - `in_progress` и не просрочено → 🔵;
     - срок сегодня в поясе получателя → 🟡;
@@ -2635,11 +2624,9 @@ describe('planTaskNotifications', () => {
   - Пагинация: 12 задач → `стр 1/3`. На первой странице нет `◀️`, на последней нет `▶️`.
   - Запросы:
     - `today` в поясе Yekaterinburg отличается от Moscow на границе суток (тест на 20:30Z);
-    - `archive` — `done` и `cancelled`, от новых к старым;
-    - `my` — только задачи исполнителя.
+    - `archive` — `done` и `cancelled`, от новых к старым.
   - Бот:
     - `/today` = сегодня + просроченные;
-    - `/my` от member показывает только его задачи;
     - member не может вызвать `/tasks` (`forbidden`);
     - нажатие на номер открывает карточку;
     - меню «По исполнителю ▾» и «По чату ▾» работает.
@@ -2671,24 +2658,9 @@ describe('planTaskNotifications', () => {
 - [ ] **Шаг 4:** PASS.
 - [ ] **Шаг 5: коммит и push:** `feat(tasks): add search and per-assignee statistics`.
 
-### Task 3.9: Поток исполнителя — назначение, «В работу», «Готово» → Review
+### Task 3.9: (удалена — D40)
 
-**Файлы:** создать `src/domain/tasks/review.ts`, `src/bot/handlers/assigneeCallbacks.ts`, `src/bot/views/assignment.ts`, `src/bot/conversations/returnComment.ts`; изменить `src/domain/proposals/decide.ts` (уведомление при accept); тест `tests/integration/bot/assigneeFlow.test.ts`.
-
-**Интерфейсы:**
-- Produces: `requestReview(deps, { taskId, actor })`, `acceptReview(deps, { taskId, actor })`, `returnReview(deps, { taskId, actor, comment: string | null })`, `notifyAssignment(deps, task)`.
-
-- [ ] **Шаг 1: падающие тесты** (SPEC §14)
-  1. Accept proposal с исполнителем Мария (DM начат, не заблокирована, `notify_assignments=true`) → Мария получает «📌 Вам поставлена задача: … · срок … · от Анна» `[▶️ Беру в работу] [✅ Готово]`.
-  2. DM не начат, заблокирован или `notify_assignments=false` → сообщения нет, всё остальное работает.
-  3. «Беру в работу» → `in_progress`, событие.
-  4. «Готово» от Марии → статус не меняется, `review_pending=true`, `review_requested_by` и `review_requested_at` заполнены, событие `review_requested`. Owner получает «🟣 Мария отметила выполненной: T12 …» `[✅ Принять] [↩️ Вернуть в работу]`.
-  5. «Принять» → `done`, `review_pending=false`, событие `review_accepted`.
-  6. «Вернуть» → диалог «Добавить комментарий?» (`[Без комментария]` или текст) → `review_pending=false`, `in_progress`. Мария получает «Задачу вернули в работу» и комментарий.
-  7. Мария жмёт «Готово» по чужой задаче → `forbidden`. `/my` не показывает чужие задачи.
-  8. Повторное «Готово» во время review → «Уже на проверке».
-- [ ] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(tasks): add assignee flow with review and return`.
+Поток исполнителя (уведомление о назначении, «Беру в работу», «Готово» → проверка → «Принять»/«Вернуть», `/my`) не реализуется: по решению пользователя бот присылает уведомления только руководителю. Оркестратор пропускает эту задачу.
 
 ### Task 3.10: Ручное создание — `/task` в группе, `/new`, свободный текст, пересылки
 
@@ -2707,7 +2679,7 @@ describe('planTaskNotifications', () => {
   5. `/task` без текста и без ответа → игнорируется, пишется debug-лог.
   6. `/new` → шаги название → исполнитель → срок → приоритет → подтверждение → задача `origin='manual_dm'`.
   7. Свободный текст owner'а в DM (вне диалога) → черновик «Создать задачу?» `[✅ Создать] [✏️ Изменить] [❌ Отмена]`.
-  8. Свободный текст от member → подсказка про `/my`, LLM не вызывается.
+  8. Свободный текст от member → вежливый ответ, что бот работает только с руководителем, LLM не вызывается.
   9. Три пересланных сообщения за 1 с → один черновик `origin='forward'` с цитатой первого и автором из `forward_origin`. Пересылки с интервалом 5 с → два черновика (D18).
   10. Бюджет превышен → ручное создание всё равно работает (SPEC §9.2).
   11. LLM недоступен → черновик с названием из первых 80 символов (unit на `extractSingle`).
@@ -2735,12 +2707,17 @@ describe('planTaskNotifications', () => {
     - Парсер извлекает даты регуляркой `\d{1,2}\.\d{1,2}(\.\d{4})?` и не зависит от слов «с/по», поэтому кириллица в коде не нужна.
   - `parseTimeWindow`: `22:00-08:00`, `22-8` → `22:00` и `08:00`; `25-8` → `null`.
   - Бот:
-    1. Разделы: Сводка (вкл/выкл, время, для сотрудников); Напоминания (время `preDue`, `allDayDue`, `overdue`, «уведомлять исполнителей», порог группировки); Тихие часы (вкл/выкл, дни недели кнопками, окно, диапазоны дат — добавить и удалить); Часовой пояс школы; Реакции (👀 вкл/выкл, ✍ при подтверждении); Текст уведомления в чате (изменить или сбросить).
+    1. Разделы: Сводка (вкл/выкл, время); Напоминания (время `preDue`, `allDayDue`, `overdue`, порог группировки); Тихие часы (вкл/выкл, дни недели кнопками, окно, диапазоны дат — добавить и удалить); Часовой пояс школы; Реакции (👀 вкл/выкл, ✍ при подтверждении); Текст уведомления в чате (изменить или сбросить).
     2. Некорректное время → понятная ошибка, настройки не изменились.
     3. `/admin → AI-настройки` (superadmin): `ai.thresholds.low 0.3` сохраняется, `ai.thresholds.low 2` отклоняется zod. `batch.*` — так же.
     4. Member → `forbidden`.
 - [ ] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
 - [ ] **Шаг 5: коммит и push:** `feat(settings): add /settings menus and admin AI/batch tuning`.
+- [ ] **Шаг 6: чистка по D40.**
+  1. Убрать `summary.forMembers` и `reminders.notifyAssignees` из `SettingsSchema`, поправить тест defaults из Task 1.1. Сохранённые настройки с этими полями должны читаться без ошибок (лишние ключи отбрасываются).
+  2. Миграция: удалить `memberships.notify_assignments`, `tasks.review_pending`, `tasks.review_requested_by`, `tasks.review_requested_at`.
+  3. `pnpm lint && pnpm typecheck && pnpm test` — зелёные.
+  4. Коммит и push: `refactor(settings): drop member-notification settings and review columns (D40)`.
 
 ### Task 3.12: Удаление персональных данных (SPEC §19.3.3)
 
@@ -2785,15 +2762,15 @@ describe('planTaskNotifications', () => {
 
 - [ ] **Шаг 1: сквозной тест** (bot harness, `fixedClock`, FixtureClient; каждый шаг — `clock.set(...)` и `ticker.tickOnce()`):
   1. Среда, 12:00 МСК. Сообщение в группе «Маша, подготовь расписание к пятнице 18:00» → через 3 мин тик → карточка у owner → «✅ Создать».
-  2. Мария (DM начат) получила «📌 Вам поставлена задача».
-  3. Четверг, 10:00 МСК → `pre_due` у owner и у Марии.
-  4. Мария → «⏰ +1 час» → в 11:00 snooze-напоминание только у Марии.
-  5. Пятница, 18:00 → `due` у обоих.
-  6. Мария → «✅ Готово» → у owner 🟣-карточка.
-  7. Owner → «✅ Принять» → задача `done`, запланированный `overdue` отменён. В субботу в 10:00 по этой задаче ничего не отправлено. Задача видна в `/archive`.
+  2. Мария (DM начат) **ничего не получает** — ни о назначении, ни напоминаний (D40).
+  3. Четверг, 10:00 МСК → `pre_due` у owner.
+  4. Owner → «⏰ +1 час» → в 11:00 snooze-напоминание.
+  5. Пятница, 18:00 → `due` у owner.
+  6. Мария пишет в группе «сделала» ответом на поручение → owner получает предложение закрыть задачу.
+  7. Owner → «✅ Закрыть задачу» → задача `done`, запланированный `overdue` отменён. В субботу в 10:00 по этой задаче ничего не отправлено. Задача видна в `/archive`.
   8. Owner в поясе Asia/Yekaterinburg: сводка в 09:00 местного времени (`04:00Z`), в `03:59Z` её ещё нет.
 - [ ] **Шаг 2:** прогнать, исправить найденное. PASS.
-- [ ] **Шаг 3:** финальные `setMyCommands` для всех scope (SPEC §12.2) и `/help` по ролям.
+- [ ] **Шаг 3:** финальные `setMyCommands` для всех scope (SPEC §12.2, без `/my`, D40) и `/help` по ролям.
 - [ ] **Шаг 4: коммит и push:** `test(e2e): cover task lifecycle acceptance scenario`.
 - [ ] **Шаг 5: закрытие фазы.**
   1. `pnpm coverage` показывает не меньше 80% по `domain` и `ai/pipeline`.
@@ -2967,7 +2944,7 @@ SPEC §22: React + Vite + `@telegram-apps/telegram-ui`, раздача чере�
 | §11 карточки и действия | 2.11–2.15 |
 | §12 ручное создание, команды, списки, карточка, статистика | 3.6–3.10, 1.11, 3.14 |
 | §13 напоминания, сводка, тихие часы | 2.12 (quiet), 3.1–3.5, 3.11 |
-| §14 исполнители | 3.9 |
+| §14 исполнители | не реализуется (D40); исполнитель остаётся полем задачи (2.13, 3.7, 3.8) |
 | §15 жизненный цикл чатов | 1.6, 1.9, 1.11 |
 | §16 настройки | 1.1, 3.11 |
 | §17 окружения и переезд | 0.10, 1.5, 4.3, 4.5 |
