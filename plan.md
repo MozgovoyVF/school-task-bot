@@ -1210,7 +1210,7 @@ describe('zones', () => {
   - `redeemClaimCode(db, { code, userId, now }): Promise<{ ok: true; workspaceId: number; previousOwnerUserId: number | null } | { ok: false; reason: 'invalid' | 'expired' | 'used' }>`;
   - `afterOwnerChanged(deps, workspaceId): Promise<void>` в `src/domain/people/ownerChanged.ts` — вызывается после успешного `/claim`. В этой задаче функция только пишет в лог. Задача 1.6 добавляет в неё `requestPendingApprovals`, задача 1.11 — `syncCommands`, каждая со своим тестом.
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
   - Unit:
     - код состоит из 8 символов алфавита;
     - `normalizeClaimCode(' abcd-2345 ')` даёт `'ABCD2345'`;
@@ -1229,10 +1229,10 @@ describe('zones', () => {
     - `/transfer` от member → `forbidden`;
     - `/claim КОД` в группе игнорируется;
     - `/admin` → «Код владельца» (superadmin) → код.
-- [ ] **Шаг 2:** FAIL.
-- [ ] **Шаг 3: реализация.** Redeem выполняется в одной транзакции: `SELECT … FOR UPDATE` строки кода → проверки → понизить или удалить прежнего owner → назначить нового → `used_at`. Порядок «сначала понизить, потом назначить» сохраняет частичный уникальный индекс. `redeemClaimCode` никогда не логирует сам код.
-- [ ] **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(people): add one-time ownership transfer codes`.
+- [x] **Шаг 2:** FAIL.
+- [x] **Шаг 3: реализация.** Redeem выполняется в одной транзакции: `SELECT … FOR UPDATE` строки кода → проверки → понизить или удалить прежнего owner → назначить нового → `used_at`. Порядок «сначала понизить, потом назначить» сохраняет частичный уникальный индекс. `redeemClaimCode` никогда не логирует сам код.
+- [x] **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(people): add one-time ownership transfer codes`.
 
 ### Task 1.6: Жизненный цикл групповых чатов
 

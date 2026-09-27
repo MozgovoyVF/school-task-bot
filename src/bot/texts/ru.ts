@@ -5,6 +5,7 @@
  * so any dynamic value interpolated into a string here must be escaped first.
  */
 import type { RU_ZONES, ZoneLabel } from '../../time/zones.js';
+import { CLAIM_CODE_TTL_HOURS } from '../../config/constants.js';
 
 /** Minimal HTML escaping for values interpolated into `parse_mode: 'HTML'` messages. */
 function escapeHtml(input: string): string {
@@ -24,6 +25,15 @@ function formatContext(context: Record<string, unknown>): string {
   const entries = Object.entries(context);
   if (entries.length === 0) return '—';
   return entries.map(([key, value]) => `${escapeHtml(key)}=${escapeHtml(String(value))}`).join(', ');
+}
+
+/** "1 час" / "2 часа" / "5 часов" — standard Russian count agreement, used by `texts.transfer.code`. */
+function pluralizeChas(count: number): string {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) return 'час';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'часа';
+  return 'часов';
 }
 
 /** "1ч 02мин 03с" — a short, fixed-order duration for `/admin`'s uptime line. */
@@ -224,5 +234,41 @@ export const texts = {
         `Аптайм: ${formatUptime(uptimeSec)}`,
       ].join('\n');
     },
+    /** Button on the `/admin` panel that issues a claim code (Task 1.5, `src/bot/handlers/transfer.ts`). */
+    ownerCodeButton: 'Код владельца',
+  },
+  transfer: {
+    /** Prompt shown above `/transfer`'s two-button choice. */
+    prompt: 'Как поступить с текущим владельцем после того, как код будет использован?',
+    /** Button: the current owner keeps their membership, demoted to a regular member. */
+    demoteButton: 'Станет участником',
+    /** Button: the current owner's membership is removed entirely. */
+    removeButton: 'Будет исключён',
+    /**
+     * Sent after a claim code is generated (`/transfer`'s choice, or `/admin`'s
+     * "Код владельца" button). `code` is HTML-escaped, though in practice it
+     * only ever contains `CLAIM_ALPHABET` characters.
+     */
+    code(code: string): string {
+      const safeCode = escapeHtml(code);
+      return [
+        `Код передачи владения: <code>${safeCode}</code>`,
+        '',
+        `Отправьте его новому владельцу — в личном сообщении боту он должен ввести <code>/claim ${safeCode}</code>.`,
+        `Код действует ${String(CLAIM_CODE_TTL_HOURS)} ${pluralizeChas(CLAIM_CODE_TTL_HOURS)} и может быть использован только один раз.`,
+      ].join('\n');
+    },
+  },
+  claim: {
+    /** Sent when `/claim` is invoked with no code argument. */
+    usage: 'Введите код после команды, например: <code>/claim ABCD2345</code>.',
+    /** Sent after a successful `/claim` — the sender is now the workspace's owner. */
+    success: 'Готово! Теперь вы — владелец. Список доступных команд смотрите в /help.',
+    /** No `claim_codes` row matches the given code at all. */
+    invalid: 'Код не найден. Проверьте, пожалуйста, что ввели его правильно.',
+    /** The code matched but its `expires_at` is in the past. */
+    expired: 'Срок действия кода истёк. Попросите новый через /transfer.',
+    /** The code matched but was already redeemed. */
+    used: 'Этот код уже использован.',
   },
 };

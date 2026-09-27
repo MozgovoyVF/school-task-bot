@@ -4,6 +4,8 @@ import type { Env } from '../../config/env.js';
 import { texts } from '../texts/ru.js';
 import type { BotContext } from '../context.js';
 import { renderAdminPanel } from '../views/admin.js';
+import { renderAdminOwnerCodeButton } from '../views/transfer.js';
+import { toInlineKeyboard } from '../keyboards/build.js';
 
 export interface AdminHandlersDeps {
   config: Pick<Env, 'GIT_SHA'>;
@@ -14,10 +16,12 @@ export interface AdminHandlersDeps {
  * `/admin`: superadmin-only, shows `GIT_SHA` and elapsed uptime since
  * `startedAt` (a `Date` recorded once, at bot construction — computed via
  * `deps.clock` rather than `process.uptime()` so it stays deterministic
- * under `fixedClock` in tests).
+ * under `fixedClock` in tests). Also offers `texts.admin.ownerCodeButton`
+ * (Task 1.5), which issues a claim code without `/transfer`'s demote/remove choice —
+ * handled by the `v1:o:adm:0` callback in `src/bot/handlers/transfer.ts`
+ * (registered separately; this file only renders the button).
  *
- * `/testerror`: hidden, superadmin-only diagnostic that always throws; no
- * buttons because the callback_data codec doesn't exist until Task 1.3. It
+ * `/testerror`: hidden, superadmin-only diagnostic that always throws. It
  * is deliberately silent for non-superadmins — no reply, no error report —
  * so the command's mere existence isn't discoverable. The thrown error is
  * caught and reported by `src/bot/middleware/errors.ts`, not here.
@@ -30,7 +34,10 @@ export function registerAdminHandlers(bot: Bot<BotContext>, deps: AdminHandlersD
     }
     const uptimeSec = (deps.clock.now().getTime() - startedAt.getTime()) / 1000;
     const view = renderAdminPanel({ gitSha: deps.config.GIT_SHA, uptimeSec });
-    await ctx.reply(view.text, { parse_mode: 'HTML' });
+    await ctx.reply(view.text, {
+      parse_mode: 'HTML',
+      reply_markup: toInlineKeyboard(renderAdminOwnerCodeButton()),
+    });
   });
 
   bot.command('testerror', (ctx) => {
