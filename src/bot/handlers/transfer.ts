@@ -44,11 +44,21 @@ const ACTION_TO_PREVIOUS_OWNER_ACTION: Partial<Record<string, PreviousOwnerActio
  * `/claim` row; a group/supergroup update is silently ignored, matching
  * `/testerror`'s silent-for-the-wrong-audience pattern in `admin.ts`).
  *
+ * Both `/transfer` and its `v1:o:*` callback (which is where the code is
+ * actually generated and posted, including from `/admin`'s owner-code
+ * button) are DM-only too (plan.md D42): a claim code is a plaintext
+ * bearer secret for the whole workspace, and posting it into a group would
+ * let any member race the intended recipient to `/claim` it in DM. This
+ * also keeps SPEC §12.2's rule that `/privacy` is the only command the bot
+ * answers with text in a group. Non-private updates are silently ignored,
+ * same as `/claim`'s own group handling.
+ *
  * Permission (`transfer.generate`) is (re)checked on both the command and
  * the callback — CLAUDE.md §8: callback_data is never trusted on its own.
  */
 export function registerTransferHandlers(bot: Bot<BotContext>, deps: TransferHandlersDeps): void {
   bot.command('transfer', async (ctx) => {
+    if (ctx.chat?.type !== 'private') return;
     if (!can(ctx.state.actor, 'transfer.generate')) {
       await ctx.reply(texts.common.forbidden, { parse_mode: 'HTML' });
       return;
@@ -58,6 +68,10 @@ export function registerTransferHandlers(bot: Bot<BotContext>, deps: TransferHan
   });
 
   bot.callbackQuery(/^v1:o:/, async (ctx) => {
+    if (ctx.chat?.type !== 'private') {
+      await ctx.answerCallbackQuery();
+      return;
+    }
     const decoded = decodeCallback(ctx.callbackQuery.data);
     const previousOwnerAction = decoded ? ACTION_TO_PREVIOUS_OWNER_ACTION[decoded.action] : undefined;
     if (!decoded || previousOwnerAction === undefined) {

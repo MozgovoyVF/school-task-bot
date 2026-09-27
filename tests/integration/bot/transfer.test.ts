@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import { createBotHarness, type BotHarness } from '../../helpers/botHarness.js';
 import { dmText, groupText, callback, botKeyboardMessage } from '../../helpers/updates.js';
 import { texts } from '../../../src/bot/texts/ru.js';
-import { decodeCallback } from '../../../src/bot/keyboards/callbackCodec.js';
+import { decodeCallback, encodeCallback } from '../../../src/bot/keyboards/callbackCodec.js';
 import { upsertTelegramUser } from '../../../src/domain/people/repo.js';
 import { hashClaimCode } from '../../../src/domain/people/claim.js';
 import { claimCodes, memberships } from '../../../src/db/schema/index.js';
@@ -57,6 +57,24 @@ async function makeOwner(harness: BotHarness, tgUser: { id: number; firstName: s
   return userRow;
 }
 
+async function makeMember(harness: BotHarness, tgUser: { id: number; firstName: string }) {
+  const userRow = await upsertTelegramUser(harness.db, { id: tgUser.id, first_name: tgUser.firstName });
+  await harness.db.insert(memberships).values({
+    workspaceId: harness.deps.workspace.id,
+    userId: userRow.id,
+    role: 'member',
+    displayName: tgUser.firstName,
+  });
+  return userRow;
+}
+
+/** A message whose `.chat` is `GROUP` — stands in for the message a group-posted keyboard would be attached to. */
+function groupKeyboardMessage(chat: typeof GROUP, from: { id: number; firstName: string }) {
+  const msg = groupText(chat, from, '').message;
+  if (!msg) throw new Error('expected a message on the fixture update');
+  return msg;
+}
+
 describe('/transfer', () => {
   it('an owner picking "prior owner becomes a member" gets a message with the code', async () => {
     const harness = await createBotHarness();
@@ -87,12 +105,42 @@ describe('/transfer', () => {
 
   it('a member (no owner/superadmin role) is forbidden', async () => {
     const harness = await createBotHarness();
+    await makeMember(harness, MEMBER);
 
     await harness.send(dmText(MEMBER, '/transfer'));
 
     expect(harness.replies(MEMBER.id)).toEqual([texts.common.forbidden]);
     const codes = await harness.db.select().from(claimCodes);
     expect(codes).toHaveLength(0);
+  });
+
+  it('is ignored in a group chat, even for an owner (a claim code must never be posted in a group)', async () => {
+    const harness = await createBotHarness();
+    await harness.db.insert(memberships).values({
+      workspaceId: harness.deps.workspace.id,
+      userId: (await upsertTelegramUser(harness.db, { id: OWNER.id, first_name: OWNER.firstName })).id,
+      role: 'owner',
+      displayName: OWNER.firstName,
+    });
+
+    await harness.send(groupText(GROUP, OWNER, '/transfer'));
+
+    expect(harness.replies(GROUP.id)).toEqual([]);
+    const codes = await harness.db.select().from(claimCodes);
+    expect(codes).toHaveLength(0);
+  });
+
+  it('the v1:o:* callback is also ignored in a group chat (defense in depth — no code is ever generated)', async () => {
+    const harness = await createBotHarness();
+    await makeOwner(harness, OWNER);
+    const data = encodeCallback({ entity: 'o', action: 'dem', id: 0 });
+
+    await harness.send(callback(OWNER, data, groupKeyboardMessage(GROUP, OWNER)));
+
+    expect(harness.replies(GROUP.id)).toEqual([]);
+    const codes = await harness.db.select().from(claimCodes);
+    expect(codes).toHaveLength(0);
+    expect(harness.calls.some((c) => c.method === 'answerCallbackQuery')).toBe(true);
   });
 });
 

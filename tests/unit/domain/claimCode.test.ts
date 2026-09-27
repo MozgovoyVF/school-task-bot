@@ -48,4 +48,8 @@ describe('hashClaimCode', () => {
   it('produces different hashes for different codes', () => {
     expect(hashClaimCode('ABCD2345')).not.toBe(hashClaimCode('ABCD2346'));
   });
+
+  it('normalizes internally, so an un-normalized input hashes the same as its normalized form', () => {
+    expect(hashClaimCode(' abcd-2345 ')).toBe(hashClaimCode('ABCD2345'));
+  });
 });
