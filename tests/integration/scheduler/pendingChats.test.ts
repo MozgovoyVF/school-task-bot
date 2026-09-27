@@ -5,8 +5,11 @@ import { fixedClock } from '../../helpers/clock.js';
 import { createLogger } from '../../../src/ops/logger.js';
 import { loadEnv } from '../../../src/config/env.js';
 import { ensureDefaultWorkspace } from '../../../src/domain/workspaces/repo.js';
-import { upsertChatOnAdd } from '../../../src/domain/chats/repo.js';
-import { chats } from '../../../src/db/schema/index.js';
+import { upsertChatOnAdd, listExpiredPendingChats } from '../../../src/domain/chats/repo.js';
+import { approveChat, leaveExpiredPendingChat, type ChatLifecycleDeps } from '../../../src/domain/chats/lifecycle.js';
+import type { Actor } from '../../../src/domain/people/permissions.js';
+import { upsertTelegramUser } from '../../../src/domain/people/repo.js';
+import { chats, memberships } from '../../../src/db/schema/index.js';
 import { pendingChatsJob } from '../../../src/scheduler/jobs/pendingChats.js';
 import { FakeMessenger } from '../../helpers/fakeMessenger.js';
 
@@ -91,5 +94,51 @@ describe('pendingChatsJob', () => {
 
     await expect(pendingChatsJob.run(deps)).resolves.toBeUndefined();
     expect(deps.messenger.left).toEqual([]);
+  });
+
+  it('does not reverse an Owner approval that lands between the job listing an expired chat and processing it', async () => {
+    const clock = fixedClock('2026-09-23T12:00:00Z');
+    const deps = await makeDeps(clock);
+    const now = clock.now();
+
+    const chat = await makePendingChat(
+      deps.workspace.id,
+      -5,
+      new Date(now.getTime() - (72 * HOUR_MS + 60_000)),
+      now,
+    );
+
+    const ownerUser = await upsertTelegramUser(db, { id: 42, first_name: 'Anna' });
+    await db
+      .insert(memberships)
+      .values({ workspaceId: deps.workspace.id, userId: ownerUser.id, role: 'owner', displayName: 'Anna' });
+    const ownerActor: Actor = { userId: ownerUser.id, isSuperadmin: false, role: 'owner', dmStarted: true };
+    const lifecycleDeps: ChatLifecycleDeps = {
+      db,
+      messenger: deps.messenger,
+      clock,
+      logger: deps.logger,
+      superadminIds: deps.config.SUPERADMIN_TG_IDS,
+      workspace: deps.workspace,
+    };
+
+    // Simulates the job's own listing step (src/scheduler/jobs/pendingChats.ts) having already picked
+    // this chat up as expired.
+    const listed = await listExpiredPendingChats(db, new Date(now.getTime() - 72 * HOUR_MS));
+    expect(listed.map((c) => c.id)).toContain(chat.id);
+
+    // The Owner taps "Разрешить" in the window between the job's listing query and this chat's own
+    // per-chat processing (a real window: the job makes one live Telegram call per chat in a loop).
+    const approval = await approveChat(lifecycleDeps, chat.id, ownerActor);
+    expect(approval.ok).toBe(true);
+
+    // The job now reaches this chat using its (now stale) listing.
+    const claimed = await leaveExpiredPendingChat(deps, chat.id);
+
+    expect(claimed).toBeNull(); // the atomic claim found the chat no longer pending — a no-op
+    expect(deps.messenger.left).not.toContain(-5); // messenger.leaveChat was never called for it
+
+    const [after] = await db.select().from(chats).where(eq(chats.id, chat.id));
+    expect(after?.status).toBe('active'); // the approval stands
   });
 });

@@ -1,4 +1,4 @@
-import { and, eq, isNotNull, isNull, lte, ne } from 'drizzle-orm';
+import { and, eq, isNotNull, isNull, lte, ne, type SQL } from 'drizzle-orm';
 import type { Db, DbOrTx } from '../../db/client.js';
 import { chats, messages } from '../../db/schema/index.js';
 
@@ -95,6 +95,17 @@ export async function setPendingSinceIfMissing(db: DbOrTx, chatId: number, now: 
   return row ?? null;
 }
 
+/**
+ * Rolls back a `setPendingSinceIfMissing` stamp after the Owner notification
+ * that was supposed to go with it failed to send — mirrors `clearNoticeSlot`
+ * for `requestPendingApprovals` (`src/domain/chats/lifecycle.ts`), so a
+ * later call can retry instead of the 72h auto-leave clock silently running
+ * out on a chat the Owner was never actually told about.
+ */
+export async function clearPendingSince(db: DbOrTx, chatId: number): Promise<void> {
+  await db.update(chats).set({ pendingSince: null }).where(eq(chats.id, chatId));
+}
+
 /** Pending chats whose 72h approval window (SPEC §15.1, D5) has elapsed as of `cutoff`. */
 export async function listExpiredPendingChats(db: DbOrTx, cutoff: Date): Promise<ChatRow[]> {
   return db
@@ -105,22 +116,23 @@ export async function listExpiredPendingChats(db: DbOrTx, cutoff: Date): Promise
 }
 
 /**
- * "Bot is no longer in the chat" DB side effect (SPEC §15, point 5 / §15.4
- * point 4): `status='left'`, `notice_sent_at` reset to `null` (D25 — a later
- * re-add publishes the notice again), and any not-yet-analyzed `messages`
- * rows (`analysis_status='pending'`) deleted, since they will now never be
- * analyzed. `tasks` are untouched (SPEC §15's tasks-stay-put rule). Idempotent: a
- * chat already `left` matches no row and this returns `null`. Requires `Db`
- * (owns its own transaction — same pattern as `redeemClaimCode`, plan.md's
- * Task 1.5 — for a function that must run more than one statement
- * atomically).
+ * Shared "flip a chat's row to `left`" transaction (SPEC §15, point 5 /
+ * §15.4 point 4): `status='left'`, `notice_sent_at` reset to `null` (D25 —
+ * a later re-add publishes the notice again), and any not-yet-analyzed
+ * `messages` rows (`analysis_status='pending'`) deleted, since they will
+ * now never be analyzed. `tasks` are untouched (SPEC §15's tasks-stay-put
+ * rule). `guard` narrows *which* current `status` values the `UPDATE` may
+ * match — see `markChatLeft`/`claimPendingChatForAutoLeave` below for the
+ * two callers and why they need different guards. Requires `Db` (owns its
+ * own transaction — same pattern as `redeemClaimCode`, plan.md's Task 1.5 —
+ * for a function that must run more than one statement atomically).
  */
-export async function markChatLeft(db: Db, chatId: number, now: Date): Promise<ChatRow | null> {
+async function leaveChatRow(db: Db, chatId: number, now: Date, guard: SQL): Promise<ChatRow | null> {
   return db.transaction(async (tx) => {
     const [row] = await tx
       .update(chats)
       .set({ status: 'left', noticeSentAt: null, updatedAt: now })
-      .where(and(eq(chats.id, chatId), ne(chats.status, 'left')))
+      .where(and(eq(chats.id, chatId), guard))
       .returning();
     if (!row) return null;
 
@@ -128,6 +140,37 @@ export async function markChatLeft(db: Db, chatId: number, now: Date): Promise<C
 
     return row;
   });
+}
+
+/**
+ * "Bot is no longer in the chat" DB side effect, for the case where Telegram
+ * has already removed the bot (`onBotRemoved`) or the bot itself is about to
+ * leave right after this call (`rejectChat`'s `leaveChatInternal`, whose
+ * caller already knows the chat is `pending` from its own immediate
+ * precheck). Guarded by `status != 'left'` rather than a specific status, so
+ * it applies regardless of which status the chat was in (`pending`,
+ * `active`, `paused`, …) — idempotent: a chat already `left` matches no row
+ * and this returns `null`.
+ */
+export async function markChatLeft(db: Db, chatId: number, now: Date): Promise<ChatRow | null> {
+  return leaveChatRow(db, chatId, now, ne(chats.status, 'left'));
+}
+
+/**
+ * Atomically claims a still-`pending` chat for the auto-leave scheduler job
+ * (`src/scheduler/jobs/pendingChats.ts`): unlike `markChatLeft`'s broad
+ * `status != 'left'` guard, this only takes effect while the chat is still
+ * `pending` — the same compare-and-swap shape as `setChatActive`/
+ * `claimNoticeSlot`. The job makes one live `messenger.leaveChat` network
+ * call per expired chat in a loop, which is *not* serialized against the
+ * bot's own callback-query handling running in the same process — without
+ * this guard, an Owner tapping "approve" between the job's listing query
+ * and its per-chat leave call would have that approval silently reversed.
+ * Returns `null` (no-op) if the chat is no longer `pending` by the time this
+ * runs — the caller must not call `messenger.leaveChat` in that case.
+ */
+export async function claimPendingChatForAutoLeave(db: Db, chatId: number, now: Date): Promise<ChatRow | null> {
+  return leaveChatRow(db, chatId, now, eq(chats.status, 'pending'));
 }
 
 /** "Stakes" a notice send (brief Step 3): only the first caller (per chat) gets `true` back. */

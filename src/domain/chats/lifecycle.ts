@@ -22,7 +22,9 @@ import { texts } from '../../bot/texts/ru.js';
 import { renderChatApprovalCard, type ChatApprovalView } from '../../bot/views/chatApproval.js';
 import {
   claimNoticeSlot,
+  claimPendingChatForAutoLeave,
   clearNoticeSlot,
+  clearPendingSince,
   getChatById,
   getChatByTgId,
   listPendingChatsAwaitingOwner,
@@ -196,6 +198,31 @@ export async function leaveChatInternal(
 }
 
 /**
+ * Auto-leave path for `pendingChatsJob` (`src/scheduler/jobs/pendingChats.ts`,
+ * SPEC §15.1's 72h rule). Deliberately *not* `leaveChatInternal`: that
+ * function's `markChatLeft` accepts any non-`left` status, which is correct
+ * for `rejectChat` (an immediate precheck already confirmed `pending`
+ * moments earlier) but unsafe here — the job lists expired chats and then
+ * makes one live `messenger.leaveChat` call per chat in a loop, with no
+ * serialization against the bot's own callback-query handling in the same
+ * process. `claimPendingChatForAutoLeave` claims the row atomically first
+ * (`status='pending'` only); `messenger.leaveChat` is only called once that
+ * claim actually lands, so an Owner's "approve" tap racing the job's per-chat
+ * leave can never be silently reversed. Returns `null` (no-op, no error) if
+ * the chat was no longer `pending` by the time this ran.
+ */
+export async function leaveExpiredPendingChat(
+  deps: Pick<ChatLifecycleDeps, 'db' | 'messenger' | 'clock'>,
+  chatId: number,
+): Promise<ChatRow | null> {
+  const claimed = await claimPendingChatForAutoLeave(deps.db, chatId, deps.clock.now());
+  if (!claimed) return null;
+
+  await deps.messenger.leaveChat(claimed.tgChatId);
+  return claimed;
+}
+
+/**
  * `my_chat_member` "removed" transition (kicked, or the bot itself leaving —
  * SPEC §15, point 5): the bot is already gone from the chat, so only the DB
  * side effects (`markChatLeft`) run.
@@ -275,6 +302,11 @@ export async function requestPendingApprovals(deps: RequestPendingApprovalsDeps,
     try {
       await deps.messenger.send(owner.user.tgUserId, card.text, { buttons: card.buttons });
     } catch (err) {
+      // Mirrors publishNoticeOnce's claim/clearNoticeSlot shape: setPendingSinceIfMissing above already
+      // "claimed" this chat (so a concurrent call can't double-process it), but the 72h auto-leave clock
+      // must not run on a chat the Owner was never actually told about — roll the stamp back so a later
+      // call (e.g. the next /claim, or a retry) can still reach them.
+      await clearPendingSince(deps.db, chat.id);
       deps.logger.error({ err, chatId: chat.id }, 'requestPendingApprovals: failed to send the approval card');
     }
   }
