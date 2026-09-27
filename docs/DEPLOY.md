@@ -314,12 +314,14 @@ nano .env   # заполнить значения ниже
 `DATABASE_URL` (см. ниже), `OPENROUTER_API_KEY`, `BACKUP_AGE_RECIPIENT` (публичный ключ `age`,
 появится в п. 10 — до этого можно оставить пустым, `scripts/backup.sh` пока не понадобится).
 
-**Важно:** `.env.example` (SPEC §26) не перечисляет переменные, нужные `docker/compose.yml` для
-самого контейнера БД и для `scripts/deploy.sh`/`scripts/backup.sh` — их нужно дописать в `.env`
-вручную на сервере:
+**Важно:** `.env.example` также содержит блок «только для Docker Compose»: `POSTGRES_USER`,
+`POSTGRES_PASSWORD`, `POSTGRES_DB`, `COMPOSE_PROJECT`. Эти переменные не входят в SPEC §26 и не
+валидируются `src/config/env.ts` (решение D37 в `plan.md` → «Решения и интерпретации»), но без них
+`docker/compose.yml`'s `db` (образ `postgres:17`) не запустится и `scripts/deploy.sh`/`backup.sh`/
+`restore.sh` не будут знать, какой compose-проект использовать. Заполнить обязательно:
 
 ```bash
-# дописать в .env — учётные данные должны совпадать с теми, что зашиты в DATABASE_URL выше
+# в .env — учётные данные должны совпадать с теми, что зашиты в DATABASE_URL ниже
 POSTGRES_USER=stb
 POSTGRES_PASSWORD=<сгенерировать сильный пароль>
 POSTGRES_DB=stb
@@ -435,8 +437,9 @@ cd /opt/stb-dev
 ./scripts/backup.sh
 ```
 
-Cron ежедневно в 03:00 UTC (crontab пользователя `deploy`, env-переменные читает сам скрипт из
-`.env` compose-проекта, поэтому в crontab достаточно перейти в каталог):
+Cron ежедневно в 03:00 UTC (crontab пользователя `deploy`; `scripts/backup.sh` сам находит и
+подгружает `.env` из своего каталога — в crontab достаточно указать полный путь к скрипту, ничего
+дополнительно экспортировать не нужно):
 
 ```bash
 crontab -e
@@ -445,7 +448,7 @@ crontab -e
 добавить строку:
 
 ```
-0 3 * * * cd /opt/stb-dev && set -a && . ./.env && set +a && ./scripts/backup.sh >> /var/log/stb-dev-backup.log 2>&1
+0 3 * * * /opt/stb-dev/scripts/backup.sh >> /var/log/stb-dev-backup.log 2>&1
 ```
 
 (аналогично для `/opt/stb-prod` со своим временем/строкой, если нужно развести по времени).
@@ -455,7 +458,6 @@ crontab -e
 
 ```bash
 cd /opt/stb-dev
-set -a && . ./.env && set +a
 ./scripts/restore.sh backups/stb-dev-<TIMESTAMP>.sql.gz.age ~/secure/stb-dev-backup-key.txt
 ```
 
@@ -469,10 +471,13 @@ set -a && . ./.env && set +a
 
 **Если что-то пошло не так:**
 
-- `backup.sh` падает с `POSTGRES_USER must be set` (или аналогично для другой переменной) — не
-  экспортированы переменные из `.env` в shell перед прямым запуском скрипта; либо запускайте через
-  `scripts/deploy.sh` (который сам обращается к `.env` через compose), либо перед ручным запуском
-  сделайте `set -a && . ./.env && set +a`.
+- `backup.sh` падает с `POSTGRES_USER must be set` (или аналогично для другой переменной) — скрипт
+  сам подгружает `.env` из своего каталога (`ROOT_DIR/.env`, где `ROOT_DIR` вычисляется от пути
+  самого скрипта, а не от текущей директории), так что ошибка означает, что переменной
+  действительно нет в `.env`; допишите её (см. п. 8) и запустите снова. При такой ошибке скрипт
+  всё равно должен успеть отправить superadmin текстовое оповещение через `sendMessage` — если
+  этого не произошло, значит не хватает именно `TELEGRAM_BOT_TOKEN`/`SUPERADMIN_TG_IDS` (без них
+  оповещать некого) — тогда сообщение об ошибке будет только в выводе скрипта/логе cron.
 - `age: error: no identity matched any of the recipients` при restore — использован не тот
   identity-файл (не пара к `BACKUP_AGE_RECIPIENT`, которым бэкап был зашифрован).
 - Файл бэкапа не пришёл в Telegram, хотя скрипт завершился успешно — проверьте его размер
@@ -523,11 +528,9 @@ gh run watch
 - `No previous tag recorded; nothing to roll back to` — это первый деплой через `deploy.sh`, либо
   `.deploy/current_tag` был удалён; исправить контейнер вручную или откатиться на заведомо рабочий
   тег через `docker compose ... up -d` с `APP_TAG=<известный рабочий>`.
-- `COMPOSE_PROJECT must be set` — переменная не экспортирована перед прямым запуском `deploy.sh` в
-  интерактивной сессии; либо добавить `COMPOSE_PROJECT` в `.env` (используется через
-  `--env-file .env`, но `: "${COMPOSE_PROJECT:?...}"` в скрипте проверяет именно переменную
-  окружения процесса — экспортируйте её тем же способом, что и для `backup.sh` выше, либо
-  запускайте `deploy.sh` из окружения, где `.env` уже подгружен через `set -a && . ./.env`).
+- `COMPOSE_PROJECT must be set` — `deploy.sh` (как и `backup.sh`/`restore.sh`) сам подгружает `.env`
+  из своего каталога, так что эта ошибка означает, что `COMPOSE_PROJECT` действительно не заполнен
+  в `.env` (см. п. 8) — допишите `COMPOSE_PROJECT=stb-dev` (или `stb-prod`) и запустите снова.
 
 ---
 

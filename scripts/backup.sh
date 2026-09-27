@@ -11,7 +11,8 @@ set -euo pipefail
 # Run from the repo root on the VPS (e.g. /opt/stb-dev or /opt/stb-prod),
 # next to docker/compose.yml and .env. See docs/DEPLOY.md §10.
 #
-# Required env (normally set in .env): POSTGRES_USER, POSTGRES_DB, APP_ENV,
+# Required env (normally set in .env, which this script sources itself from
+# its own directory -- see below): POSTGRES_USER, POSTGRES_DB, APP_ENV,
 # BACKUP_AGE_RECIPIENT, TELEGRAM_BOT_TOKEN, SUPERADMIN_TG_IDS (comma
 # separated; the first ID receives the backup/alert), COMPOSE_PROJECT.
 
@@ -23,11 +24,28 @@ BACKUP_DIR="$ROOT_DIR/backups"
 KEEP_COUNT=14
 MAX_TELEGRAM_SIZE_BYTES=$((50 * 1024 * 1024))
 
-: "${POSTGRES_USER:?POSTGRES_USER must be set}"
-: "${POSTGRES_DB:?POSTGRES_DB must be set}"
-: "${APP_ENV:?APP_ENV must be set}"
-: "${BACKUP_AGE_RECIPIENT:?BACKUP_AGE_RECIPIENT must be set}"
-: "${COMPOSE_PROJECT:?COMPOSE_PROJECT must be set}"
+# Load config from .env next to this script's repo root, so a bare
+# `./scripts/backup.sh` (from cron or a human) works without the caller
+# having to export anything first. Values already exported in the calling
+# shell are overridden by .env, which is the intended single source of
+# truth for this stack's config.
+if [[ -f "$ENV_FILE" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+  set +a
+fi
+
+# TELEGRAM_BOT_TOKEN and SUPERADMIN_TG_IDS are needed by the alert path
+# itself (alert_superadmin/fail, below) -- if either is missing there is no
+# way to alert about it, so these two are checked directly via bash's
+# ${VAR:?msg}. Every other required var is checked further down through
+# require_env(), AFTER the trap is installed: ${VAR:?msg} is a parameter-
+# expansion error that exits the shell directly and does NOT invoke an
+# already-installed ERR trap (verified empirically), so it would silently
+# skip the Telegram alert for a misconfigured POSTGRES_USER etc. if used
+# here. require_env() instead calls fail() as an ordinary function call,
+# which does go through the alert path.
 : "${TELEGRAM_BOT_TOKEN:?TELEGRAM_BOT_TOKEN must be set}"
 : "${SUPERADMIN_TG_IDS:?SUPERADMIN_TG_IDS must be set}"
 
@@ -51,11 +69,24 @@ fail() {
   local message=$1
   trap - ERR
   echo "$message" >&2
-  alert_superadmin "school-task-bot backup failed (${APP_ENV}): ${message}"
+  alert_superadmin "school-task-bot backup failed (${APP_ENV:-unknown}): ${message}"
   exit 1
 }
 
 trap 'fail "unexpected error at line ${LINENO}"' ERR
+
+require_env() {
+  local name=$1
+  if [[ -z "${!name:-}" ]]; then
+    fail "$name must be set"
+  fi
+}
+
+require_env POSTGRES_USER
+require_env POSTGRES_DB
+require_env APP_ENV
+require_env BACKUP_AGE_RECIPIENT
+require_env COMPOSE_PROJECT
 
 mkdir -p "$BACKUP_DIR"
 

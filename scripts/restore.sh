@@ -12,7 +12,8 @@ set -euo pipefail
 #
 # DESTRUCTIVE: this permanently replaces the current database contents.
 #
-# Required env (normally set in .env): POSTGRES_USER, POSTGRES_DB,
+# Required env (normally set in .env, which this script sources itself from
+# its own directory -- see below): POSTGRES_USER, POSTGRES_DB,
 # COMPOSE_PROJECT. Optional: HTTP_PORT (default 3000).
 #
 # <identity-file> is the age private key file matching the public key
@@ -40,9 +41,22 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 ROOT_DIR=$(cd -- "$SCRIPT_DIR/.." && pwd)
 COMPOSE_FILE="$ROOT_DIR/docker/compose.yml"
 ENV_FILE="$ROOT_DIR/.env"
-HTTP_PORT="${HTTP_PORT:-3000}"
 HEALTH_TIMEOUT_SECONDS=90
 HEALTH_POLL_INTERVAL_SECONDS=3
+
+# Load config from .env next to this script's repo root, so a bare
+# `./scripts/restore.sh <file> <identity>` works without the caller having
+# to export anything first. Values already exported in the calling shell
+# are overridden by .env, which is the intended single source of truth for
+# this stack's config.
+if [[ -f "$ENV_FILE" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+  set +a
+fi
+
+HTTP_PORT="${HTTP_PORT:-3000}"
 
 : "${POSTGRES_USER:?POSTGRES_USER must be set}"
 : "${POSTGRES_DB:?POSTGRES_DB must be set}"
@@ -63,7 +77,11 @@ echo "Stopping app..."
 compose stop app
 
 echo "Recreating database..."
+# Terminate any stray backends first (app is stopped, but a leftover manual
+# psql session etc. would otherwise make DROP DATABASE fail with "database
+# is being accessed by other users").
 compose exec -T db psql -U "$POSTGRES_USER" -d postgres \
+  -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$POSTGRES_DB' AND pid <> pg_backend_pid();" \
   -c "DROP DATABASE IF EXISTS \"$POSTGRES_DB\";" \
   -c "CREATE DATABASE \"$POSTGRES_DB\" OWNER \"$POSTGRES_USER\";"
 

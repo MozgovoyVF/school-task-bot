@@ -10,12 +10,12 @@ set -euo pipefail
 # Run from the repo root on the VPS (e.g. /opt/stb-dev or /opt/stb-prod),
 # next to docker/compose.yml and .env. See docs/DEPLOY.md §11.
 #
-# Required env (normally set in .env, sourced by the caller or exported
-# before running this script): COMPOSE_PROJECT (e.g. stb-dev, stb-prod).
+# Required env (normally set in .env, which this script sources itself from
+# its own directory -- see below): COMPOSE_PROJECT (e.g. stb-dev, stb-prod).
 # Optional: HTTP_PORT (default 3000).
 #
 # The scripts/backup.sh call this script makes needs its own required env;
-# see that script's header.
+# see that script's header (it sources the same .env itself too).
 
 if [[ $# -ne 1 ]]; then
   echo "usage: $0 <tag>" >&2
@@ -29,9 +29,22 @@ COMPOSE_FILE="$ROOT_DIR/docker/compose.yml"
 ENV_FILE="$ROOT_DIR/.env"
 DEPLOY_STATE_DIR="$ROOT_DIR/.deploy"
 CURRENT_TAG_FILE="$DEPLOY_STATE_DIR/current_tag"
-HTTP_PORT="${HTTP_PORT:-3000}"
 HEALTH_TIMEOUT_SECONDS=90
 HEALTH_POLL_INTERVAL_SECONDS=3
+
+# Load config from .env next to this script's repo root, so a bare
+# `./scripts/deploy.sh <tag>` (from a human or the deploy.yml GitHub Action)
+# works without the caller having to export anything first. Values already
+# exported in the calling shell are overridden by .env, which is the
+# intended single source of truth for this stack's config.
+if [[ -f "$ENV_FILE" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+  set +a
+fi
+
+HTTP_PORT="${HTTP_PORT:-3000}"
 
 : "${COMPOSE_PROJECT:?COMPOSE_PROJECT must be set (e.g. stb-dev or stb-prod)}"
 
