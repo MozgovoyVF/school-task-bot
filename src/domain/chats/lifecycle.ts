@@ -256,10 +256,10 @@ export type SetAnalysisResult =
 /**
  * `/chats`' analysis toggle button (SPEC §15.4, Task 1.9,
  * `texts.chats.analysisButton`): flips `analysis_enabled` in place —
- * permission-checked (`chat.approve`, the same gate `approveChat`/
- * `rejectChat`/the rest of `/chats`' actions use, since SPEC §3's
- * permission table has no separate row for chat *management* and a
- * superadmin already decides whether the bot may run in a chat at all).
+ * permission-checked (`chat.manage`, Owner-only per SPEC §12.2's `/chats`
+ * row, distinct from `chat.approve` — that one gates *deciding whether the
+ * bot may run in a pending chat at all*, which SPEC §3 does grant a
+ * superadmin, not ongoing management of an already-approved one).
  * `reason: 'not_found'` covers both "no such chat" and "chat is `left`"
  * (`toggleChatAnalysis`'s guard) — a forged callback against either case is
  * a no-op, not an error.
@@ -269,7 +269,7 @@ export async function setAnalysis(
   chatId: number,
   actor: Actor,
 ): Promise<SetAnalysisResult> {
-  if (!can(actor, 'chat.approve')) return { ok: false, reason: 'forbidden' };
+  if (!can(actor, 'chat.manage')) return { ok: false, reason: 'forbidden' };
 
   const chat = await toggleChatAnalysis(deps.db, chatId, deps.clock.now());
   if (!chat) return { ok: false, reason: 'not_found' };
@@ -285,7 +285,7 @@ export async function setReactions(
   chatId: number,
   actor: Actor,
 ): Promise<SetReactionsResult> {
-  if (!can(actor, 'chat.approve')) return { ok: false, reason: 'forbidden' };
+  if (!can(actor, 'chat.manage')) return { ok: false, reason: 'forbidden' };
 
   const chat = await toggleChatReactions(deps.db, chatId, deps.clock.now());
   if (!chat) return { ok: false, reason: 'not_found' };
@@ -307,7 +307,7 @@ export async function pauseChat(
   chatId: number,
   actor: Actor,
 ): Promise<PauseChatResult> {
-  if (!can(actor, 'chat.approve')) return { ok: false, reason: 'forbidden' };
+  if (!can(actor, 'chat.manage')) return { ok: false, reason: 'forbidden' };
 
   const chat = await pauseChatRow(deps.db, chatId, deps.clock.now());
   if (!chat) return { ok: false, reason: 'not_active' };
@@ -323,7 +323,7 @@ export async function resumeChat(
   chatId: number,
   actor: Actor,
 ): Promise<ResumeChatResult> {
-  if (!can(actor, 'chat.approve')) return { ok: false, reason: 'forbidden' };
+  if (!can(actor, 'chat.manage')) return { ok: false, reason: 'forbidden' };
 
   const chat = await resumeChatRow(deps.db, chatId, deps.clock.now());
   if (!chat) return { ok: false, reason: 'not_paused' };
@@ -352,7 +352,7 @@ export async function leaveChat(
   chatId: number,
   actor: Actor,
 ): Promise<LeaveChatResult> {
-  if (!can(actor, 'chat.approve')) return { ok: false, reason: 'forbidden' };
+  if (!can(actor, 'chat.manage')) return { ok: false, reason: 'forbidden' };
 
   const chat = await getChatById(deps.db, chatId);
   if (!chat || chat.status === 'left') return { ok: false, reason: 'not_found' };

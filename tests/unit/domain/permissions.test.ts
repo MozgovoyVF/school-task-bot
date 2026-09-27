@@ -14,6 +14,7 @@ const rows: Array<[Action, boolean, boolean, boolean, boolean]> = [
   ['task.viewAll', false, true, false, false],
   ['task.edit', false, true, false, false],
   ['chat.approve', true, true, false, false],
+  ['chat.manage', false, true, false, false],
   ['admin.tech', true, false, false, false],
   ['transfer.generate', true, true, false, false],
 ];

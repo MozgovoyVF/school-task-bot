@@ -22,7 +22,12 @@ export interface Actor {
   dmStarted: boolean;
 }
 
-/** SPEC §3's action set — one entry per row of the permission table. */
+/**
+ * SPEC §3's action set — one entry per row of the permission table, plus
+ * `chat.manage` (Task 1.9): SPEC §3 has no dedicated row for managing an
+ * already-approved chat, so this one is instead derived from SPEC §12.2's
+ * `/chats` command row ("Owner" only).
+ */
 export type Action =
   | 'proposal.receive'
   | 'proposal.decide'
@@ -34,6 +39,7 @@ export type Action =
   | 'task.edit'
   | 'reminders.receive'
   | 'chat.approve'
+  | 'chat.manage'
   | 'admin.tech'
   | 'transfer.generate';
 
@@ -63,11 +69,16 @@ export function can(actor: Actor, action: Action, target?: ActionTarget): boolea
 
   switch (action) {
     // Owner-only: proposals, manual DM task creation, the full task list/archive/search, editing/cancelling tasks.
+    // `chat.manage` (SPEC §12.2's `/chats` row: "Owner" only, unlike `/transfer`'s explicit "Owner,
+    // Superadmin") — managing an already-approved chat (toggle analysis/reactions, pause, resume,
+    // leave), distinct from `chat.approve` below (deciding whether the bot may run in a *pending*
+    // chat at all, which SPEC §3's matrix does grant a superadmin).
     case 'proposal.receive':
     case 'proposal.decide':
     case 'task.createDm':
     case 'task.viewAll':
     case 'task.edit':
+    case 'chat.manage':
       return isOwner;
 
     // Superadmin or Owner: approving a new group chat, generating an ownership-transfer code.

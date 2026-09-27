@@ -41,27 +41,31 @@ async function renderInto(deps: ChatsHandlersDeps, ctx: BotContext, view: ChatsV
 const KNOWN_ACTIONS = new Set(['lst', 'opn', 'ana', 'rea', 'pau', 'res', 'lva', 'lvc']);
 
 /**
- * Registers `/chats` (SPEC §12.2: Owner; `chat.approve` also admits a
- * superadmin here — SPEC §3's permission table has no separate row for
- * managing an already-approved chat, and a superadmin can already decide
- * whether the bot runs in it at all) and the `v1:c:*` callbacks its list/card
- * keyboards use. DM-only, same reasoning as `/transfer` (`transfer.ts`) and
- * the pending-chat approval callbacks (`chatMember.ts`): the list would leak
- * every chat's title/status into a group otherwise, and CLAUDE.md §12.2's
- * "the bot only ever writes text in a group for `/privacy`" rule.
+ * Registers `/chats` (SPEC §12.2: Owner only — `chat.manage`, distinct from
+ * `chat.approve`, which stays superadmin-or-Owner for Task 1.6's pending-chat
+ * approve/reject and is *not* reused here) and the `v1:c:*` callbacks its
+ * list/card keyboards use. DM-only, same reasoning as `/transfer`
+ * (`transfer.ts`) and the pending-chat approval callbacks (`chatMember.ts`):
+ * the list would leak every chat's title/status into a group otherwise, and
+ * CLAUDE.md §12.2's "the bot only ever writes text in a group for
+ * `/privacy`" rule.
  *
  * `bot.callbackQuery(/^v1:c:/, ...)` is also where `chatMember.ts` listens
  * for `apr`/`rej` — that handler runs first (registered earlier in
  * `bot.ts`) and calls `next()` for any other action, which is what reaches
- * this one. Permission (`chat.approve`) is re-checked on every action
- * (CLAUDE.md §8: callback_data is never trusted on its own), even though
- * the keyboards that produce these callbacks are only ever shown to
- * someone who already passed the same check.
+ * this one. `chat.manage` is checked once, immediately after decoding and
+ * before *any* branch — including the read-only `lst`/`opn`/`lva`
+ * navigation actions, not only the five mutating ones — since CLAUDE.md §8
+ * requires a DB-backed permission check on every callback and
+ * `callback_data` is never trusted on its own: a forged `v1:c:lst:0` (or
+ * `opn`/`lva` against any chat id) must not leak the chat list/a chat's
+ * card/a leave prompt to someone who never had a `/chats` keyboard of their
+ * own.
  */
 export function registerChatsHandlers(bot: Bot<BotContext>, deps: ChatsHandlersDeps): void {
   bot.command('chats', async (ctx) => {
     if (ctx.chat?.type !== 'private') return;
-    if (!can(ctx.state.actor, 'chat.approve')) {
+    if (!can(ctx.state.actor, 'chat.manage')) {
       await ctx.reply(texts.common.forbidden, { parse_mode: 'HTML' });
       return;
     }
@@ -83,6 +87,11 @@ export function registerChatsHandlers(bot: Bot<BotContext>, deps: ChatsHandlersD
     const decoded = decodeCallback(ctx.callbackQuery.data);
     if (!decoded || !KNOWN_ACTIONS.has(decoded.action)) {
       await next();
+      return;
+    }
+
+    if (!can(ctx.state.actor, 'chat.manage')) {
+      await ctx.answerCallbackQuery({ text: texts.common.forbidden });
       return;
     }
 
@@ -114,9 +123,9 @@ export function registerChatsHandlers(bot: Bot<BotContext>, deps: ChatsHandlersD
               : await leaveChat(lifecycleDeps, decoded.id, ctx.state.actor);
 
     if (!result.ok) {
-      await ctx.answerCallbackQuery(
-        result.reason === 'forbidden' ? { text: texts.common.forbidden } : undefined,
-      );
+      // `chat.manage` was already re-checked above, so `result.reason` here is always the
+      // domain function's own not-found/not-active/not-paused reason, never `forbidden`.
+      await ctx.answerCallbackQuery();
       return;
     }
     await ctx.answerCallbackQuery();

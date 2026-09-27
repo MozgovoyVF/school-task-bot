@@ -12,6 +12,9 @@ import type { FakeMessenger } from '../../helpers/fakeMessenger.js';
 
 const OWNER = { id: 100, firstName: 'Anna' };
 const MEMBER = { id: 200, firstName: 'Boris' };
+const STRANGER = { id: 300, firstName: 'Nina' };
+/** Matches `botHarness.ts`'s `DEFAULT_SUPERADMIN_IDS` — a superadmin who is *not* the Owner. */
+const SUPERADMIN = { id: 900000001, firstName: 'Admin' };
 
 interface CallbackButton {
   text: string;
@@ -200,6 +203,58 @@ describe('/chats management', () => {
     );
     const row = await getChatRow(harness, chat.id);
     expect(row?.status).toBe('active');
+  });
+
+  // Regression (group review of Task 1.9): `lst`/`opn`/`lva` used to skip the permission check
+  // entirely — a forged callback against any of the three could hand back the chat list, an
+  // individual chat's card, or the leave-confirmation prompt to anyone, regardless of role.
+  it('a member and a stranger get `forbidden` (not chat data) from lst/opn/lva', async () => {
+    const harness = await createBotHarness();
+    await makeOwner(harness, OWNER);
+    await makeMember(harness, MEMBER);
+    const chat = await makeActiveChat(harness, -5007, 'Group');
+    const actions = ['lst', 'opn', 'lva'] as const;
+
+    for (const actor of [MEMBER, STRANGER]) {
+      for (const action of actions) {
+        await harness.send(
+          callback(
+            actor,
+            encodeCallback({ entity: 'c', action, id: action === 'lst' ? 0 : chat.id }),
+            botKeyboardMessage(actor),
+          ),
+        );
+      }
+    }
+
+    expect(fake(harness).edits).toHaveLength(0);
+    const answers = harness.calls.filter((c) => c.method === 'answerCallbackQuery');
+    expect(answers).toHaveLength(6);
+    for (const answer of answers) {
+      expect(answer.payload.text).toBe(texts.common.forbidden);
+    }
+  });
+
+  // Regression (group review of Task 1.9): `/chats` used to reuse `chat.approve` (superadmin or
+  // Owner) instead of an Owner-only permission, per SPEC §12.2's `/chats` row.
+  it('a superadmin who is not the Owner is forbidden from /chats and its callbacks (chat.manage is Owner-only)', async () => {
+    const harness = await createBotHarness();
+    await makeOwner(harness, OWNER);
+    const chat = await makeActiveChat(harness, -5008, 'Group');
+
+    await harness.send(dmText(SUPERADMIN, '/chats'));
+    expect(harness.replies(SUPERADMIN.id)).toEqual([texts.common.forbidden]);
+
+    await harness.send(
+      callback(
+        SUPERADMIN,
+        encodeCallback({ entity: 'c', action: 'ana', id: chat.id }),
+        botKeyboardMessage(SUPERADMIN),
+      ),
+    );
+    const row = await getChatRow(harness, chat.id);
+    expect(row?.analysisEnabled).toBe(true); // unchanged
+    expect(fake(harness).edits.filter((e) => e.chatId === SUPERADMIN.id)).toHaveLength(0);
   });
 
   it('/chats in a group is silently ignored (DM-only, same as /transfer)', async () => {
