@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import { loadEnv } from '../config/env.js';
 import { createDb, type Db } from './client.js';
+import { isEntrypoint } from '../ops/entrypoint.js';
 
 const DIRNAME = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_MIGRATIONS_FOLDER = join(DIRNAME, 'migrations');
@@ -22,7 +23,6 @@ async function main(): Promise<void> {
   }
 }
 
-const isMainModule = process.argv[1] !== undefined && import.meta.url === `file://${process.argv[1]}`;
-if (isMainModule) {
+if (isEntrypoint(import.meta.url, process.argv[1])) {
   await main();
 }
