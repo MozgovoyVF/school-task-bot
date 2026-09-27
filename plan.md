@@ -935,7 +935,7 @@ JSON
   - при ошибке отправить superadmin текстовое оповещение через `sendMessage` и выйти с кодом 1.
 
   `scripts/restore.sh <file.age> <identity-file>`: остановить `app`, пересоздать БД, выполнить `age -d -i … | gunzip | psql`, запустить `app` и проверить `/healthz`.
-- [ ] **Шаг 3: локальная проверка круговорота бэкапа.** Нужен `age` (`brew install age`, 👤 подтвердить установку). Бэкап compose.dev-базы → восстановление в новую базу → количество строк в `users` совпадает.
+- [x] **Шаг 3: локальная проверка круговорота бэкапа.** Нужен `age` (`brew install age`, 👤 подтвердить установку). Бэкап compose.dev-базы → восстановление в новую базу → количество строк в `users` совпадает. *Выполнено 2026-09-27 в изолированной копии: настоящие Docker, Postgres 17, age 1.3.2 и локально собранный образ, заглушка только для `curl`. 500 строк с кириллицей восстановлены, md5 совпал, ротация оставила 14 копий. Найдена и исправлена ошибка: `mapfile` отсутствует в bash 3.2 на macOS.*
 - [x] **Шаг 4: `docs/DEPLOY.md`** — все 14 пунктов SPEC §27. У каждого шага: точные команды, ожидаемый вывод и раздел «Если что-то пошло не так». Перед написанием п. 1 проверить актуальные тарифы VPS (Aéza, FirstByte, HostVDS, Fornex, Hetzner) через WebSearch и указать дату проверки. Каталоги на сервере: `/opt/stb-dev`, `/opt/stb-prod`. Команды compose: `docker compose -f docker/compose.yml --env-file .env -p stb-dev …`.
 - [x] **Шаг 5: коммит и push:** `docs(deploy): add deploy/backup scripts and step-by-step DEPLOY guide`.
 - [ ] **Шаг 6: релиз-кандидат.** `gh workflow run release.yml -f tag=v0.1.0-rc.1 --ref phase-0-skeleton`, затем `gh run watch`.

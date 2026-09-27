@@ -112,7 +112,11 @@ fi
 echo "Backup written: $OUT_FILE"
 
 # Keep only the KEEP_COUNT most recent backups for this environment.
-mapfile -t OLD_BACKUPS < <(ls -1t "$BACKUP_DIR"/stb-"${APP_ENV}"-*.sql.gz.age 2>/dev/null | tail -n "+$((KEEP_COUNT + 1))")
+# A read loop instead of `mapfile`: mapfile is bash 4+, and macOS ships bash 3.2.
+OLD_BACKUPS=()
+while IFS= read -r old_backup; do
+  OLD_BACKUPS+=("$old_backup")
+done < <(ls -1t "$BACKUP_DIR"/stb-"${APP_ENV}"-*.sql.gz.age 2>/dev/null | tail -n "+$((KEEP_COUNT + 1))")
 if [[ ${#OLD_BACKUPS[@]} -gt 0 ]]; then
   echo "Pruning ${#OLD_BACKUPS[@]} old backup(s)..."
   rm -f -- "${OLD_BACKUPS[@]}"
