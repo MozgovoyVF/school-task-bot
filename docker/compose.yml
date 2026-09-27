@@ -1,0 +1,52 @@
+services:
+  app:
+    # No `:-latest` fallback: every compose command must say which concrete release it means,
+    # otherwise `up -d` would silently drift to whatever `:latest` points to at the moment
+    # (plan.md decision D38). scripts/*.sh pass it (from .deploy/current_tag); for manual
+    # commands use scripts/compose.sh, which does the same.
+    image: ghcr.io/mozgovoyvf/school-task-bot:${APP_TAG:?APP_TAG must be set to a concrete release tag (see scripts/compose.sh)}
+    env_file: ../.env
+    environment:
+      # `HTTP_PORT` in .env is the HOST-side port (it differs between stb-dev and stb-prod on
+      # one VPS, SPEC §17.1). Inside the container the app always listens on 3000, which the
+      # Dockerfile HEALTHCHECK and the port mapping below rely on; `environment` takes
+      # precedence over `env_file`, so .env's HTTP_PORT never reaches the app process.
+      HTTP_PORT: '3000'
+    ports:
+      - '127.0.0.1:${HTTP_PORT:-3000}:3000'
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'
+
+  db:
+    image: postgres:17
+    # `env_file` (not top-level `${VAR}` substitution) so POSTGRES_* reliably come from the
+    # repo-root `.env` regardless of the directory `docker compose` happens to be invoked from
+    # (compose's own `${VAR}` substitution only auto-loads a `.env` from its *project* directory,
+    # which isn't necessarily this file's directory or the repo root — `env_file` has no such
+    # ambiguity, it is always resolved relative to this compose file, same as `app`'s above).
+    env_file: ../.env
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # `$$` escapes compose's own substitution, so `pg_isready` reads `POSTGRES_USER`/`POSTGRES_DB`
+      # from the *container's* environment (set via `env_file` above) at healthcheck time instead.
+      test: ['CMD-SHELL', 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'
+
+volumes:
+  pgdata:

@@ -94,6 +94,15 @@
 | D27 | Промпт | Файл промпта делится маркером `<!-- DATA -->`: выше — system (инструкции и профиль, стабильный префикс для кеширования), ниже — шаблон user-сообщения с данными. Few-shot идут парами user/assistant между ними. Содержание — черновик SPEC §9.9. Изменение промпта после первого eval — это новый файл версии (`extractor.v2.md`), старый не правится. | принято |
 | D28 | Имя участника по умолчанию | `memberships.display_name` по умолчанию — **первое слово** `first_name`. В Telegram в `first_name` часто пишут имя с фамилией, а фамилии в LLM не передаются (SPEC §19.3.2). Owner может поменять имя в `/people`. | принято |
 | D29 | Пояс в сроках (SPEC §10.9) | Время всегда показывается в поясе получателя. Если пояс получателя отличается от пояса автора срока (`tasks.due_tz`), к нему добавляется метка пояса получателя: `пт, 25 сен, 20:00 (МСК+2)`. У all-day сроков метки нет. | принято |
+| D30 | `TickerDeps` → `AppDeps` (Task 0.6/0.8) | `AppDeps` ещё не существует до Task 0.8 (`src/deps.ts`), поэтому `Job`/`createTicker`/`dailyJob` в Task 0.6 типизированы против локального `TickerDeps` (`src/scheduler/ticker.ts`): `{ db: Db; clock: Clock; logger: Logger; errors: ErrorReporter }`. `Job.run` объявлен через method-shorthand (`run(deps: TickerDeps): Promise<void>`), как и в зафиксированном контракте, — у method-shorthand в интерфейсе bivariant-проверка параметров, что упрощает совместимость с будущими job из фаз 3+, типизированными против настоящего `AppDeps`. Когда в Task 0.8 появится реальный `AppDeps` (надмножество `TickerDeps`), нужно заменить `TickerDeps` на `AppDeps` прямо в `ticker.ts`/`daily.ts` (тип-only замена, поведение не меняется). `dailyJob`'s колбэк `run: (deps: TickerDeps) => Promise<void>` — это function-type, а не method-shorthand, поэтому строго контравариантен (`strictFunctionTypes`): функции, явно типизированные под будущий `AppDeps`, не подойдут туда, пока Task 0.8 не поменяет тип параметра на `AppDeps`. | **разрешено в Task 0.8**: `TickerDeps` удалён, `Job`/`createTicker`/`dailyJob` в `src/scheduler/ticker.ts`/`daily.ts` типизированы против настоящего `AppDeps` (`src/deps.ts`) — тип-only замена, поведение не изменилось. Попутно пришлось расширить `tests/integration/scheduler/ticker.test.ts`'s `makeDeps()` до полной формы `AppDeps` (добавлены `config`/`messenger`/`ai: null`/`taskHooks: []`), иначе фейковые deps там переставали структурно подходить под более широкий тип. |
+| D31 | `Actor`/`Role` локально в `src/bot/context.ts` (Task 0.7/phase 1) | `src/domain/people/permissions.ts` (где по зафиксированному контракту живут настоящие `Actor`/`Role` и `can()`) не существует до фазы 1 (plan.md ~строка 1019). Поэтому в Task 0.7 `Role`/`Actor` объявлены локально в `src/bot/context.ts`, дословно повторяя зафиксированную форму (`Role = 'owner' \| 'member'`; `Actor = { userId, isSuperadmin, role, dmStarted }`), и `BotContext.state.actor` типизирован против них. `src/bot/middleware/context.ts` (упирается только в `config.SUPERADMIN_TG_IDS`) заполняет `actor.userId`/`actor.isSuperadmin`/`actor.dmStarted` по `users`, а `actor.role`, `state.membership`, `state.workspace` остаются `null` — в фазе 0 нет резолюции workspace/membership. Также в `src/bot/handlers/admin.ts` объявлен `AdminHandlersDeps = Pick<Env,'GIT_SHA'> & { clock: Clock }` и в `src/bot/middleware/context.ts` — `ContextMiddlewareDeps`, чтобы не тянуть в них весь `BotDeps`/будущий `AppDeps`. Когда в фазе 1 появится `permissions.ts`, нужно: удалить блок `Role`/`Actor` из `context.ts` и импортировать их оттуда; заменить вычисление `actor.role` в `context.ts` на резолюцию через `can()`/членство; ничего в `bot.ts`, `handlers/`, `views/` менять не нужно — они используют только `Actor`/`BotContext` по имени. | принято |
+| D32 | `AiProviders`/`TaskHook` — заглушки в `src/deps.ts` (Task 0.8/phase 2) | Настоящий `AiProviders` (`{ extraction, decision, client, models }`) и настоящий `TaskHook` (`{ name; afterChange(tx, task, change, deps) }`) — контракты фазы 2 (`src/ai/providers/**` и `src/domain/tasks/service.ts` соответственно), которых ещё нет. В Task 0.8 `deps.ai` всегда `null`, а `deps.taskHooks` всегда `[]`, поэтому в `src/deps.ts` объявлены заглушки: `AiProviders = { readonly __placeholder?: never }` и `TaskHook = { readonly name: string }` — их единственная цель дать `ai: AiProviders \| null` и `taskHooks: TaskHook[]` типизироваться сегодня. Когда в фазе 2 появятся настоящие интерфейсы, эти заглушки удаляются, а `AppDeps` в `src/deps.ts` начинает импортировать `AiProviders` из `src/ai/providers/**` и `TaskHook` из `src/domain/tasks/service.ts` — сам `AppDeps` при этом не меняется (поля называются и типизируются так же). | принято |
+| D33 | Два исправления в `docker/Dockerfile` относительно брифа Task 0.8 (проверено `docker build`/`docker compose up`) | Бриф Task 0.8 просил использовать содержимое `docker/Dockerfile` дословно, но реальная сборка (`docker build -f docker/Dockerfile -t stb:local .`) и последующий `docker compose up` с синтетическим `.env` вскрыли два бага: 1) `pnpm install --frozen-lockfile` в стадиях `deps`/`prod-deps` падал с `ERR_PNPM_IGNORED_BUILDS` (esbuild, транзитивная зависимость vite/vitest, требует postinstall-скрипт) — корень проблемы в том, что стадии копировали только `package.json pnpm-lock.yaml`, не `pnpm-workspace.yaml`, где лежит `allowBuilds: esbuild: true`; исправлено добавлением `pnpm-workspace.yaml` в оба `COPY`. 2) `runMigrations()` (`src/db/migrate.ts`) вычисляет папку миграций через `import.meta.url` — то есть относительно **скомпилированного** `dist/src/db/migrate.js`, а не исходника; при рантайме в контейнере это `dist/src/db/migrations`, а не `src/db/migrations`. Бриф копировал миграции в `./src/db/migrations`, из-за чего `runMigrations()` не находил `meta/_journal.json` и падал на старте контейнера. Исправлено: финальная стадия `runtime` копирует `COPY src/db/migrations ./dist/src/db/migrations` (миграции лежат рядом со скомпилированным `migrate.js`, как ожидает `import.meta.url`-путь), а не `./src/db/migrations`. Оба исправления проверены полным циклом: `docker build` → `docker compose up` (с синтетическим `.env` и фиктивным токеном) → `db` становится `healthy` → `app` успешно применяет миграции внутри контейнера. | принято |
+| D34 | Реальный `Messenger` в `src/app.ts` использует отдельный `grammy.Api`-клиент, а не `bot.api` | `createBot` (`src/bot/bot.ts`, Task 0.7) собирает `Bot` и сразу же навешивает middleware, которые замыкаются на `deps.messenger`/`deps.errors` синхронно при вызове — то есть оба значения должны существовать ДО вызова `createBot(deps)`. Но реальный `Messenger` собирается через `createGrammyMessenger(api)`, и по брифу должен использовать `bot.api` — а `bot` появляется только из `createBot()`. Это циклическая зависимость: `bot.api` для `messenger` доступен только после `createBot(deps)`, а `deps.messenger` нужен `createBot()` на входе. Решение: в `src/app.ts`, когда `overrides.messenger` не передан, для реального `Messenger` создаётся отдельный `grammy.Api` с тем же токеном и теми же трансформерами (`autoRetry`, `apiThrottler`), что `createBot()` применяет к своему `bot.api`. У бота и у messenger в проде получаются два независимых API-клиента на один и тот же токен: единственное отличие от общего `bot.api` — retry/throttling считаются раздельно по клиентам, а не глобально, что не критично при объёме этого бота (SPEC: ~500 сообщений/день, до 5 групп). Попутно `sequentialize` (из `@grammyjs/runner`) добавлен в `src/bot/bot.ts` как самое первое middleware (перед `errors`/`context`/`conversations()`), а не в `src/app.ts`, — порядок `bot.use()` фиксируется только внутри `createBot()`. `BotDeps` (Task 0.7) сознательно НЕ заменён на `AppDeps` в `bot.ts`: `tests/helpers/botHarness.ts` строит `BotDeps` вручную с 6 полями, и расширение сигнатуры до `AppDeps` потребовало бы тянуть туда `ai`/`taskHooks` без пользы — `AppDeps` и так структурно совместим с `BotDeps` на вызове `createBot(deps)` из `app.ts`. | принято |
+| D35 | Версии GitHub Actions в `ci.yml`/`release.yml` обновлены относительно брифа Task 0.9 | Бриф Task 0.9 приводил `actions/checkout@v4`, `pnpm/action-setup@v4`, `actions/setup-node@v4`, `docker/setup-buildx-action@v3`, `docker/build-push-action@v6`. Перед коммитом версии сверены через `gh api repos/<owner>/<repo>/releases/latest` (Context7 экшены GitHub Actions не индексирует) — актуальные мажорные версии на 2026-09-26: `actions/checkout@v7`, `pnpm/action-setup@v6`, `actions/setup-node@v7`, `docker/setup-buildx-action@v4`, `docker/build-push-action@v7`, `docker/login-action@v4`. Важно для `pnpm/action-setup`: только v6+ поддерживает pnpm 12 (`packageManager: pnpm@12.6.0` в `package.json`), v4 бы не заработал. Changelog всех обновлений — фичи/багфиксы без изменения интерфейса `with:` (проверено по release notes каждого репозитория), поэтому использованы актуальные версии вместо версий из брифа. `release.yml` использует `docker/login-action@v4` для логина в GHCR (в брифе не зафиксирована конкретная версия, экшен в брифе не упоминался явно, но подразумевался фразой «логин в GHCR через `GITHUB_TOKEN`»). `deploy.yml` выполняет SSH-команду без стороннего SSH-экшена (`ssh`/`ssh-keyscan` из образа `ubuntu-latest` напрямую), чтобы не вводить новую стороннюю Action без необходимости, — это соответствует духу CLAUDE.md §6 (новые внешние зависимости — только по явному согласованию), хотя формально §6 регулирует npm-зависимости, а не Actions. | принято |
+| D36 | Прогон Task 0.9 вскрыл дрейф `prettier` в файлах, не связанных с этой задачей | На HEAD (542faea) `pnpm format:check` уже падал на `CLAUDE.md`, `src/ops/logger.ts`, `tests/unit/ops/logger.test.ts` (это подтверждено через `git stash` — падение воспроизводится и без изменений Task 0.9). Правки CI-файлов сами по себе Cyrillic-правило и prettier не нарушают, но брифом Task 0.9 требовалось зелёное `pnpm lint && pnpm typecheck && pnpm test` локально, а CI-джоб `check` дополнительно гоняет `pnpm format:check` — без исправления эти 3 файла привели бы к красному CI, не имеющему отношения к содержимому Task 0.9. Три файла отформатированы `prettier --write` (только пробелы/переносы, без изменения смысла или логики) отдельным коммитом `style: fix prettier formatting drift`, чтобы не смешивать несвязанное форматирование с коммитом CI-воркфлоу. | принято |
+| D37 | `.env.example` не покрывал переменные, нужные `docker/compose.yml`'s `db` и `scripts/deploy.sh`/`backup.sh`/`restore.sh` (найдено ревью Task 0.10) | Ни SPEC §26, ни `.env.example` не перечисляют `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `COMPOSE_PROJECT` — а без них `docker/compose.yml`'s `db` (образ `postgres:17`, официальный entrypoint которого отказывается стартовать без `POSTGRES_PASSWORD`) не поднимается вообще, то есть `docker compose ... up -d` после буквального `cp .env.example .env` был нерабочим с момента Task 0.8. Эти четыре переменные — исключительно compose-уровня: `src/config/env.ts`/`EnvSchema` их не читает и не валидирует (они не часть бизнес-конфигурации приложения), поэтому формально они вне периметра SPEC §26 («переменные окружения приложения»). Решение: добавить их в `.env.example` отдельным блоком с пометкой «только для Docker Compose» и ссылкой на это решение, а не оставлять только как ручной шаг в `docs/DEPLOY.md` (иначе агент/оператор, который не читает `docs/DEPLOY.md` дословно, получит нерабочий `docker compose up` без объяснения причины). `docs/DEPLOY.md` §8 при этом сохраняет явное объяснение, зачем этот блок нужен и что подставить. `scripts/deploy.sh`/`backup.sh`/`restore.sh` дополнительно сами подгружают `.env` (`set -a && source .env && set +a`) из каталога, где лежат сами скрипты, — это устраняет необходимость вручную экспортировать переменные перед их запуском (документированная в брифе Task 0.10 команда `cd /opt/stb-dev && ./scripts/deploy.sh <tag>` теперь действительно работает как есть). | принято |
+| D38 | Цепочка релиз → первый деплой → откат, порты двух стеков, чтение `.env` скриптами, открытый Postgres в dev-compose, точка входа `db:migrate` (финальное ревью фазы 0) | **Релиз (`release.yml`).** Всегда собирается `github.sha`: коммит тега при `push`, голова ветки при `workflow_dispatch`. Input `tag` — только тег образа, его никогда не делают `git checkout`: первый ручной релиз (`gh workflow run release.yml -f tag=v0.1.0-rc.1 --ref <ветка>`) идёт до появления git-тегов. Тег проверяется регуляркой `^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$` и передаётся в скрипт через `env:`, а не подстановкой `${{ }}` (script injection). Правило «`-rc` не становится `:latest`» теперь решается **только по строке тега**, независимо от триггера: раньше оно срабатывало лишь на `workflow_dispatch`, и `git push` rc-тега двигал `:latest` на кандидат. Финальный тег публикуется одной сборкой сразу под `:<tag>` и `:latest` (один `build-push-action` с несколькими `tags`), поэтому digest у них один. `GIT_SHA` в релизных образах сознательно остаётся тегом релиза (читаемо в `/admin`), а в `ci.yml` — `github.sha` (там тега нет, образ не публикуется). Чтобы коммит релиза не терялся (у ручного релиза нет git-тега), в образ добавлены OCI-метки `org.opencontainers.image.revision=<sha>` и `org.opencontainers.image.version=<tag>`. **Тег при деплое.** `docker/compose.yml` использует `${APP_TAG:?…}` вместо `${APP_TAG:-latest}`: без тега любая команда compose падает с понятной ошибкой и не дрейфует молча на текущий `:latest`. Побочный эффект (проверен на Compose v5.1.1): переменная нужна даже для `exec db`/`logs`/`ps`. Поэтому скрипты берут тег из `.deploy/current_tag` (`scripts/lib/common.sh`), а для ручных команд добавлен `scripts/compose.sh` (тег из `APP_TAG` или `.deploy/current_tag`). В `.deploy/current_tag` с первого деплоя всегда лежит конкретный задеплоенный тег, никогда `latest`: `docs/DEPLOY.md` §8 делает первый деплой на явный тег вроде `v0.1.0-rc.1`, потому что после rc-релиза `:latest` в GHCR может не существовать. `deploy.sh` отказывается деплоить `latest`. `restore.sh` поднимает `app` на теге из `.deploy/current_tag`, а без него отказывается работать ещё до остановки приложения. `backup.sh` без него шлёт алерт. `deploy.yml` тоже валидирует тег и передаёт его через `env:` и `printf %q`. **Порты.** `HTTP_PORT` в `.env` — только порт на хосте. В `docker/compose.yml` и `docker/compose.dev.yml` у `app` задано `environment: HTTP_PORT: '3000'`, которое перекрывает `env_file` (проверено: в контейнере 3000 при `HTTP_PORT=3001` в `.env`). Поэтому приложение, `HEALTHCHECK` образа и маппинг всегда сходятся на 3000 внутри контейнера. Два стека на одном VPS (SPEC §17.1): dev `HTTP_PORT=3000`, prod `HTTP_PORT=3001`. **`.env` в скриптах.** `scripts/*.sh` больше не делают `source .env`, это заменяет механизм из D37. Значения вроде `SUPERADMIN_TG_IDS=111, 222` и значения с пробелами валидны для compose и `EnvSchema`, но ломали bash ещё до установки `ERR`-трапа, и ночной бэкап падал без алерта. `env_get` в `scripts/lib/common.sh` читает строку `KEY=VALUE` буквально, по подмножеству правил dotenv из compose: комментарии, `export`, кавычки, комментарий через ` #` в конце, CRLF; подстановки `${VAR}` нет. Покрыт тестом `tests/unit/scripts/envGet.test.ts`. Попутно найдено: compose (v5.1.1) читает `KEY=   # заметка` как значение `# заметка`, а в `.env.example` так были оформлены пустые ключи (`BOOTSTRAP_OWNER_TG_ID`, `LLM_MODEL_PRIMARY`, `PUBLIC_BASE_URL`, `BACKUP_AGE_RECIPIENT`, `POSTGRES_PASSWORD`). Из-за этого `BOOTSTRAP_OWNER_TG_ID` с текстом комментария валил `EnvSchema`. Комментарии к пустым ключам перенесены на строку выше, тест проверяет, что ни одно значение `.env.example` не начинается с `#`. В `backup.sh` трап и `fail()` ставятся до чтения `.env`. Без алерта остаются только случаи, когда алертить нечем (нет читаемого `.env` или в нём нет `TELEGRAM_BOT_TOKEN`/`SUPERADMIN_TG_IDS`); тогда ошибка уходит в stderr и лог cron. **Безопасность dev-compose.** Порты `db` и `app` в `docker/compose.dev.yml` публикуются только на `127.0.0.1`: опубликованные Docker'ом порты обходят `ufw`, а `docs/DEPLOY.md` §14 запускает этот файл на VPS, где Postgres-суперпользователь `stb`/`stb`. **`pnpm db:migrate`.** Проверка точки входа вынесена в `src/ops/entrypoint.ts` (`isEntrypoint`) и сравнивает `pathToFileURL(realpath(argv[1])).href` вместо `` `file://${argv[1]}` ``. Раньше на пути с кириллицей (этот репозиторий) CLI молча завершался с кодом 0, ничего не применив. | принято |
 
 ## Контрольные точки пользователя (👤)
 
@@ -182,8 +191,8 @@ export interface TaskHook { name: string; afterChange(tx: Tx, task: TaskRow | nu
 **Интерфейсы:**
 - Produces: `findForbiddenCyrillic(files: Array<{ path: string; content: string }>): string[]` — пути файлов с кириллицей вне разрешённых (`src/bot/texts/ru.ts`, `src/config/constants.ts`).
 
-- [ ] **Шаг 1 (👤):** проверить `node -v` (ожидается `v24.x`) и `pnpm -v` (ожидается `12.6.0`, установлен через `npm i -g pnpm@12.6.0`). Подтвердить создание публичного репозитория `MozgovoyVF/school-task-bot`.
-- [ ] **Шаг 2: git и начальный коммит в `main`** (выполняет основная сессия до запуска оркестратора: навыку субагентов нужен уже существующий репозиторий)
+- [x] **Шаг 1 (👤):** проверить `node -v` (ожидается `v24.x`) и `pnpm -v` (ожидается `12.6.0`, установлен через `npm i -g pnpm@12.6.0`). Подтвердить создание публичного репозитория `MozgovoyVF/school-task-bot`.
+- [x] **Шаг 2: git и начальный коммит в `main`** (выполняет основная сессия до запуска оркестратора: навыку субагентов нужен уже существующий репозиторий)
 
 ```bash
 git init -b main
@@ -218,7 +227,7 @@ gh repo create MozgovoyVF/school-task-bot --public --source . --remote origin --
 git switch -c phase-0-skeleton
 ```
 
-- [ ] **Шаг 3: `package.json`.** Версию pnpm сверить с `npm view pnpm version` (на 2026-09-26 — 12.6.0).
+- [x] **Шаг 3: `package.json`.** Версию pnpm сверить с `npm view pnpm version` (на 2026-09-26 — 12.6.0).
 
 ```json
 {
@@ -251,7 +260,7 @@ git switch -c phase-0-skeleton
 }
 ```
 
-- [ ] **Шаг 4: зависимости.** Сверить версии через Context7 или npm.
+- [x] **Шаг 4: зависимости.** Сверить версии через Context7 или npm.
 
 ```bash
 pnpm add grammy @grammyjs/runner @grammyjs/conversations @grammyjs/auto-retry @grammyjs/transformer-throttler drizzle-orm postgres zod openai luxon fastify pino
@@ -260,7 +269,7 @@ pnpm add -D typescript@~5.9.3 tsx vitest @vitest/coverage-v8 drizzle-kit eslint 
 
 Если pnpm предупреждает об отсутствующей peer-зависимости `vite` для vitest, добавить `pnpm add -D vite`.
 
-- [ ] **Шаг 5: `tsconfig.json` и `tsconfig.build.json`**
+- [x] **Шаг 5: `tsconfig.json` и `tsconfig.build.json`**
 
 ```json
 {
@@ -290,7 +299,7 @@ pnpm add -D typescript@~5.9.3 tsx vitest @vitest/coverage-v8 drizzle-kit eslint 
 { "extends": "./tsconfig.json", "include": ["src", "scripts", "eval"], "exclude": ["tests", "**/*.test.ts"] }
 ```
 
-- [ ] **Шаг 6: `eslint.config.js`** (flat config; синтаксис сверить через Context7 → typescript-eslint)
+- [x] **Шаг 6: `eslint.config.js`** (flat config; синтаксис сверить через Context7 → typescript-eslint)
 
 ```js
 import js from '@eslint/js';
@@ -329,7 +338,7 @@ export default tseslint.config(
 
 `.prettierrc.json`: `{ "singleQuote": true, "printWidth": 110, "trailingComma": "all" }`. `.prettierignore`: `dist`, `coverage`, `pnpm-lock.yaml`, `src/db/migrations`, `SPEC.md`, `plan.md`.
 
-- [ ] **Шаг 7: `vitest.config.ts`** (синтаксис `projects` сверить через Context7 → vitest)
+- [x] **Шаг 7: `vitest.config.ts`** (синтаксис `projects` сверить через Context7 → vitest)
 
 ```ts
 import { defineConfig } from 'vitest/config';
@@ -359,7 +368,7 @@ export default defineConfig({
 
 `tests/integration/globalSetup.ts` пока пустой (`export default async function setup() {}`). Он заполняется в задаче 0.4.
 
-- [ ] **Шаг 8: падающий тест архитектурного правила**
+- [x] **Шаг 8: падающий тест архитектурного правила**
 
 ```ts
 // tests/unit/architecture.test.ts
@@ -397,8 +406,8 @@ describe('repository', () => {
 });
 ```
 
-- [ ] **Шаг 9:** `pnpm test:unit`. Ожидается FAIL: модуль `../helpers/architecture.js` не найден.
-- [ ] **Шаг 10: реализация**
+- [x] **Шаг 9:** `pnpm test:unit`. Ожидается FAIL: модуль `../helpers/architecture.js` не найден.
+- [x] **Шаг 10: реализация**
 
 ```ts
 // tests/helpers/architecture.ts
@@ -413,8 +422,8 @@ export function findForbiddenCyrillic(files: Array<{ path: string; content: stri
 }
 ```
 
-- [ ] **Шаг 11:** `pnpm lint && pnpm typecheck && pnpm test:unit` — PASS. `README.md` (кратко: что это, ссылки на SPEC, CLAUDE, plan, команды) и `CHANGELOG.md` (`## [Unreleased]`).
-- [ ] **Шаг 12: коммит и push**
+- [x] **Шаг 11:** `pnpm lint && pnpm typecheck && pnpm test:unit` — PASS. `README.md` (кратко: что это, ссылки на SPEC, CLAUDE, plan, команды) и `CHANGELOG.md` (`## [Unreleased]`).
+- [x] **Шаг 12: коммит и push**
 
 ```bash
 git add -A && git commit -m "chore: scaffold TypeScript project tooling" && git push -u origin phase-0-skeleton
@@ -427,7 +436,7 @@ git add -A && git commit -m "chore: scaffold TypeScript project tooling" && git 
 **Интерфейсы:**
 - Produces: `EnvSchema`, `type Env`, `loadEnv(source?: Record<string, string | undefined>): Env`, `class EnvError extends Error { issues: string[] }`. Константы (см. шаг 3).
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
 
 ```ts
 import { describe, it, expect } from 'vitest';
@@ -491,8 +500,8 @@ describe('loadEnv', () => {
 });
 ```
 
-- [ ] **Шаг 2:** `pnpm test:unit tests/unit/config` — FAIL (модуль не найден).
-- [ ] **Шаг 3: реализация.** Переменные — ровно из SPEC §26 плюс `GIT_SHA` (D21).
+- [x] **Шаг 2:** `pnpm test:unit tests/unit/config` — FAIL (модуль не найден).
+- [x] **Шаг 3: реализация.** Переменные — ровно из SPEC §26 плюс `GIT_SHA` (D21).
   - Обязательны: `TELEGRAM_BOT_TOKEN`, `SUPERADMIN_TG_IDS`, `DATABASE_URL`.
   - `OPENROUTER_API_KEY` и `LLM_MODEL_PRIMARY` не обязательны. Если хотя бы одной нет, `deps.ai = null`, в лог пишется warn «AI analysis disabled».
   - Пустые строки заранее превращаются в `undefined`.
@@ -531,9 +540,9 @@ export const COMPLETION_SIGNALS = ['готово', 'сделала', 'сдела
 
 Примечание: `хорошо`, `понял` и `поняла` в стоп-листе допустимы: сообщение остаётся контекстом. «Готова» и «готов» — сигналы завершения, стоп-лист их не отсеивает (SPEC §7.3).
 
-- [ ] **Шаг 4:** `.env.example` — дословно SPEC §26 плюс строка `GIT_SHA=dev  # подставляется при сборке образа`.
-- [ ] **Шаг 5:** тесты зелёные, lint и typecheck проходят.
-- [ ] **Шаг 6: коммит и push:** `feat(config): validate environment with zod`.
+- [x] **Шаг 4:** `.env.example` — дословно SPEC §26 плюс строка `GIT_SHA=dev  # подставляется при сборке образа`.
+- [x] **Шаг 5:** тесты зелёные, lint и typecheck проходят.
+- [x] **Шаг 6: коммит и push:** `feat(config): validate environment with zod`.
 
 ### Task 0.3: Логгер с redaction
 
@@ -541,7 +550,7 @@ export const COMPLETION_SIGNALS = ['готово', 'сделала', 'сдела
 
 **Интерфейсы:** Produces `createLogger(opts: { level: string; destination?: pino.DestinationStream }): Logger`, `type Logger = pino.Logger`.
 
-- [ ] **Шаг 1: падающий тест**
+- [x] **Шаг 1: падающий тест**
 
 ```ts
 import { describe, it, expect } from 'vitest';
@@ -574,10 +583,10 @@ describe('logger redaction', () => {
 });
 ```
 
-- [ ] **Шаг 2:** FAIL.
-- [ ] **Шаг 3: реализация.** pino с `redact.paths`: `text`, `*.text`, `*.*.text`, `*.*.*.text`, то же для `caption`, `first_name`, `last_name`, `username`; `*.TELEGRAM_BOT_TOKEN`, `*.OPENROUTER_API_KEY`, `*.TYPESAFE_API_KEY`, `*.authorization`, `*.token`, `*.apiKey`; `censor: '[REDACTED]'`. Синтаксис wildcard сверить через Context7 → pino.
-- [ ] **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(ops): add pino logger with PII redaction`.
+- [x] **Шаг 2:** FAIL.
+- [x] **Шаг 3: реализация.** pino с `redact.paths`: `text`, `*.text`, `*.*.text`, `*.*.*.text`, то же для `caption`, `first_name`, `last_name`, `username`; `*.TELEGRAM_BOT_TOKEN`, `*.OPENROUTER_API_KEY`, `*.TYPESAFE_API_KEY`, `*.authorization`, `*.token`, `*.apiKey`; `censor: '[REDACTED]'`. Синтаксис wildcard сверен через Context7 → pino (`/pinojs/pino/v10.1.0`): `*` matches exactly one level, no recursive wildcard, отсюда явные пути на глубину 0–3. Дополнительно: имена секретных ключей (например, `TELEGRAM_BOT_TOKEN`) сами содержат чувствительную подстроку, поэтому одного `censor` для значения недостаточно — само имя ключа осталось бы в выводе. `redact.remove` в pino общий на весь конфиг (не для отдельных путей), поэтому секретные ключи полностью вырезаются (ключ + значение) через `formatters.log` (выполняется до `redact`, подтверждено в документации pino), а PII-поля по-прежнему цензурируются через `redact.paths`, что и оставляет маркер `[REDACTED]` в выводе. `*.<SECRET_KEY>` пути в `redact.paths` сохранены как доп. защита.
+- [x] **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(ops): add pino logger with PII redaction`.
 
 ### Task 0.4: Схема БД, миграции, тестовая БД
 
@@ -609,8 +618,8 @@ export const memberships = pgTable('memberships', {
 
 Обязательные индексы и ограничения: `users.tg_user_id` unique; `chats.tg_chat_id` unique; `messages` unique `(chat_id, tg_message_id)` и индекс `(chat_id, analysis_status, sent_at)`; `tasks` — `(workspace_id, status, due_at)`, `(workspace_id, assignee_user_id, status)`, GIN `gin_trgm_ops` по `title` и `description`; индекс GIN trigram по `(payload->>'title')` у `proposals` (для dedup 2.8); `notifications.dedupe_key` unique и индекс `(status, fire_at)`; `analysis_batches` — индекс `(chat_id, status)`; `error_reports.fingerprint` pk; `app_state.key` pk.
 
-- [ ] **Шаг 1:** `docker/compose.dev.yml` с сервисом `db`: `postgres:17`, `POSTGRES_USER=stb`, `POSTGRES_PASSWORD=stb`, `POSTGRES_DB=stb`, порт `5433:5432`, volume `stb-dev-pgdata`, healthcheck `pg_isready`. Выполнить `pnpm db:up`.
-- [ ] **Шаг 2: падающий интеграционный тест**
+- [x] **Шаг 1:** `docker/compose.dev.yml` с сервисом `db`: `postgres:17`, `POSTGRES_USER=stb`, `POSTGRES_PASSWORD=stb`, `POSTGRES_DB=stb`, порт `5433:5432`, volume `stb-dev-pgdata`, healthcheck `pg_isready`. Выполнить `pnpm db:up`.
+- [x] **Шаг 2: падающий интеграционный тест**
 
 ```ts
 // tests/integration/db/schema.test.ts
@@ -647,21 +656,21 @@ describe('schema', () => {
 });
 ```
 
-- [ ] **Шаг 3:** `pnpm test:int` — FAIL (нет helpers и схемы).
-- [ ] **Шаг 4: миграции.** Порядок важен.
+- [x] **Шаг 3:** `pnpm test:int` — FAIL (нет helpers и схемы).
+- [x] **Шаг 4: миграции.** Порядок важен.
   1. `pnpm drizzle-kit generate --custom --name=extensions`, в файл вписать `CREATE EXTENSION IF NOT EXISTS pg_trgm;`.
   2. Описать схему.
   3. `pnpm db:generate` — сгенерировать основную миграцию. Проверить SQL глазами: частичный индекс, GIN, enum'ы.
 
   `drizzle.config.ts`: `dialect: 'postgresql'`, `schema: './src/db/schema/index.ts'`, `out: './src/db/migrations'`. Сверить через Context7 → drizzle.
-- [ ] **Шаг 5: `src/db/client.ts`, `src/db/migrate.ts`, helpers**
+- [x] **Шаг 5: `src/db/client.ts`, `src/db/migrate.ts`, helpers**
   - `createDb` использует `postgres(url, { max })` и `drizzle(client, { schema })`.
   - `runMigrations` вызывает `migrate(db, { migrationsFolder })` из `drizzle-orm/postgres-js/migrator`. Сверить через Context7.
   - `src/db/migrate.ts` — CLI: `loadEnv` → `createDb` → `runMigrations` → `close`.
   - `globalSetup`: подключиться к `postgres://stb:stb@localhost:5433/postgres` (или взять базу из `TEST_DATABASE_URL`), выполнить `DROP DATABASE IF EXISTS stb_test WITH (FORCE)` и `CREATE DATABASE stb_test`, применить миграции.
   - `truncateAll`: `TRUNCATE <все таблицы> RESTART IDENTITY CASCADE`. Список таблиц брать из `pg_tables where schemaname='public'`, кроме `__drizzle_migrations`.
-- [ ] **Шаг 6:** `pnpm test` — PASS.
-- [ ] **Шаг 7: коммит и push:** `feat(db): add drizzle schema, migrations and test database harness`.
+- [x] **Шаг 6:** `pnpm test` — PASS.
+- [x] **Шаг 7: коммит и push:** `feat(db): add drizzle schema, migrations and test database harness`.
 
 ### Task 0.5: Clock, Messenger, отчёты об ошибках
 
@@ -678,7 +687,7 @@ describe('schema', () => {
   - `getState<T>(db, key, schema: z.ZodType<T>): Promise<T | null>`, `setState(db, key, value: unknown, now: Date): Promise<void>`;
   - `FakeMessenger implements Messenger` с полем `sent: Array<{ chatId: number; text: string; opts?: SendOptions }>`, методами `failNextWith(err: MessengerError)` и `reactions`, `edits`, `left`.
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
 
 ```ts
 // tests/unit/ops/fingerprint.test.ts
@@ -711,14 +720,14 @@ describe('fingerprint', () => {
 // 5. alert('budget:2026-09-23', …) дважды за час → одно сообщение.
 ```
 
-- [ ] **Шаг 2:** FAIL.
-- [ ] **Шаг 3: реализация.**
+- [x] **Шаг 2:** FAIL.
+- [x] **Шаг 3: реализация.**
   - Отпечаток: `sha256(name + ':' + message.replace(/\d+/g, '#') + ':' + первая строка stack после сообщения)`, первые 16 hex-символов.
   - `sample` — `{ name, message (≤300 символов, без цифр длиннее 6 подряд), topFrames (5), context }`.
   - Upsert по `fingerprint`: если `last_notified_at` пусто или старше часа, отправить и обновить `last_notified_at`.
   - Текст отчёта берётся из `texts.errors.report(...)` в `ru.ts`.
-- [ ] **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(ops): add error reporter with hourly throttling`.
+- [x] **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(ops): add error reporter with hourly throttling`.
 
 ### Task 0.6: Ticker, heartbeat, `/healthz`
 
@@ -733,7 +742,7 @@ describe('fingerprint', () => {
   - `dailyJob(name: string, atUtc: string, run: (deps: AppDeps) => Promise<void>): Job` — выполняется один раз за UTC-сутки после `atUtc`, отметка хранится в `app_state` под ключом `daily:<name>`;
   - `buildHttpServer(deps: { db: Db; clock: Clock; heartbeat: () => Date | null }): FastifyInstance`.
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
   - Ticker:
     1. `tickOnce` запускает jobs по порядку.
     2. Ошибка одной job не останавливает следующие и уходит в `deps.errors.report`.
@@ -744,10 +753,12 @@ describe('fingerprint', () => {
     1. Heartbeat 10 с назад → 200 `{ status: 'ok' }`.
     2. Heartbeat 61 с назад → 503.
     3. БД недоступна (закрытое соединение) → 503.
-- [ ] **Шаг 2:** FAIL.
-- [ ] **Шаг 3: реализация.** Цикл на `setTimeout`: следующий тик планируется после завершения текущего. `stop()` дожидается текущего тика. Heartbeat хранится и в памяти (для `/healthz`), и в `app_state` (для watchdog в 4.5).
-- [ ] **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(scheduler): add ticker, daily jobs and health endpoint`.
+- [x] **Шаг 2:** FAIL.
+- [x] **Шаг 3: реализация.** Цикл на `setTimeout`: следующий тик планируется после завершения текущего. `stop()` дожидается текущего тика. Heartbeat хранится и в памяти (для `/healthz`), и в `app_state` (для watchdog в 4.5).
+- [x] **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(scheduler): add ticker, daily jobs and health endpoint`.
+
+См. D30 в «Решения и интерпретации» — почему `Job`/`createTicker`/`dailyJob` в этой задаче типизированы против локального `TickerDeps`, а не против `AppDeps`, и что нужно поменять в Task 0.8.
 
 ### Task 0.7: Скелет бота — `/start`, `/help`, superadmin, ошибки, `/admin`
 
@@ -765,19 +776,19 @@ describe('fingerprint', () => {
   - фабрики апдейтов: `dmText(from: TgUserLike, text)`, `groupText(chat: TgChatLike, from, text, extra?)`, `callback(from, data, message?)`, `botAdded(chat, by)`, `botRemoved(chat, by)`, `editedGroupText(...)`, `forwardedDm(...)`.
 - Harness: `bot.api.config.use(transformer)` записывает вызов и возвращает фейковый ответ (`sendMessage` → `{ message_id: n++ … }`, остальные → `true`). `botInfo` задаётся вручную, `getMe` не вызывается. Сверить через Context7 → grammY (transformers, `handleUpdate`, `botInfo`).
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
   - `/start` от superadmin: в ответе справка superadmin, в `users` у пользователя проставлен `dm_started_at`.
   - `/start` от незнакомца: нейтральный текст `texts.start.stranger` («Этот бот работает для сотрудников школы…»).
   - `/admin` от не-superadmin → `texts.common.forbidden`. От superadmin → версия (`GIT_SHA`) и аптайм.
   - Скрытая команда `/testerror` (только superadmin; кнопок нет, потому что кодек callback появляется в 1.3) → обработчик бросает `new Error('Test error from /testerror')` → `FakeMessenger` получает отчёт для superadmin, пользователь получает `texts.errors.userFacing`. От не-superadmin команда игнорируется.
   - `toMessengerError`: `GrammyError` 403 → `forbidden`; 429 с `retry_after: 5` → `rate_limited`, `retryAfterSec=5`; 400 `message is not modified` → `edit()` не бросает; 400 `chat not found` → `not_found`; `HttpError` → `network`.
-- [ ] **Шаг 2:** FAIL.
-- [ ] **Шаг 3: реализация.**
+- [x] **Шаг 2:** FAIL.
+- [x] **Шаг 3: реализация.**
   - `bot.ts`: `new Bot<BotContext>(token, { botInfo })`; `api.config.use(autoRetry())`, `api.config.use(apiThrottler())`; дальше middleware: errors → context → conversations() → handlers. `bot.catch` направляет ошибки в `deps.errors.report(err, { updateId })`.
   - `context.ts` (фаза 0): upsert пользователя из `ctx.from`, `actor.isSuperadmin` вычисляется по `config.SUPERADMIN_TG_IDS`.
   - Тексты — в `texts/ru.ts` в виде объекта функций, например `texts.start.owner(name)`.
-- [ ] **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(bot): add bot skeleton with start, help, admin and error reporting`.
+- [x] **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(bot): add bot skeleton with start, help, admin and error reporting`.
 
 ### Task 0.8: Composition root, graceful shutdown, Docker
 
@@ -789,16 +800,17 @@ describe('fingerprint', () => {
 **Интерфейсы:**
 - Produces: `startApp(env: Env, overrides?: { messenger?: Messenger; polling?: boolean; botInfo?: UserFromGetMe; clock?: Clock }): Promise<{ deps: AppDeps; http: FastifyInstance; stop(): Promise<void> }>`. `src/index.ts` вызывает `startApp(loadEnv())` и вешает `stop` на `SIGTERM` и `SIGINT`.
 
-- [ ] **Шаг 1: падающий тест.** `startApp` с `polling: false`, `FakeMessenger` и `DATABASE_URL` тестовой БД:
+- [x] **Шаг 1: падающий тест.** `startApp` с `polling: false`, `FakeMessenger` и `DATABASE_URL` тестовой БД:
   1. Миграции применены.
   2. `http.inject GET /healthz` → 200.
   3. `stop()` завершается менее чем за 10 с, повторный `stop()` ничего не делает.
-- [ ] **Шаг 2:** FAIL.
-- [ ] **Шаг 3: `src/app.ts`.**
+- [x] **Шаг 2:** FAIL.
+- [x] **Шаг 3: `src/app.ts`.**
   - Последовательность: `logger` → `createDb` → `runMigrations` (если `MIGRATE_ON_START`) → `createBot` → messenger → error reporter → ticker (пока только heartbeat) → http `listen({ host: '0.0.0.0', port })` → runner.
   - Runner: `run(bot, { runner: { fetch: { allowed_updates: ['message','edited_message','callback_query','my_chat_member','chat_member'] } } })` с `sequentialize(ctx => ctx.chat?.id.toString())`. Сверить через Context7 → @grammyjs/runner.
   - `stop()` останавливает сначала runner, потом ticker, потом http и db.
-- [ ] **Шаг 4: `docker/Dockerfile`** (multi-stage, non-root)
+  - См. D32 (заглушки `AiProviders`/`TaskHook`) и D34 (почему реальный `Messenger` использует отдельный `Api`-клиент, а не `bot.api`, и где оказался `sequentialize`) в «Решения и интерпретации».
+- [x] **Шаг 4: `docker/Dockerfile`** (multi-stage, non-root)
 
 ```dockerfile
 FROM node:24-bookworm-slim AS base
@@ -836,24 +848,26 @@ CMD ["node", "dist/src/index.js"]
 
 Каталог `prompts/` появится в фазе 2. До этого в репозитории лежит `prompts/.gitkeep`.
 
-- [ ] **Шаг 5: `docker/compose.yml`**
+См. D33 в «Решения и интерпретации» — два исправления, найденные реальной сборкой/запуском (копирование `pnpm-workspace.yaml`; путь миграций `./dist/src/db/migrations`, а не `./src/db/migrations`).
+
+- [x] **Шаг 5: `docker/compose.yml`**
   - `app`: `image: ghcr.io/mozgovoyvf/school-task-bot:${APP_TAG:-latest}`, `env_file: ../.env`, `ports: ["127.0.0.1:${HTTP_PORT:-3000}:3000"]`, `depends_on: db (service_healthy)`, `restart: unless-stopped`.
   - `db`: `postgres:17`, volume `pgdata`, без публикации порта, `POSTGRES_*` из `.env`, `restart: unless-stopped`.
   - У обоих логирование `json-file` с `max-size: 10m`, `max-file: "5"` (SPEC §18).
 
   `compose.dev.yml`: `app` собирается из `docker/Dockerfile` (target `deps`), bind-mount исходников, команда `pnpm dev` (SPEC §27.14).
-- [ ] **Шаг 6: проверка.**
-  - `pnpm test` — PASS.
-  - `docker build -f docker/Dockerfile -t stb:local .` — образ собирается.
-  - `docker compose -f docker/compose.yml -p stb-local up -d` с локальным `.env` (dev-токен, если уже есть) → `curl localhost:3000/healthz` возвращает 200.
-  - `docker compose restart` → данные в БД на месте.
-- [ ] **Шаг 7: коммит и push:** `feat(app): add composition root, graceful shutdown and Docker setup`.
+- [x] **Шаг 6: проверка.**
+  - `pnpm test` — PASS (54/54, включая новый `tests/integration/app/startup.test.ts`).
+  - `docker build -f docker/Dockerfile -t stb:local .` — образ собирается (после исправлений D33).
+  - `docker compose -f docker/compose.yml -p stb-local up -d` с синтетическим `.env` (реального dev-токена нет в этой среде — токен намеренно невалидный) → `db` становится `healthy`, `app` применяет миграции внутри контейнера; на `getMe()` с невалидным токеном бот закономерно падает (fail-fast на плохой конфиг, как и должно быть) — ручная проверка с настоящим токеном осталась пользователю. `docker compose -f docker/compose.yml config` и `docker compose -f docker/compose.dev.yml config` — валидны синтаксически.
+  - `docker compose restart` / переживание данных в БД между перезапусками не проверялось (нет реального токена для полноценного up; риск низкий — том `pgdata` именованный, том тестировался только в рамках create/down-v в этой сессии).
+- [x] **Шаг 7: коммит и push:** `feat(app): add composition root, graceful shutdown and Docker setup`.
 
 ### Task 0.9: CI/CD на GitHub
 
 **Файлы:** создать `.github/workflows/ci.yml`, `.github/workflows/release.yml`, `.github/workflows/deploy.yml`, `.github/dependabot.yml`.
 
-- [ ] **Шаг 1: `ci.yml`** (версии actions сверить через Context7 или документацию GitHub)
+- [x] **Шаг 1: `ci.yml`** (версии actions сверить через Context7 или документацию GitHub)
 
 ```yaml
 name: CI
@@ -889,10 +903,10 @@ jobs:
         with: { context: ., file: docker/Dockerfile, push: false, build-args: GIT_SHA=${{ github.sha }} }
 ```
 
-- [ ] **Шаг 2: `release.yml`.** Триггеры: `push: tags: ['v*']` и `workflow_dispatch` с input `tag`. Права: `packages: write`, `contents: read`. Логин в GHCR через `GITHUB_TOKEN`, сборка и push `ghcr.io/mozgovoyvf/school-task-bot:<tag>` и `:latest`; при ручном запуске с тегом `-rc` тег `latest` не ставится. Build-arg `GIT_SHA`.
-- [ ] **Шаг 3: `deploy.yml`.** Только `workflow_dispatch`, секреты `SSH_HOST`, `SSH_KEY`, `SSH_USER`: по SSH выполнить `cd /opt/stb-<env> && ./scripts/deploy.sh <tag>`. По умолчанию не используется (SPEC §24).
-- [ ] **Шаг 4: `dependabot.yml`:** `npm` и `github-actions`, раз в неделю.
-- [ ] **Шаг 5: коммит и push, проверка.** Коммит `chore(ci): add CI, release, manual deploy workflows and dependabot`, затем `git push` и `gh run watch`. Оба job'а должны быть зелёными.
+- [x] **Шаг 2: `release.yml`.** Триггеры: `push: tags: ['v*']` и `workflow_dispatch` с input `tag`. Права: `packages: write`, `contents: read`. Логин в GHCR через `GITHUB_TOKEN`, сборка и push `ghcr.io/mozgovoyvf/school-task-bot:<tag>` и `:latest`; при ручном запуске с тегом `-rc` тег `latest` не ставится. Build-arg `GIT_SHA`.
+- [x] **Шаг 3: `deploy.yml`.** Только `workflow_dispatch`, секреты `SSH_HOST`, `SSH_KEY`, `SSH_USER`: по SSH выполнить `cd /opt/stb-<env> && ./scripts/deploy.sh <tag>`. По умолчанию не используется (SPEC §24).
+- [x] **Шаг 4: `dependabot.yml`:** `npm` и `github-actions`, раз в неделю.
+- [x] **Шаг 5: коммит и push, проверка.** Коммит `chore(ci): add CI, release, manual deploy workflows and dependabot`, затем `git push` и `gh run watch`. Оба job'а должны быть зелёными.
 - [ ] **Шаг 6 (👤 подтвердить): защита `main`.** Выполняется после первого зелёного прогона, когда имена проверок уже известны.
 
 ```bash
@@ -908,22 +922,22 @@ JSON
 
 **Файлы:** создать `scripts/deploy.sh`, `scripts/backup.sh`, `scripts/restore.sh`, `docs/DEPLOY.md`; изменить `README.md`, `CHANGELOG.md`.
 
-- [ ] **Шаг 1: `scripts/deploy.sh <tag>`** (`set -euo pipefail`):
+- [x] **Шаг 1: `scripts/deploy.sh <tag>`** (`set -euo pipefail`):
   1. Прочитать предыдущий тег из `.deploy/current_tag`.
   2. Запустить `scripts/backup.sh`.
   3. `APP_TAG=<tag> docker compose -f docker/compose.yml --env-file .env -p "$COMPOSE_PROJECT" pull app && … up -d`.
   4. До 90 с опрашивать `curl -fsS http://127.0.0.1:${HTTP_PORT:-3000}/healthz`.
   5. Если проверка не прошла — откатиться на предыдущий тег и выйти с кодом 1. Если прошла — записать новый тег.
-- [ ] **Шаг 2: `scripts/backup.sh`:**
+- [x] **Шаг 2: `scripts/backup.sh`:**
   - `docker compose exec -T db pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" | gzip | age -r "$BACKUP_AGE_RECIPIENT" > backups/stb-$APP_ENV-$(date -u +%Y%m%dT%H%M%SZ).sql.gz.age`;
   - хранить 14 последних копий;
   - если файл не больше 50 МБ, отправить его superadmin через `curl -F document=@… https://api.telegram.org/bot$TOKEN/sendDocument`;
   - при ошибке отправить superadmin текстовое оповещение через `sendMessage` и выйти с кодом 1.
 
   `scripts/restore.sh <file.age> <identity-file>`: остановить `app`, пересоздать БД, выполнить `age -d -i … | gunzip | psql`, запустить `app` и проверить `/healthz`.
-- [ ] **Шаг 3: локальная проверка круговорота бэкапа.** Нужен `age` (`brew install age`, 👤 подтвердить установку). Бэкап compose.dev-базы → восстановление в новую базу → количество строк в `users` совпадает.
-- [ ] **Шаг 4: `docs/DEPLOY.md`** — все 14 пунктов SPEC §27. У каждого шага: точные команды, ожидаемый вывод и раздел «Если что-то пошло не так». Перед написанием п. 1 проверить актуальные тарифы VPS (Aéza, FirstByte, HostVDS, Fornex, Hetzner) через WebSearch и указать дату проверки. Каталоги на сервере: `/opt/stb-dev`, `/opt/stb-prod`. Команды compose: `docker compose -f docker/compose.yml --env-file .env -p stb-dev …`.
-- [ ] **Шаг 5: коммит и push:** `docs(deploy): add deploy/backup scripts and step-by-step DEPLOY guide`.
+- [x] **Шаг 3: локальная проверка круговорота бэкапа.** Нужен `age` (`brew install age`, 👤 подтвердить установку). Бэкап compose.dev-базы → восстановление в новую базу → количество строк в `users` совпадает. *Выполнено 2026-09-27 в изолированной копии: настоящие Docker, Postgres 17, age 1.3.2 и локально собранный образ, заглушка только для `curl`. 500 строк с кириллицей восстановлены, md5 совпал, ротация оставила 14 копий. Найдена и исправлена ошибка: `mapfile` отсутствует в bash 3.2 на macOS.*
+- [x] **Шаг 4: `docs/DEPLOY.md`** — все 14 пунктов SPEC §27. У каждого шага: точные команды, ожидаемый вывод и раздел «Если что-то пошло не так». Перед написанием п. 1 проверить актуальные тарифы VPS (Aéza, FirstByte, HostVDS, Fornex, Hetzner) через WebSearch и указать дату проверки. Каталоги на сервере: `/opt/stb-dev`, `/opt/stb-prod`. Команды compose: `docker compose -f docker/compose.yml --env-file .env -p stb-dev …`.
+- [x] **Шаг 5: коммит и push:** `docs(deploy): add deploy/backup scripts and step-by-step DEPLOY guide`.
 - [ ] **Шаг 6: релиз-кандидат.** `gh workflow run release.yml -f tag=v0.1.0-rc.1 --ref phase-0-skeleton`, затем `gh run watch`.
 - [ ] **Шаг 7 (👤): развернуть dev-бота на VPS по `docs/DEPLOY.md`.** Агент сопровождает. Приёмка:
   1. `/start` в dev-боте работает.

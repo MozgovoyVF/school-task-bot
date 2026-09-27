@@ -1,0 +1,51 @@
+name: Deploy
+
+# Manual only (SPEC §24): runs scripts/deploy.sh <tag> on the VPS over SSH.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Image tag to deploy (matches a tag pushed by release.yml, e.g. v0.1.0)'
+        required: true
+        type: string
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options:
+          - dev
+          - prod
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      # The tag ends up in a remote shell command: validate it strictly before anything else and
+      # never interpolate `${{ inputs.* }}` into a script (script injection; plan.md decision D38).
+      - name: Validate inputs
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
+            echo "::error::tag must look like v1.2.3 or v1.2.3-rc.4"
+            exit 1
+          fi
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Run deploy script on VPS
+        env:
+          TAG: ${{ inputs.tag }}
+          TARGET_ENV: ${{ inputs.environment }}
+          SSH_TARGET: ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}
+        run: |
+          # TAG was validated above and TARGET_ENV is a `choice` input; %q quotes both anyway for
+          # the remote shell.
+          REMOTE_CMD=$(printf 'cd /opt/stb-%q && ./scripts/deploy.sh %q' "$TARGET_ENV" "$TAG")
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "$SSH_TARGET" "$REMOTE_CMD"

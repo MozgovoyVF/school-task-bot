@@ -56,7 +56,7 @@ pnpm db:generate                      # drizzle-kit: SQL-миграция из �
 pnpm db:migrate                       # применить миграции к DATABASE_URL
 pnpm build && pnpm start              # сборка в dist/ и запуск
 pnpm eval --model <id> --limit 20     # РЕАЛЬНЫЙ API, стоит денег — только с разрешения пользователя
-docker compose -f docker/compose.yml -p stb-dev up -d   # как на сервере
+APP_TAG=<tag> ./scripts/compose.sh up -d               # как на сервере (тег из GHCR, см. docs/DEPLOY.md §8)
 ```
 
 Для тестов нужна переменная `TEST_DATABASE_URL`, по умолчанию `postgres://stb:stb@localhost:5433/stb_test`.
@@ -68,23 +68,23 @@ docker compose -f docker/compose.yml -p stb-dev up -d   # как на серве
 - Если Context7 недоступен (квота, сеть), используй официальную документацию через WebFetch (ссылки ниже) и упомяни это в отчёте о задаче.
 - При первом обращении к библиотеке впиши её Context7 ID в таблицу, чтобы следующие агенты не искали его заново.
 
-| Технология | Официальная документация | Context7 ID |
-|---|---|---|
-| grammY и плагины (runner, conversations v2, auto-retry, transformer-throttler) | https://grammy.dev | `/grammyjs/website` (общее), `/grammyjs/conversations` (диалоги) |
-| Telegram Bot API | https://core.telegram.org/bots/api | — |
-| Drizzle ORM / drizzle-kit | https://orm.drizzle.team | — |
-| postgres.js | https://github.com/porsager/postgres | — |
-| PostgreSQL 17, pg_trgm | https://www.postgresql.org/docs/17/ | — |
-| zod v4 | https://zod.dev | — |
-| OpenAI Node SDK (для OpenRouter) | https://github.com/openai/openai-node | — |
-| OpenRouter API | https://openrouter.ai/docs | — |
-| luxon | https://moment.github.io/luxon | — |
-| Fastify 5 | https://fastify.dev | — |
-| pino | https://getpino.io | — |
-| vitest | https://vitest.dev | — |
-| typescript-eslint / ESLint flat config | https://typescript-eslint.io | — |
-| Docker / Compose | https://docs.docker.com | — |
-| GitHub Actions / GHCR | https://docs.github.com/actions | — |
+| Технология                                                                     | Официальная документация              | Context7 ID                                                      |
+| ------------------------------------------------------------------------------ | ------------------------------------- | ---------------------------------------------------------------- |
+| grammY и плагины (runner, conversations v2, auto-retry, transformer-throttler) | https://grammy.dev                    | `/grammyjs/website` (общее), `/grammyjs/conversations` (диалоги) |
+| Telegram Bot API                                                               | https://core.telegram.org/bots/api    | —                                                                |
+| Drizzle ORM / drizzle-kit                                                      | https://orm.drizzle.team              | `/drizzle-team/drizzle-orm-docs`                                 |
+| postgres.js                                                                    | https://github.com/porsager/postgres  | —                                                                |
+| PostgreSQL 17, pg_trgm                                                         | https://www.postgresql.org/docs/17/   | —                                                                |
+| zod v4                                                                         | https://zod.dev                       | —                                                                |
+| OpenAI Node SDK (для OpenRouter)                                               | https://github.com/openai/openai-node | —                                                                |
+| OpenRouter API                                                                 | https://openrouter.ai/docs            | —                                                                |
+| luxon                                                                          | https://moment.github.io/luxon        | —                                                                |
+| Fastify 5                                                                      | https://fastify.dev                   | `/fastify/fastify`                                               |
+| pino                                                                           | https://getpino.io                    | —                                                                |
+| vitest                                                                         | https://vitest.dev                    | —                                                                |
+| typescript-eslint / ESLint flat config                                         | https://typescript-eslint.io          | —                                                                |
+| Docker / Compose                                                               | https://docs.docker.com               | —                                                                |
+| GitHub Actions / GHCR                                                          | https://docs.github.com/actions       | —                                                                |
 
 Уже проверенные факты (2026-09-26):
 
@@ -92,6 +92,7 @@ docker compose -f docker/compose.yml -p stb-dev up -d   # как на серве
 - **OpenRouter:** `usage.cost`, `usage.prompt_tokens` и `usage.completion_tokens` приходят в каждом ответе автоматически. Параметр `usage: { include: true }` устарел, его не передаём.
 - **TypeScript:** в npm latest уже 7.x, но по SPEC §4 держим **5.x** (`~5.9.3`). typescript-eslint поддерживает TS `<6.1`.
 - **@grammyjs/transformer-throttler** 1.2.1 совместим с grammy ^1.
+- **drizzle-orm 0.45.3 / drizzle-kit 0.31.11:** postgres.js-драйвер — `drizzle(client, { schema })` из `drizzle-orm/postgres-js`, миграции — `migrate(db, { migrationsFolder })` из `drizzle-orm/postgres-js/migrator`. При круговых ссылках между таблицами из разных файлов схемы (напр. `messages.batch_id → analysis_batches`, `analysis_batches.first_message_id → messages`) `drizzle-kit generate` работает без проблем (FK добавляются через `ALTER TABLE` после всех `CREATE TABLE`), но `tsc` падает с `TS7022` (циклический вывод типа таблицы). Лечится явной аннотацией возврата колбэка: `.references((): AnyPgColumn => other.id, {...})` вместо `.references(() => other.id, {...})`.
 
 ## 6. Стек (SPEC §4) и зависимости
 
