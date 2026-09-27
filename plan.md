@@ -1107,7 +1107,7 @@ describe('permission matrix (SPEC §3)', () => {
   - `encodeCallback(p): string` (бросает `CallbackTooLongError`), `decodeCallback(data: string): CallbackPayload | null`;
   - `toInlineKeyboard(buttons: Buttons): InlineKeyboard`.
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
 
 ```ts
 import { describe, it, expect } from 'vitest';
@@ -1132,10 +1132,10 @@ describe('callback codec', () => {
 });
 ```
 
-- [ ] **Шаг 2:** FAIL.
-- [ ] **Шаг 3: реализация.** Регулярка `^v1:([a-z]):([a-z]{1,4}):(\d{1,15})(?::([A-Za-z0-9_.-]{1,40}))?$`, плюс zod-проверка `entity`. Размер считать через `Buffer.byteLength(s, 'utf8') <= 64`.
-- [ ] **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(bot): add versioned callback data codec`.
+- [x] **Шаг 2:** FAIL.
+- [x] **Шаг 3: реализация.** Регулярка `^v1:([a-z]):([a-z]{1,4}):(\d{1,15})(?::([A-Za-z0-9_.-]{1,40}))?$`, плюс zod-проверка `entity`. Размер считать через `Buffer.byteLength(s, 'utf8') <= 64`. `encodeCallback` отдельно проверяет символы `arg` без ограничения длины (иначе тест на превышение 64 байт словил бы `CallbackEncodeError` вместо `CallbackTooLongError` раньше проверки размера), а сам предел длины (40 символов для внешних данных) применяется только при `decodeCallback`. `toInlineKeyboard` (`build.ts`) собран на `InlineKeyboard.from` + `InlineKeyboard.text`/`InlineKeyboard.url` (grammY, проверено через Context7 `/grammyjs/website`); дополнительно покрыт тестом `tests/unit/bot/keyboardBuild.test.ts` (в брифе задачи не был явно затребован, добавлен по общему правилу TDD из CLAUDE.md §3).
+- [x] **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(bot): add versioned callback data codec`.
 
 ### Task 1.4: Часовые пояса, `/start` с выбором пояса, `/timezone`
 
