@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { InlineKeyboard } from 'grammy';
-import { toInlineKeyboard } from '../../../src/bot/keyboards/build.js';
+import { toInlineKeyboard, InvalidButtonError } from '../../../src/bot/keyboards/build.js';
 import type { Buttons } from '../../../src/domain/messenger.js';
 
 describe('toInlineKeyboard', () => {
@@ -31,6 +31,6 @@ describe('toInlineKeyboard', () => {
 
   it('throws when a button has neither data nor url', () => {
     const buttons = [[{ text: 'Bad' }]] as Buttons;
-    expect(() => toInlineKeyboard(buttons)).toThrow();
+    expect(() => toInlineKeyboard(buttons)).toThrow(InvalidButtonError);
   });
 });

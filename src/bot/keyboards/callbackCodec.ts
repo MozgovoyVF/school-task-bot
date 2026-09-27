@@ -2,8 +2,13 @@
  * Versioned `callback_data` codec (SPEC §25): `v1:<entity>:<action>:<id>[:<arg>]`.
  *
  * `encodeCallback` is used by `bot/views/*` when building keyboards from
- * trusted, internal data; it throws on malformed input or on payloads that
- * would exceed Telegram's 64-byte `callback_data` limit.
+ * trusted, internal data; it throws on malformed input, on payloads that
+ * would exceed Telegram's 64-byte `callback_data` limit, or on payloads
+ * that `decodeCallback` couldn't parse back (e.g. an `id`/`arg` that stays
+ * under 64 bytes but still exceeds the wire regex's own per-field caps) —
+ * `encodeCallback` always round-trips through `decodeCallback` before
+ * returning, so a keyboard can never be built with a `callback_data` the
+ * bot's own decoder would reject.
  *
  * `decodeCallback` is the inverse used by `bot/handlers/*` on incoming
  * callback queries, which are untrusted external data (CLAUDE.md §8): it
@@ -23,8 +28,8 @@ export interface CallbackPayload {
 }
 
 export class CallbackTooLongError extends Error {
-  constructor(size: number) {
-    super(`callback_data is ${String(size)} bytes, over the 64-byte Telegram limit`);
+  constructor(detail: string) {
+    super(`callback_data does not fit the 64-byte v1 wire format: ${detail}`);
     this.name = 'CallbackTooLongError';
   }
 }
@@ -62,7 +67,25 @@ export function encodeCallback(payload: CallbackPayload): string {
 
   const data = `v1:${entity}:${action}:${String(id)}${arg !== undefined ? `:${arg}` : ''}`;
   const size = Buffer.byteLength(data, 'utf8');
-  if (size > MAX_BYTES) throw new CallbackTooLongError(size);
+  if (size > MAX_BYTES) throw new CallbackTooLongError(`${String(size)} bytes, over the limit`);
+
+  // Byte size alone isn't enough: the wire regex also caps `id` at 15
+  // digits and `arg` at 40 chars, both stricter than what 64 bytes allows
+  // on their own (e.g. a short entity/action/id leaves room for an arg
+  // over 40 chars while staying under 64 bytes). Round-tripping through
+  // decodeCallback catches that gap and any future divergence between the
+  // two functions, so a keyboard is never built with a callback_data the
+  // bot's own decoder would silently reject.
+  const roundTrip = decodeCallback(data);
+  if (
+    roundTrip === null ||
+    roundTrip.entity !== entity ||
+    roundTrip.action !== action ||
+    roundTrip.id !== id ||
+    roundTrip.arg !== arg
+  ) {
+    throw new CallbackTooLongError('id/arg exceed the wire format field limits (15 digits / 40 chars)');
+  }
   return data;
 }
 
