@@ -10,12 +10,15 @@ set -euo pipefail
 # Run from the repo root on the VPS (e.g. /opt/stb-dev or /opt/stb-prod),
 # next to docker/compose.yml and .env. See docs/DEPLOY.md §11.
 #
-# Required env (normally set in .env, which this script sources itself from
-# its own directory -- see below): COMPOSE_PROJECT (e.g. stb-dev, stb-prod).
-# Optional: HTTP_PORT (default 3000).
+# <tag> must be a concrete release tag (e.g. v0.2.0 or v0.2.0-rc.1), never
+# `latest`: it is recorded in .deploy/current_tag as the rollback target for
+# the next deploy, and a floating tag would make that target meaningless
+# (plan.md decision D38).
 #
-# The scripts/backup.sh call this script makes needs its own required env;
-# see that script's header (it sources the same .env itself too).
+# Reads from .env (see scripts/lib/common.sh -- .env is parsed literally, not
+# sourced): COMPOSE_PROJECT (required, e.g. stb-dev, stb-prod), HTTP_PORT
+# (host-side port, default 3000). The scripts/backup.sh call this script makes
+# reads its own settings from the same .env.
 
 if [[ $# -ne 1 ]]; then
   echo "usage: $0 <tag>" >&2
@@ -23,44 +26,41 @@ if [[ $# -ne 1 ]]; then
 fi
 
 NEW_TAG=$1
+if [[ ! "$NEW_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+  echo "invalid image tag: $NEW_TAG" >&2
+  exit 1
+fi
+if [[ "$NEW_TAG" == "latest" ]]; then
+  echo "refusing to deploy the floating tag 'latest'; pass a concrete release tag (e.g. v0.1.0)" >&2
+  exit 1
+fi
+
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-ROOT_DIR=$(cd -- "$SCRIPT_DIR/.." && pwd)
-COMPOSE_FILE="$ROOT_DIR/docker/compose.yml"
-ENV_FILE="$ROOT_DIR/.env"
-DEPLOY_STATE_DIR="$ROOT_DIR/.deploy"
-CURRENT_TAG_FILE="$DEPLOY_STATE_DIR/current_tag"
+# shellcheck source-path=SCRIPTDIR source=lib/common.sh
+source "$SCRIPT_DIR/lib/common.sh"
+
 HEALTH_TIMEOUT_SECONDS=90
 HEALTH_POLL_INTERVAL_SECONDS=3
 
-# Load config from .env next to this script's repo root, so a bare
-# `./scripts/deploy.sh <tag>` (from a human or the deploy.yml GitHub Action)
-# works without the caller having to export anything first. Values already
-# exported in the calling shell are overridden by .env, which is the
-# intended single source of truth for this stack's config.
-if [[ -f "$ENV_FILE" ]]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
-  set +a
-fi
-
+COMPOSE_PROJECT=$(env_get COMPOSE_PROJECT)
+HTTP_PORT=$(env_get HTTP_PORT)
 HTTP_PORT="${HTTP_PORT:-3000}"
+# Exported so docker compose's own ${HTTP_PORT} substitution (host-side port
+# in docker/compose.yml) uses exactly the value this script polls below, even
+# if the calling shell happens to export a different HTTP_PORT.
+export HTTP_PORT
 
-: "${COMPOSE_PROJECT:?COMPOSE_PROJECT must be set (e.g. stb-dev or stb-prod)}"
+if [[ -z "$COMPOSE_PROJECT" ]]; then
+  echo "COMPOSE_PROJECT must be set in $ENV_FILE (e.g. stb-dev or stb-prod)" >&2
+  exit 1
+fi
 
 mkdir -p "$DEPLOY_STATE_DIR"
 
-PREVIOUS_TAG=""
-if [[ -f "$CURRENT_TAG_FILE" ]]; then
-  PREVIOUS_TAG=$(cat "$CURRENT_TAG_FILE")
-fi
+PREVIOUS_TAG=$(read_current_tag)
 
 echo "Previous tag: ${PREVIOUS_TAG:-<none recorded>}"
 echo "Deploying tag: $NEW_TAG"
-
-compose() {
-  docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" -p "$COMPOSE_PROJECT" "$@"
-}
 
 wait_for_health() {
   local deadline=$((SECONDS + HEALTH_TIMEOUT_SECONDS))

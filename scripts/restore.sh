@@ -5,16 +5,18 @@ set -euo pipefail
 #
 # Restores an age-encrypted, gzip-compressed pg_dump backup produced by
 # scripts/backup.sh: stops the app, drops and recreates the database,
-# restores the dump into it, brings the app back up, and verifies /healthz.
+# restores the dump into it, brings the SAME app version back up (the tag
+# recorded in .deploy/current_tag, never a floating `latest`; plan.md
+# decision D38), and verifies /healthz.
 #
 # Run from the repo root on the VPS (e.g. /opt/stb-dev or /opt/stb-prod),
 # next to docker/compose.yml and .env. See docs/DEPLOY.md §10.
 #
 # DESTRUCTIVE: this permanently replaces the current database contents.
 #
-# Required env (normally set in .env, which this script sources itself from
-# its own directory -- see below): POSTGRES_USER, POSTGRES_DB,
-# COMPOSE_PROJECT. Optional: HTTP_PORT (default 3000).
+# Reads from .env (see scripts/lib/common.sh -- .env is parsed literally, not
+# sourced): POSTGRES_USER, POSTGRES_DB, COMPOSE_PROJECT (required), HTTP_PORT
+# (host-side port, default 3000). Also requires .deploy/current_tag.
 #
 # <identity-file> is the age private key file matching the public key
 # (BACKUP_AGE_RECIPIENT) the backup was encrypted with; it is kept off the
@@ -38,35 +40,37 @@ if [[ ! -f "$IDENTITY_FILE" ]]; then
 fi
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-ROOT_DIR=$(cd -- "$SCRIPT_DIR/.." && pwd)
-COMPOSE_FILE="$ROOT_DIR/docker/compose.yml"
-ENV_FILE="$ROOT_DIR/.env"
+# shellcheck source-path=SCRIPTDIR source=lib/common.sh
+source "$SCRIPT_DIR/lib/common.sh"
+
 HEALTH_TIMEOUT_SECONDS=90
 HEALTH_POLL_INTERVAL_SECONDS=3
 
-# Load config from .env next to this script's repo root, so a bare
-# `./scripts/restore.sh <file> <identity>` works without the caller having
-# to export anything first. Values already exported in the calling shell
-# are overridden by .env, which is the intended single source of truth for
-# this stack's config.
-if [[ -f "$ENV_FILE" ]]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
-  set +a
-fi
-
+POSTGRES_USER=$(env_get POSTGRES_USER)
+POSTGRES_DB=$(env_get POSTGRES_DB)
+COMPOSE_PROJECT=$(env_get COMPOSE_PROJECT)
+HTTP_PORT=$(env_get HTTP_PORT)
 HTTP_PORT="${HTTP_PORT:-3000}"
+export HTTP_PORT
 
-: "${POSTGRES_USER:?POSTGRES_USER must be set}"
-: "${POSTGRES_DB:?POSTGRES_DB must be set}"
-: "${COMPOSE_PROJECT:?COMPOSE_PROJECT must be set}"
+for name in POSTGRES_USER POSTGRES_DB COMPOSE_PROJECT; do
+  if [[ -z "${!name}" ]]; then
+    echo "$name must be set in $ENV_FILE" >&2
+    exit 1
+  fi
+done
 
-compose() {
-  docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" -p "$COMPOSE_PROJECT" "$@"
-}
+# Bring back exactly the version that was running before the restore.
+# Checked before anything is stopped or dropped.
+APP_TAG=$(read_current_tag)
+if [[ -z "$APP_TAG" ]]; then
+  echo "no deployed tag recorded in $CURRENT_TAG_FILE; refusing to guess which app version to start" >&2
+  exit 1
+fi
+export APP_TAG
 
 echo "This will PERMANENTLY REPLACE the contents of database '$POSTGRES_DB' ($COMPOSE_PROJECT)."
+echo "The app will be restarted on its current version: $APP_TAG."
 read -r -p "Type 'yes' to continue: " CONFIRM
 if [[ "$CONFIRM" != "yes" ]]; then
   echo "Aborted."
@@ -90,7 +94,7 @@ age -d -i "$IDENTITY_FILE" "$BACKUP_FILE" \
   | gunzip \
   | compose exec -T db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 
-echo "Starting app..."
+echo "Starting app ($APP_TAG)..."
 compose up -d app
 
 echo "Waiting for /healthz (up to ${HEALTH_TIMEOUT_SECONDS}s)..."

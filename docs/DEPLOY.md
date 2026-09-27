@@ -323,53 +323,99 @@ nano .env   # заполнить значения ниже
 ```bash
 # в .env — учётные данные должны совпадать с теми, что зашиты в DATABASE_URL ниже
 POSTGRES_USER=stb
-POSTGRES_PASSWORD=<сгенерировать сильный пароль>
+POSTGRES_PASSWORD=<вывод команды openssl rand -hex 24>
 POSTGRES_DB=stb
 # имя compose-проекта: stb-dev в /opt/stb-dev, stb-prod в /opt/stb-prod
 COMPOSE_PROJECT=stb-dev
+# порт НА ХОСТЕ (слушает только 127.0.0.1), у каждого стека свой: 3000 в stb-dev, 3001 в stb-prod
+HTTP_PORT=3000
 ```
 
 и привести `DATABASE_URL` к тем же учётным данным, например:
 `DATABASE_URL=postgres://stb:<тот-же-пароль>@db:5432/stb`.
 
-Запуск:
+**Пароль генерируйте командой `openssl rand -hex 24`.** В hex-строке только `0-9a-f`, она
+безопасна в обоих местах: символы `/`, `+`, `@`, `:` (частые в base64) ломают `DATABASE_URL`, а
+`$` docker compose внутри `.env` считает подстановкой переменной.
+
+**`HTTP_PORT` — это порт на хосте, а не внутри контейнера.** Приложение в контейнере всегда слушает
+3000: `docker/compose.yml` задаёт `HTTP_PORT: '3000'` в `environment` сервиса `app`, и это
+перекрывает значение из `.env` (на нём же завязан `HEALTHCHECK` образа). Значение из `.env`
+используется только для публикации `127.0.0.1:<HTTP_PORT>:3000` и для проверок `/healthz` в
+скриптах. Два стека на одном VPS (SPEC §17.1) не могут занять один порт хоста, поэтому в
+`/opt/stb-dev/.env` оставьте `HTTP_PORT=3000`, а в `/opt/stb-prod/.env` укажите `HTTP_PORT=3001`.
+
+`scripts/*.sh` читают `.env` построчно как `KEY=VALUE` и ничего из него не выполняют (решение D38
+в `plan.md`), поэтому значения с пробелами и запятыми вроде `SUPERADMIN_TG_IDS=111, 222` или
+`DEFAULT_WORKSPACE_NAME=Французская школа` допустимы без кавычек. Подстановку `${VAR}` внутри
+значений скрипты не делают. Комментарий после значения отделяйте пробелом (`KEY=value # заметка`)
+и **не ставьте комментарий после пустого значения**: и docker compose, и скрипты прочитают
+`KEY=   # заметка` как значение `# заметка`.
+
+**Первый запуск — всегда конкретный тег образа, никогда `latest`.** Тег должен уже быть
+опубликован в GHCR workflow'ом `release.yml` (п. 11). Для самого первого релиза, когда git-тегов
+ещё нет, его запускают вручную с ветки, из которой нужно собрать образ:
 
 ```bash
-APP_TAG=latest docker compose -f docker/compose.yml --env-file .env -p stb-dev pull app
-APP_TAG=latest docker compose -f docker/compose.yml --env-file .env -p stb-dev up -d
-docker compose -f docker/compose.yml --env-file .env -p stb-dev logs -f app
+# на локальной машине
+gh workflow run release.yml -f tag=v0.1.0-rc.1 --ref <ветка>
+gh run watch
 ```
 
-Оставить первый деплой записанным как «текущий тег» для `scripts/deploy.sh` (иначе первый вызов
-`deploy.sh` не будет знать, откуда стартовал):
+Теги `-rc` никогда не становятся `:latest`, поэтому после первого rc-релиза `:latest` в GHCR может
+вообще не существовать. Деплой на него и не опирается.
+
+Запуск на сервере (`scripts/compose.sh` — это `docker compose` для этого стека: сам берёт
+`COMPOSE_PROJECT` и `HTTP_PORT` из `.env`, а тег из `APP_TAG` или `.deploy/current_tag`):
 
 ```bash
-mkdir -p .deploy && echo latest > .deploy/current_tag
+cd /opt/stb-dev
+TAG=v0.1.0-rc.1                       # конкретный опубликованный тег
+APP_TAG=$TAG ./scripts/compose.sh pull app
+APP_TAG=$TAG ./scripts/compose.sh up -d
+curl -fsS http://127.0.0.1:3000/healthz   # 3000 = HTTP_PORT этого стека (в stb-prod: 3001)
 ```
 
-Проверка:
+Когда `/healthz` ответил, запишите **этот же конкретный тег** как текущий:
 
 ```bash
-curl -fsS http://127.0.0.1:${HTTP_PORT:-3000}/healthz
+mkdir -p .deploy && echo "$TAG" > .deploy/current_tag
+```
+
+В `.deploy/current_tag` всегда лежит реальный задеплоенный тег, никогда `latest`. По нему
+`scripts/deploy.sh` откатывается при неудачном обновлении, `scripts/restore.sh` после
+восстановления поднимает приложение ровно той же версии, а `scripts/backup.sh` и
+`scripts/compose.sh` (без явного `APP_TAG`) без него не запускаются. `docker/compose.yml` без `APP_TAG` не работает
+вообще (`required variable APP_TAG is missing a value`) и не подставляет `latest` молча.
+
+Логи:
+
+```bash
+./scripts/compose.sh logs -f app
 ```
 
 и в Telegram — открыть чат с dev-ботом, отправить `/start`.
 
 **Ожидаемый результат:**
 
-- `docker compose ... logs -f app` показывает JSON-строки pino без ошибок, среди них что-то вроде
+- `./scripts/compose.sh logs -f app` показывает JSON-строки pino без ошибок, среди них что-то вроде
   `"msg":"bot started"` / `"msg":"ticker started"` (точные сообщения — см. `src/app.ts`).
 - `curl .../healthz` → `{"status":"ok"}` с кодом 200.
 - `/start` в Telegram отвечает приветственным сообщением на «вы».
 
 **Если что-то пошло не так:**
 
-- `/healthz` возвращает 503 или соединение отклонено — смотреть `docker compose ... logs app`;
+- `/healthz` возвращает 503 или соединение отклонено — смотреть `./scripts/compose.sh logs app`;
   частая причина — БД ещё не готова (`depends_on: condition: service_healthy` должен был это
   предотвратить) или неверный `DATABASE_URL`/`POSTGRES_*`.
-- Контейнер `app` в `Restarting` — `docker compose ... logs app` покажет причину падения (обычно
+- Контейнер `app` в `Restarting` — `./scripts/compose.sh logs app` покажет причину падения (обычно
   `EnvError` от zod-схемы `src/config/env.ts`: не хватает обязательной переменной).
 - `/start` не отвечает — проверить `TELEGRAM_BOT_TOKEN` в `.env` и что `TELEGRAM_MODE=polling`.
+- `manifest unknown` / `not found` при `pull app` — такого тега в GHCR нет: проверьте, что
+  `release.yml` для него завершился успешно (`gh run list --workflow release.yml`), и что тег указан
+  точно (`v0.1.0-rc.1`, а не `latest`).
+- `port is already allocated` — `HTTP_PORT` в `.env` совпадает с портом другого стека на этом VPS
+  (например, dev и prod оба на 3000); задайте разные значения, как описано выше.
 
 ---
 
@@ -394,7 +440,7 @@ curl -fsS http://127.0.0.1:${HTTP_PORT:-3000}/healthz
 
 - Бот не видит сообщения участников — проверить `/setprivacy → Disable` (п. 5) и то, что бот был
   добавлен в группу **после** отключения приватности (переустановить, если добавляли раньше).
-- Уведомление не пришло — проверить логи (`docker compose ... logs app`) на ошибки отправки
+- Уведомление не пришло — проверить логи (`./scripts/compose.sh logs app`) на ошибки отправки
   сообщений (`Forbidden: bot was blocked by the user` и т. п. — тогда нужно самому написать боту
   `/start` в личку хотя бы один раз, Telegram не позволяет боту писать первым).
 
@@ -466,18 +512,24 @@ cd /opt/stb-dev
 - `./scripts/backup.sh` печатает `Backup written: backups/stb-dev-<timestamp>.sql.gz.age` и
   `Backup sent to superadmin via Telegram.`; в личке у superadmin появляется файл-документ.
 - `ls backups/` содержит не более 14 файлов на окружение (более старые удаляются автоматически).
-- `./scripts/restore.sh` запрашивает подтверждение (`Type 'yes' to continue:`), затем печатает
-  `Restore complete; app is healthy.`
+- `./scripts/restore.sh` показывает версию, на которой перезапустит приложение (со строкой
+  `The app will be restarted on its current version: <тег>`, где тег берётся из
+  `.deploy/current_tag`), запрашивает подтверждение (`Type 'yes' to continue:`),
+  затем печатает `Restore complete; app is healthy.`
 
 **Если что-то пошло не так:**
 
 - `backup.sh` падает с `POSTGRES_USER must be set` (или аналогично для другой переменной) — скрипт
-  сам подгружает `.env` из своего каталога (`ROOT_DIR/.env`, где `ROOT_DIR` вычисляется от пути
+  сам читает `.env` из своего каталога (`ROOT_DIR/.env`, где `ROOT_DIR` вычисляется от пути
   самого скрипта, а не от текущей директории), так что ошибка означает, что переменной
   действительно нет в `.env`; допишите её (см. п. 8) и запустите снова. При такой ошибке скрипт
   всё равно должен успеть отправить superadmin текстовое оповещение через `sendMessage` — если
   этого не произошло, значит не хватает именно `TELEGRAM_BOT_TOKEN`/`SUPERADMIN_TG_IDS` (без них
   оповещать некого) — тогда сообщение об ошибке будет только в выводе скрипта/логе cron.
+- `no deployed tag recorded in .../.deploy/current_tag` (в `backup.sh` или `restore.sh`) — на этом
+  стеке не записан текущий тег (п. 8). Запишите реально работающий тег:
+  `echo v0.1.0-rc.1 > .deploy/current_tag` (посмотреть его можно в `docker ps` в колонке `IMAGE`).
+  `restore.sh` проверяет это до остановки приложения и удаления БД, так что ничего не сломано.
 - `age: error: no identity matched any of the recipients` при restore — использован не тот
   identity-файл (не пара к `BACKUP_AGE_RECIPIENT`, которым бэкап был зашифрован).
 - Файл бэкапа не пришёл в Telegram, хотя скрипт завершился успешно — проверьте его размер
@@ -490,6 +542,16 @@ cd /opt/stb-dev
 ---
 
 ## 11. Обновление версии и откат
+
+Новая версия образа публикуется в GHCR workflow'ом `release.yml` (решение D38 в `plan.md`):
+
+- `git tag v0.2.0 && git push origin v0.2.0` — сборка коммита, на который указывает тег;
+- или вручную: `gh workflow run release.yml -f tag=v0.2.0 --ref <ветка>` — сборка головы ветки,
+  git-тег при этом не нужен и не создаётся.
+
+Тег должен иметь вид `vX.Y.Z` или `vX.Y.Z-rc.N`. Финальные теги (`vX.Y.Z`) дополнительно двигают
+`:latest` (это тот же образ, тот же digest), `-rc` — никогда, независимо от способа запуска.
+Деплоится всегда конкретный тег:
 
 ```bash
 cd /opt/stb-dev
@@ -523,12 +585,14 @@ gh run watch
 **Если что-то пошло не так:**
 
 - `Health check failed for tag vX.Y.Z` + `Rolling back to <старый тег>...` — новая версия не
-  поднялась; смотреть `docker compose ... logs app` на упавшем контейнере (миграция БД, `EnvError`
+  поднялась; смотреть `./scripts/compose.sh logs app` на упавшем контейнере (миграция БД, `EnvError`
   и т. п.) **до** повторной попытки деплоя.
-- `No previous tag recorded; nothing to roll back to` — это первый деплой через `deploy.sh`, либо
-  `.deploy/current_tag` был удалён; исправить контейнер вручную или откатиться на заведомо рабочий
-  тег через `docker compose ... up -d` с `APP_TAG=<известный рабочий>`.
-- `COMPOSE_PROJECT must be set` — `deploy.sh` (как и `backup.sh`/`restore.sh`) сам подгружает `.env`
+- `No previous tag recorded; nothing to roll back to` — `.deploy/current_tag` был удалён; поднимите
+  заведомо рабочий тег вручную (`APP_TAG=<известный рабочий> ./scripts/compose.sh up -d`) и
+  запишите его: `echo <известный рабочий> > .deploy/current_tag`.
+- `refusing to deploy the floating tag 'latest'` — так и задумано: `deploy.sh` принимает только
+  конкретный тег, иначе цель отката в `.deploy/current_tag` потеряла бы смысл.
+- `COMPOSE_PROJECT must be set` — `deploy.sh` (как и `backup.sh`/`restore.sh`) сам читает `.env`
   из своего каталога, так что эта ошибка означает, что `COMPOSE_PROJECT` действительно не заполнен
   в `.env` (см. п. 8) — допишите `COMPOSE_PROJECT=stb-dev` (или `stb-prod`) и запустите снова.
 
@@ -539,8 +603,8 @@ gh run watch
 Логи:
 
 ```bash
-docker compose -f docker/compose.yml --env-file .env -p stb-dev logs -f app
-docker compose -f docker/compose.yml --env-file .env -p stb-dev logs -f db
+./scripts/compose.sh logs -f app
+./scripts/compose.sh logs -f db
 ```
 
 Панель администратора — команда `/admin` в личке боту (только для `SUPERADMIN_TG_IDS`): версия
@@ -557,7 +621,7 @@ docker system df
 Внешний бесплатный мониторинг `/healthz` (например, UptimeRobot, Better Uptime — бесплатные планы)
 станет доступен снаружи только после появления домена и HTTPS (п. 13, фаза 5); до этого `/healthz`
 слушает `127.0.0.1` и проверяется только локально (см. `docker/compose.yml`: порт публикуется как
-`127.0.0.1:${HTTP_PORT}:3000`).
+`127.0.0.1:${HTTP_PORT}:3000`, где `HTTP_PORT` — порт этого стека на хосте, 3000 или 3001).
 
 **Ожидаемый результат:**
 
@@ -569,7 +633,8 @@ docker system df
 **Если что-то пошло не так:**
 
 - `/admin` не отвечает — проверить, что ваш Telegram ID действительно в `SUPERADMIN_TG_IDS` в
-  `.env`, и что после правки `.env` контейнер был перезапущен (`docker compose ... up -d`).
+  `.env`, и что после правки `.env` контейнер был перезапущен (`./scripts/compose.sh up -d` — он
+  перезапустит именно текущий тег из `.deploy/current_tag`).
 - Диск заполняется — проверить `docker system df`, почистить неиспользуемые образы:
   `docker image prune -f` (старые теги, замещённые новыми деплоями).
 
@@ -612,10 +677,28 @@ Let's Encrypt-сертификатом (проверяется автомати�
 проходят, разработку стоит вести прямо на сервере:
 
 1. На VPS использовать dev-compose с bind-mount исходников и `tsx watch` вместо собранного образа:
+
    ```bash
    cd /opt/stb-dev   # тот же клон репозитория, что и выше
    docker compose -f docker/compose.dev.yml --env-file .env -p stb-dev-local up -d
    ```
+
+   `docker/compose.dev.yml` публикует порты только на `127.0.0.1` (Postgres на 5433, приложение на
+   `HTTP_PORT`). Это важно: опубликованные Docker'ом порты обходят `ufw`, а в этом файле Postgres с
+   правами суперпользователя и паролем `stb`. Не меняйте привязку на `0.0.0.0`; снаружи к портам
+   подключайтесь через SSH-туннель (см. ниже).
+
+   **Конфликт с уже запущенным стеком `stb-dev`.** Если в `/opt/stb-dev` уже работает стек
+   `stb-dev` (п. 8), то `stb-dev-local` с тем же `.env` столкнётся с ним дважды:
+   - оба процесса будут опрашивать Telegram (`getUpdates`) с одним `TELEGRAM_BOT_TOKEN`, и Telegram
+     начнёт отвечать `409 Conflict`, а апдейты будут доставаться то одному, то другому;
+   - оба захотят порт хоста `HTTP_PORT` (3000), и второй не запустится с ошибкой
+     `port is already allocated`.
+
+   Поэтому перед запуском либо остановите `stb-dev` (`./scripts/compose.sh stop app`), либо
+   заведите для разработки отдельного бота в @BotFather и отдельный `.env` с его токеном и другим
+   `HTTP_PORT`.
+
 2. Подключиться к серверу через **VS Code Remote-SSH** (расширение `ms-vscode-remote.remote-ssh`):
    `Cmd+Shift+P → Remote-SSH: Connect to Host... → deploy@<IP>`, затем открыть папку `/opt/stb-dev`.
 3. Редактирование, git, терминал — как при локальной разработке, только выполняется на VPS, где

@@ -8,8 +8,12 @@ services:
     env_file: ../.env
     environment:
       DATABASE_URL: postgres://stb:stb@db:5432/stb
+      # .env's HTTP_PORT is the host-side port; the app in the container always listens on 3000.
+      HTTP_PORT: '3000'
+    # Loopback only: Docker-published ports bypass ufw, and docs/DEPLOY.md §14 runs this file on
+    # a VPS with a public IP.
     ports:
-      - '${HTTP_PORT:-3000}:3000'
+      - '127.0.0.1:${HTTP_PORT:-3000}:3000'
     volumes:
       - ..:/app
       - /app/node_modules
@@ -24,8 +28,11 @@ services:
       POSTGRES_USER: stb
       POSTGRES_PASSWORD: stb
       POSTGRES_DB: stb
+    # Loopback only: this is a superuser with a trivial password. Docker-published ports bypass
+    # ufw/host firewalls, so binding 0.0.0.0 on a VPS (docs/DEPLOY.md §14) would expose it to the
+    # internet. `pnpm db:up` / tests on the same machine still reach it at localhost:5433.
     ports:
-      - '5433:5432'
+      - '127.0.0.1:5433:5432'
     volumes:
       - stb-dev-pgdata:/var/lib/postgresql/data
     healthcheck:

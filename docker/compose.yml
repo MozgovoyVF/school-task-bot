@@ -1,7 +1,17 @@
 services:
   app:
-    image: ghcr.io/mozgovoyvf/school-task-bot:${APP_TAG:-latest}
+    # No `:-latest` fallback: every compose command must say which concrete release it means,
+    # otherwise `up -d` would silently drift to whatever `:latest` points to at the moment
+    # (plan.md decision D38). scripts/*.sh pass it (from .deploy/current_tag); for manual
+    # commands use scripts/compose.sh, which does the same.
+    image: ghcr.io/mozgovoyvf/school-task-bot:${APP_TAG:?APP_TAG must be set to a concrete release tag (see scripts/compose.sh)}
     env_file: ../.env
+    environment:
+      # `HTTP_PORT` in .env is the HOST-side port (it differs between stb-dev and stb-prod on
+      # one VPS, SPEC §17.1). Inside the container the app always listens on 3000, which the
+      # Dockerfile HEALTHCHECK and the port mapping below rely on; `environment` takes
+      # precedence over `env_file`, so .env's HTTP_PORT never reaches the app process.
+      HTTP_PORT: '3000'
     ports:
       - '127.0.0.1:${HTTP_PORT:-3000}:3000'
     depends_on:
