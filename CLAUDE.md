@@ -56,7 +56,7 @@ pnpm db:generate                      # drizzle-kit: SQL-миграция из �
 pnpm db:migrate                       # применить миграции к DATABASE_URL
 pnpm build && pnpm start              # сборка в dist/ и запуск
 pnpm eval --model <id> --limit 20     # РЕАЛЬНЫЙ API, стоит денег — только с разрешения пользователя
-docker compose -f docker/compose.yml -p stb-dev up -d   # как на сервере
+APP_TAG=<tag> ./scripts/compose.sh up -d               # как на сервере (тег из GHCR, см. docs/DEPLOY.md §8)
 ```
 
 Для тестов нужна переменная `TEST_DATABASE_URL`, по умолчанию `postgres://stb:stb@localhost:5433/stb_test`.
