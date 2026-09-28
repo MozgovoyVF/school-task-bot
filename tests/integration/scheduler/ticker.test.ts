@@ -8,6 +8,7 @@ import { getState } from '../../../src/domain/system/appState.js';
 import { createTicker, type Job } from '../../../src/scheduler/ticker.js';
 import { dailyJob } from '../../../src/scheduler/daily.js';
 import { FakeMessenger } from '../../helpers/fakeMessenger.js';
+import { ensureDefaultWorkspace } from '../../../src/domain/workspaces/repo.js';
 
 const db = getTestDb();
 beforeEach(() => truncateAll(db));
@@ -18,7 +19,8 @@ const DEFAULT_TEST_DATABASE_URL = 'postgres://stb:stb@localhost:5433/stb_test';
 // to the interface's method-shorthand signatures, which trips `@typescript-eslint/unbound-method`
 // on `deps.errors.report` below. Left inferred, `deps` still structurally satisfies `AppDeps`
 // wherever it's passed (e.g. `createTicker(deps, ...)`).
-function makeDeps(clock: ReturnType<typeof fixedClock> = fixedClock('2026-09-23T12:00:00Z')) {
+async function makeDeps(clock: ReturnType<typeof fixedClock> = fixedClock('2026-09-23T12:00:00Z')) {
+  const workspace = await ensureDefaultWorkspace(db, { name: 'School', timezone: 'Europe/Moscow' });
   return {
     config: loadEnv({
       TELEGRAM_BOT_TOKEN: 'test-token:ABC',
@@ -34,6 +36,7 @@ function makeDeps(clock: ReturnType<typeof fixedClock> = fixedClock('2026-09-23T
       alert: vi.fn(() => Promise.resolve()),
     },
     messenger: new FakeMessenger(),
+    workspace,
     ai: null,
     taskHooks: [],
   };
@@ -47,7 +50,7 @@ function delay(ms: number): Promise<void> {
 
 describe('createTicker', () => {
   it('tickOnce runs all jobs in array order', async () => {
-    const deps = makeDeps();
+    const deps = await makeDeps();
     const order: string[] = [];
     const jobs: Job[] = [
       {
@@ -73,7 +76,7 @@ describe('createTicker', () => {
   });
 
   it('reports a failing job to deps.errors but keeps running the rest', async () => {
-    const deps = makeDeps();
+    const deps = await makeDeps();
     const order: string[] = [];
     const jobs: Job[] = [
       {
@@ -101,7 +104,7 @@ describe('createTicker', () => {
 
   it('stores the heartbeat (in memory and in app_state) after a tick', async () => {
     const clock = fixedClock('2026-09-23T12:00:00Z');
-    const deps = makeDeps(clock);
+    const deps = await makeDeps(clock);
     const ticker = createTicker(deps, []);
 
     expect(ticker.lastHeartbeat()).toBeNull();
@@ -113,7 +116,7 @@ describe('createTicker', () => {
   });
 
   it('never overlaps ticks: with intervalMs=10 and a 50ms job, at most 1 concurrent run', async () => {
-    const deps = makeDeps();
+    const deps = await makeDeps();
     let concurrent = 0;
     let maxConcurrent = 0;
     let runs = 0;
@@ -138,7 +141,7 @@ describe('createTicker', () => {
   });
 
   it('stop() waits for an in-flight tick to finish before resolving, and a second stop() is a no-op', async () => {
-    const deps = makeDeps();
+    const deps = await makeDeps();
     let finished = false;
     let runs = 0;
     const job: Job = {
@@ -165,7 +168,7 @@ describe('createTicker', () => {
 
 describe('dailyJob', () => {
   it('does not run before atUtc that day', async () => {
-    const deps = makeDeps(fixedClock('2026-09-24T03:29:00Z'));
+    const deps = await makeDeps(fixedClock('2026-09-24T03:29:00Z'));
     const ran = vi.fn(() => Promise.resolve());
     const job = dailyJob('retention', '03:30', ran);
 
@@ -175,7 +178,7 @@ describe('dailyJob', () => {
   });
 
   it('runs once atUtc has passed', async () => {
-    const deps = makeDeps(fixedClock('2026-09-24T03:31:00Z'));
+    const deps = await makeDeps(fixedClock('2026-09-24T03:31:00Z'));
     const ran = vi.fn(() => Promise.resolve());
     const job = dailyJob('retention', '03:30', ran);
 
@@ -186,7 +189,7 @@ describe('dailyJob', () => {
 
   it('does not re-run later the same day', async () => {
     const clock = fixedClock('2026-09-24T03:31:00Z');
-    const deps = makeDeps(clock);
+    const deps = await makeDeps(clock);
     const ran = vi.fn(() => Promise.resolve());
     const job = dailyJob('retention', '03:30', ran);
 
@@ -199,7 +202,7 @@ describe('dailyJob', () => {
 
   it('runs again the next day after atUtc', async () => {
     const clock = fixedClock('2026-09-24T03:31:00Z');
-    const deps = makeDeps(clock);
+    const deps = await makeDeps(clock);
     const ran = vi.fn(() => Promise.resolve());
     const job = dailyJob('retention', '03:30', ran);
 

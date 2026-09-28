@@ -5,6 +5,8 @@ import type { BotContext } from '../../src/bot/context.js';
 import { createErrorReporter } from '../../src/ops/errorReporter.js';
 import { createLogger } from '../../src/ops/logger.js';
 import { loadEnv } from '../../src/config/env.js';
+import { ensureDefaultWorkspace } from '../../src/domain/workspaces/repo.js';
+import { DEFAULT_WORKSPACE_NAME } from '../../src/config/constants.js';
 import { getTestDb, truncateAll } from './db.js';
 import { fixedClock } from './clock.js';
 import { FakeMessenger } from './fakeMessenger.js';
@@ -61,36 +63,81 @@ function defaultBotInfo(): UserFromGetMe {
  * same shape regardless of `M` needs the `unknown` cast below rather than a
  * literal structural match).
  */
+let nextFakeMessageId = 1;
+
+/** Shared by both fake-response paths below: everything but `sendMessage` just gets a bare `true`. */
+function fakeApiResult(method: string, payload: Record<string, unknown>): unknown {
+  if (method !== 'sendMessage') return true;
+  return {
+    message_id: nextFakeMessageId++,
+    date: 1_700_000_000,
+    chat: { id: payload.chat_id, type: 'private' },
+    text: payload.text,
+  };
+}
+
 function createRecordingTransformer(calls: RecordedCall[]): Transformer {
-  let nextMessageId = 1;
   const impl = (_prev: unknown, method: string, payload: unknown): Promise<{ ok: true; result: unknown }> => {
     const p = (payload ?? {}) as Record<string, unknown>;
     calls.push({ method, payload: p });
-    if (method === 'sendMessage') {
-      return Promise.resolve({
-        ok: true,
-        result: {
-          message_id: nextMessageId++,
-          date: 1_700_000_000,
-          chat: { id: p.chat_id, type: 'private' },
-          text: p.text,
-        },
-      });
-    }
-    return Promise.resolve({ ok: true, result: true });
+    return Promise.resolve({ ok: true, result: fakeApiResult(method, p) });
   };
   return impl as unknown as Transformer;
+}
+
+/**
+ * `@grammyjs/conversations` builds its own `Api` instance for every context
+ * it hydrates inside a conversation (`hydrateContext` in its `plugin.js`),
+ * from `new Api(protoApi.token, protoApi.options)` — the `options` a bot was
+ * constructed with, but *not* any transformer installed afterwards via
+ * `bot.api.config.use()`. `createRecordingTransformer` above therefore never
+ * sees API calls made from inside an active conversation (e.g. every
+ * `ctx.reply`/`answerCallbackQuery` in `src/bot/conversations/timezone.ts`).
+ * `options.fetch` (grammY's `ApiClientOptions.fetch`), by contrast, *is*
+ * part of `options` and so *is* inherited by that inner `Api` instance —
+ * this fakes the low-level HTTP call itself, one layer below transformers,
+ * so it catches everything the transformer above misses without duplicating
+ * or reordering what it already records.
+ */
+function createFakeFetch(calls: RecordedCall[]): typeof fetch {
+  return (input, init) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    const method = url.split('/').pop() ?? '';
+    const bodyText = typeof init?.body === 'string' ? init.body : '{}';
+    const payload = JSON.parse(bodyText) as Record<string, unknown>;
+    calls.push({ method, payload });
+    const body = JSON.stringify({ ok: true, result: fakeApiResult(method, payload) });
+    return Promise.resolve(
+      new Response(body, { status: 200, headers: { 'content-type': 'application/json' } }),
+    );
+  };
 }
 
 export async function createBotHarness(opts?: {
   clock?: string;
   superadminIds?: number[];
+  /**
+   * The test workspace's `timezone` (default `'Europe/Moscow'`, matching
+   * `DEFAULT_TIMEZONE`'s own default — `src/config/env.ts`). Set this to a
+   * non-Moscow zone in a test that needs to tell "hardcoded Moscow" apart
+   * from "correctly defaults to the workspace's configured zone" — see
+   * plan.md D41's Important fix and `tests/integration/bot/timezone.test.ts`.
+   */
+  workspaceTimezone?: string;
+  /**
+   * Overrides the harness's default silent logger — for a test that needs
+   * to assert on emitted log lines (e.g. `group.ts`'s debug log on an edit
+   * to an already-analyzed message), pass a logger built with a capturing
+   * `destination` (see `tests/integration/ops/errorReporter.test.ts`'s
+   * `capturingLogger`).
+   */
+  logger?: ReturnType<typeof createLogger>;
 }): Promise<BotHarness> {
   const db = getTestDb();
   await truncateAll(db);
 
   const clock = fixedClock(opts?.clock ?? '2026-09-23T12:00:00+03:00');
-  const logger = createLogger({ level: 'silent' });
+  const logger = opts?.logger ?? createLogger({ level: 'silent' });
   const messenger = new FakeMessenger();
   const superadminIds = opts?.superadminIds ?? DEFAULT_SUPERADMIN_IDS;
 
@@ -102,10 +149,14 @@ export async function createBotHarness(opts?: {
   });
 
   const errors = createErrorReporter({ db, messenger, clock, logger, superadminIds });
-  const deps: BotDeps = { config, db, clock, logger, errors, messenger };
-  const bot = createBot(deps, { botInfo: defaultBotInfo() });
-
+  const workspace = await ensureDefaultWorkspace(db, {
+    name: DEFAULT_WORKSPACE_NAME,
+    timezone: opts?.workspaceTimezone ?? 'Europe/Moscow',
+  });
+  const deps: BotDeps = { config, db, clock, logger, errors, messenger, workspace };
   const calls: RecordedCall[] = [];
+  const bot = createBot(deps, { botInfo: defaultBotInfo(), client: { fetch: createFakeFetch(calls) } });
+
   bot.api.config.use(createRecordingTransformer(calls));
 
   return {

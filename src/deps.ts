@@ -4,6 +4,7 @@ import type { Clock } from './time/clock.js';
 import type { Logger } from './ops/logger.js';
 import type { ErrorReporter } from './ops/errorReporter.js';
 import type { Messenger } from './domain/messenger.js';
+import type { WorkspaceRow } from './domain/workspaces/repo.js';
 
 /**
  * Forward-declared placeholder for the real `AiProviders` interface (phase 2,
@@ -51,6 +52,8 @@ export interface AppDeps {
   logger: Logger;
   errors: ErrorReporter;
   messenger: Messenger;
+  /** The single default workspace (MVP, SPEC §5.2), created by `ensureDefaultWorkspace` in `startApp`. */
+  workspace: WorkspaceRow;
   /** `null` whenever `OPENROUTER_API_KEY`/`LLM_MODEL_PRIMARY` are unset — AI analysis is then disabled. */
   ai: AiProviders | null;
   /** Filled in by phase 3 (reminders) and phase 5 (`SyncTarget`); always `[]` before that. */
