@@ -761,7 +761,7 @@ describe('nextAttemptAt', () => {
   - `interface ProposalCardView { id: number; kind: 'create' | 'update' | 'complete' | 'cancel'; category: Category | 'manual' | null; confidence: number; manual: boolean; title: string; assigneeName: string | null; assigneeKind: AssigneeResolution['type']; due: { at: Date; allDay: boolean; tz: string | null } | null; priority: 'low' | 'normal' | 'high'; quote: string | null; quoteAuthor: string | null; chatTitle: string | null; link: string | null; dueInPast: boolean; duplicateOf: { taskId: number; title: string } | null; target: { taskId: number; title: string; before: string | null; after: string | null; field: 'due' | 'assignee' | 'title' | null } | null }`;
   - `renderProposalCard(v: ProposalCardView, viewerZone: string): { text: string; buttons: Buttons }`.
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
 
 ```ts
 import { describe, it, expect } from 'vitest';
@@ -836,10 +836,10 @@ describe('messageLink', () => {
 - `null` → `без срока`;
 - 1 января → `пт, 1 янв`;
 - пояс получателя тот же, что у срока → без метки.
-- [ ] **Шаг 2:** FAIL.
-- [ ] **Шаг 3: реализация.** Все строки берутся из `ru.ts`. Цитата обрезается до 200 символов **до** экранирования. Причины отказа: `v1:p:rjr:7:nt|dup|done|oth`.
-- [ ] **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(bot): render proposal cards and localized due dates`.
+- [x] **Шаг 2:** FAIL.
+- [x] **Шаг 3: реализация.** Все строки берутся из `ru.ts`. Цитата обрезается до 200 символов **до** экранирования. Причины отказа: `v1:p:rjr:7:nt|dup|done|oth`.
+- [x] **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(bot): render proposal cards and localized due dates`.
 
 ### Task 2.12: Outbox карточек, реакции 👀, тихие часы
 

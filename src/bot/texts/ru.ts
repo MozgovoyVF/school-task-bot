@@ -88,6 +88,28 @@ const ZONE_CITY_LABELS: Record<(typeof RU_ZONES)[number], string> = {
   'Asia/Kamchatka': 'Камчатка',
 };
 
+/**
+ * Short weekday/month names for `formatDue` below and `src/time/format.ts`'s
+ * `formatDue` (D17): own arrays rather than `Intl`/ICU, no trailing dot.
+ * Indexed 0-based (`RU_WEEKDAYS_SHORT[luxon's dt.weekday - 1]`, Monday
+ * first; `RU_MONTHS_SHORT[dt.month - 1]`, January first).
+ */
+export const RU_WEEKDAYS_SHORT = ['пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс'] as const;
+export const RU_MONTHS_SHORT = [
+  'янв',
+  'фев',
+  'мар',
+  'апр',
+  'мая',
+  'июн',
+  'июл',
+  'авг',
+  'сен',
+  'окт',
+  'ноя',
+  'дек',
+] as const;
+
 export const texts = {
   errors: {
     /**
@@ -143,6 +165,20 @@ export const texts = {
   common: {
     /** Sent when a user without the required role invokes a restricted command or callback. */
     forbidden: 'У вас нет доступа к этой команде.',
+  },
+  /**
+   * Assembles `src/time/format.ts`'s `formatDue` structure (or `null`, "no
+   * due date") into the final one-line display string (SPEC §10.9, D29),
+   * e.g. `пт, 25 сен, 18:00 (МСК+2)`, or — for an all-day due date, which
+   * never gets a time or a zone label (D29) — just `пт, 25 сен`. `due.date`/
+   * `due.time` are already built from `RU_WEEKDAYS_SHORT`/`RU_MONTHS_SHORT`
+   * above; `due.zone`, when set, is formatted here via `formatZoneLabel`.
+   */
+  formatDue(due: { date: string; time: string | null; zone: ZoneLabel | null } | null): string {
+    if (due === null) return 'без срока';
+    const time = due.time === null ? '' : `, ${due.time}`;
+    const zone = due.zone === null ? '' : ` (${formatZoneLabel(due.zone)})`;
+    return `${due.date}${time}${zone}`;
   },
   start: {
     /**
@@ -482,6 +518,101 @@ export const texts = {
         'Это не юридическая консультация, а техническое описание. Вопросы — к руководителю школы.',
       ].join('\n');
     },
+  },
+  /**
+   * Proposal cards sent to the Owner's DM (SPEC §11.1, Task 2.11,
+   * `src/bot/views/proposalCard.ts`'s `renderProposalCard`). Every parameter
+   * that carries user/DB text (titles, quotes, names) arrives here **already
+   * HTML-escaped** by the caller (`bot/views/escape.ts`'s `escapeHtml`) —
+   * these functions only assemble the Russian wording and punctuation around
+   * it, they never escape themselves (mirrors `texts.people.cardZoneLine`'s
+   * "already HTML-safe" convention above, just pushed one layer further so
+   * escaping stays a `views/` concern rather than a `texts/` one).
+   */
+  proposalCard: {
+    /** `create`-kind header for an AI-found proposal — `percent` is `Math.round(confidence * 100)`. */
+    headerAi(percent: number): string {
+      return `🆕 Задача · уверенность ${String(percent)}%`;
+    },
+    /** `create`-kind header for a manually entered proposal (`v.manual`). */
+    headerManual: '🆕 Задача · вручную',
+    titleLine(title: string): string {
+      return `📌 ${title}`;
+    },
+    metaLine(assignee: string, due: string, priority: string): string {
+      return `👤 ${assignee} · 📅 ${due} · ⚡ ${priority}`;
+    },
+    priorityLow: 'низкий',
+    priorityNormal: 'обычный',
+    priorityHigh: 'высокий',
+    /** `assigneeKind === 'all'`. */
+    assigneeAll: 'Всем',
+    /** `assigneeKind === 'none'`, or a null `assigneeName` for any other kind. */
+    assigneeNone: 'Не назначен',
+    /** SPEC §10.8: a resolved due date that has already passed. */
+    pastDueWarning: '⚠️ срок в прошлом — проверьте',
+    /** SPEC §9.3: a possible duplicate of an existing open task, shown above the quote. */
+    duplicateHint(taskId: number, title: string): string {
+      return `🔁 Похоже на дубль T${String(taskId)} «${title}»`;
+    },
+    /**
+     * The source quote line. `author`/`chatTitle` are appended only when
+     * present — `— <author>, «<chatTitle>»`, `— <author>` alone, or
+     * `— «<chatTitle>»` alone when the author isn't known.
+     */
+    quoteLine(quote: string, author: string | null, chatTitle: string | null): string {
+      let suffix = '';
+      if (author !== null) {
+        suffix = ` — ${author}`;
+        if (chatTitle !== null) suffix += `, «${chatTitle}»`;
+      } else if (chatTitle !== null) {
+        suffix = ` — «${chatTitle}»`;
+      }
+      return `💬 «${quote}»${suffix}`;
+    },
+    /** `url` is `bot/views/links.ts`'s `messageLink` output — omitted entirely (SPEC §11.1) when it's `null` (an ordinary, non-super group). */
+    linkLine(url: string): string {
+      return `🔗 <a href="${url}">Открыть сообщение</a>`;
+    },
+    acceptButton: '✅ Создать',
+    editButton: '✏️ Изменить',
+    rejectButton: '❌ Не задача',
+    /** Extra button row for a possible duplicate (SPEC §11.1). */
+    duplicateButton(taskId: number): string {
+      return `🔗 Дубль T${String(taskId)}`;
+    },
+    updateFieldDue: 'Перенос срока',
+    updateFieldAssignee: 'Смена исполнителя',
+    updateFieldTitle: 'Изменение названия',
+    /** `target.field === null` — a change the three specific labels above don't cover. */
+    updateFieldGeneric: 'Изменение',
+    /** `update`-kind's single summary line; `before`/`after` are omitted together when either is `null`. */
+    updateLine(
+      label: string,
+      taskId: number,
+      title: string,
+      before: string | null,
+      after: string | null,
+    ): string {
+      const change = before === null || after === null ? '' : ` · было ${before} → стало ${after}`;
+      return `🔄 ${label}: T${String(taskId)} «${title}»${change}`;
+    },
+    applyButton: '✅ Применить',
+    ignoreButton: '❌ Игнорировать',
+    /** `complete`-kind's single summary line; the `— «quote» (author)` evidence is omitted when `quote` is `null`. */
+    completeLine(taskId: number, title: string, quote: string | null, author: string | null): string {
+      const evidence = quote === null ? '' : ` — «${quote}»${author === null ? '' : ` (${author})`}`;
+      return `✅ Похоже, выполнено: T${String(taskId)} «${title}»${evidence}`;
+    },
+    closeTaskButton: '✅ Закрыть задачу',
+    /** Shared "decline this suggestion" button label for `update`/`complete`/`cancel` cards (`create`'s own is `rejectButton` above). */
+    noButton: '❌ Нет',
+    /** `cancel`-kind's single summary line — same shape as `completeLine` (SPEC §11.1: "аналогично"). */
+    cancelLine(taskId: number, title: string, quote: string | null, author: string | null): string {
+      const evidence = quote === null ? '' : ` — «${quote}»${author === null ? '' : ` (${author})`}`;
+      return `🗑 Похоже, отменено: T${String(taskId)} «${title}»${evidence}`;
+    },
+    cancelTaskButton: '🗑 Отменить задачу',
   },
   /**
    * Labels prefixed to a media message's caption when normalizing incoming
