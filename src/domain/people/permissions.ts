@@ -24,9 +24,11 @@ export interface Actor {
 
 /**
  * SPEC §3's action set — one entry per row of the permission table, plus
- * `chat.manage` (Task 1.9): SPEC §3 has no dedicated row for managing an
- * already-approved chat, so this one is instead derived from SPEC §12.2's
- * `/chats` command row ("Owner" only).
+ * `chat.manage` (Task 1.9) and `people.manage` (Task 1.10): SPEC §3 has no
+ * dedicated row for managing an already-approved chat or editing member
+ * profiles, so both are instead derived from SPEC §12.2's `/chats` and
+ * `/people` command rows (both "Owner" only, unlike `/transfer`'s explicit
+ * "Owner, Superadmin").
  */
 export type Action =
   | 'proposal.receive'
@@ -40,6 +42,7 @@ export type Action =
   | 'reminders.receive'
   | 'chat.approve'
   | 'chat.manage'
+  | 'people.manage'
   | 'admin.tech'
   | 'transfer.generate';
 
@@ -72,13 +75,17 @@ export function can(actor: Actor, action: Action, target?: ActionTarget): boolea
     // `chat.manage` (SPEC §12.2's `/chats` row: "Owner" only, unlike `/transfer`'s explicit "Owner,
     // Superadmin") — managing an already-approved chat (toggle analysis/reactions, pause, resume,
     // leave), distinct from `chat.approve` below (deciding whether the bot may run in a *pending*
-    // chat at all, which SPEC §3's matrix does grant a superadmin).
+    // chat at all, which SPEC §3's matrix does grant a superadmin). `people.manage` (SPEC §12.2's
+    // `/people` row: also "Owner" only) — viewing/editing member names and aliases; deliberately its
+    // own Action rather than reusing `chat.manage` (a different resource) or `chat.approve` (which
+    // also grants a superadmin, unlike `/people`'s own row).
     case 'proposal.receive':
     case 'proposal.decide':
     case 'task.createDm':
     case 'task.viewAll':
     case 'task.edit':
     case 'chat.manage':
+    case 'people.manage':
       return isOwner;
 
     // Superadmin or Owner: approving a new group chat, generating an ownership-transfer code.

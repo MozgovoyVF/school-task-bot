@@ -18,6 +18,8 @@ export const PENDING_CHAT_TIMEOUT_HOURS = 72;
 export const CLAIM_CODE_TTL_HOURS = 24;
 export const CONVERSATION_TIMEOUT_MS = 10 * 60_000;
 export const PAGE_SIZE = 5;
+export const MAX_ALIASES_PER_PERSON = 10;
+export const MAX_ALIAS_LENGTH = 30;
 export const FORWARD_BURST_MS = 3000;
 export const DEFAULT_STOP_LIST = [
   'ок',

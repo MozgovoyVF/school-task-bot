@@ -1,6 +1,7 @@
 import { and, eq, isNull } from 'drizzle-orm';
 import type { DbOrTx } from '../../db/client.js';
 import { memberships, users } from '../../db/schema/index.js';
+import { MAX_ALIASES_PER_PERSON, MAX_ALIAS_LENGTH } from '../../config/constants.js';
 
 export type UserRow = typeof users.$inferSelect;
 export type MembershipRow = typeof memberships.$inferSelect;
@@ -117,6 +118,114 @@ export async function listMembers(db: DbOrTx, workspaceId: number): Promise<Memb
     .from(memberships)
     .where(eq(memberships.workspaceId, workspaceId))
     .orderBy(memberships.id);
+}
+
+/** A membership joined with its `users` row — `/people` (Task 1.10) needs both: the profile fields live on `memberships`, the timezone on `users`. */
+export interface MemberWithUser {
+  user: UserRow;
+  membership: MembershipRow;
+}
+
+/** Lists all memberships in a workspace with their user rows (id order) — `/people`'s list. */
+export async function listMembersWithUsers(db: DbOrTx, workspaceId: number): Promise<MemberWithUser[]> {
+  return db
+    .select({ user: users, membership: memberships })
+    .from(memberships)
+    .innerJoin(users, eq(users.id, memberships.userId))
+    .where(eq(memberships.workspaceId, workspaceId))
+    .orderBy(memberships.id);
+}
+
+/** Looks up a single membership (with its user row) by its own id — `/people`'s card and edit dialog. */
+export async function getMembershipWithUser(
+  db: DbOrTx,
+  membershipId: number,
+): Promise<MemberWithUser | null> {
+  const [row] = await db
+    .select({ user: users, membership: memberships })
+    .from(memberships)
+    .innerJoin(users, eq(users.id, memberships.userId))
+    .where(eq(memberships.id, membershipId))
+    .limit(1);
+  return row ?? null;
+}
+
+/**
+ * Raised by {@link parseAliases} when the input, once trimmed/deduplicated,
+ * still violates one of `/people`'s alias limits (Task 1.10's brief):
+ * `'too_many'` — more than {@link MAX_ALIASES_PER_PERSON} aliases;
+ * `'too_long'` — at least one alias longer than {@link MAX_ALIAS_LENGTH}
+ * characters.
+ */
+export class AliasValidationError extends Error {
+  constructor(readonly reason: 'too_many' | 'too_long') {
+    super(
+      reason === 'too_many'
+        ? `more than ${String(MAX_ALIASES_PER_PERSON)} aliases`
+        : `an alias longer than ${String(MAX_ALIAS_LENGTH)} characters`,
+    );
+    this.name = 'AliasValidationError';
+  }
+}
+
+/**
+ * Parses `/people`'s free-text alias input: comma-separated, each entry
+ * trimmed, empty entries dropped, and deduplicated case-insensitively
+ * (keeping the first-seen spelling/casing) — e.g. `'Ann, Annie ,ann,, '` →
+ * `['Ann', 'Annie']` (see `tests/unit/domain/aliases.test.ts` for the actual
+ * Cyrillic acceptance case from the brief). Throws
+ * {@link AliasValidationError} if the result still has more than
+ * {@link MAX_ALIASES_PER_PERSON} entries or any entry longer than
+ * {@link MAX_ALIAS_LENGTH} characters.
+ */
+export function parseAliases(input: string): string[] {
+  const seen = new Set<string>();
+  const aliases: string[] = [];
+  for (const raw of input.split(',')) {
+    const trimmed = raw.trim();
+    if (trimmed === '') continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    aliases.push(trimmed);
+  }
+  if (aliases.length > MAX_ALIASES_PER_PERSON) throw new AliasValidationError('too_many');
+  if (aliases.some((alias) => alias.length > MAX_ALIAS_LENGTH)) throw new AliasValidationError('too_long');
+  return aliases;
+}
+
+export interface UpdatePersonInput {
+  membershipId: number;
+  displayName?: string;
+  aliases?: string[];
+}
+
+/**
+ * Updates a membership's editable profile fields (`/people`'s edit dialog,
+ * Task 1.10): `displayName` and/or `aliases`, whichever is given —
+ * deliberately no `notifyAssignments` field (D40: member-facing
+ * notifications were dropped project-wide, so `/people` never touches that
+ * column even though it still exists on the row pending its removal in
+ * Task 3.11). Passing neither field is a no-op read of the current row
+ * (still returns it, for a caller that just wants the row back). Returns
+ * `null` if `membershipId` doesn't exist.
+ */
+export async function updatePerson(db: DbOrTx, input: UpdatePersonInput): Promise<MembershipRow | null> {
+  const set: Partial<typeof memberships.$inferInsert> = {};
+  if (input.displayName !== undefined) set.displayName = input.displayName;
+  if (input.aliases !== undefined) set.aliases = input.aliases;
+
+  if (Object.keys(set).length === 0) {
+    const [row] = await db.select().from(memberships).where(eq(memberships.id, input.membershipId)).limit(1);
+    return row ?? null;
+  }
+
+  const [row] = await db
+    .update(memberships)
+    .set(set)
+    .where(eq(memberships.id, input.membershipId))
+    .returning();
+  return row ?? null;
 }
 
 /**

@@ -5,7 +5,7 @@
  * so any dynamic value interpolated into a string here must be escaped first.
  */
 import type { RU_ZONES, ZoneLabel } from '../../time/zones.js';
-import { CLAIM_CODE_TTL_HOURS } from '../../config/constants.js';
+import { CLAIM_CODE_TTL_HOURS, MAX_ALIASES_PER_PERSON, MAX_ALIAS_LENGTH } from '../../config/constants.js';
 
 /** Minimal HTML escaping for values interpolated into `parse_mode: 'HTML'` messages. */
 function escapeHtml(input: string): string {
@@ -315,6 +315,57 @@ export const texts = {
     },
     leaveConfirmYes: '✅ Да, покинуть',
     leaveConfirmNo: '❌ Отмена',
+  },
+  /** `/people` — list/edit member names and aliases (Task 1.10). Deliberately no notification toggle (D40). */
+  people: {
+    listHeader: '👥 Участники',
+    /** Shown instead of a list when the workspace has no members at all. */
+    listEmpty: 'В школе пока нет ни одного участника.',
+    /** One line of `/people`'s list, e.g. "Мария (Маша, Машенька) — МСК+2". `name` and `aliases` are user-entered (Owner-editable via `editPerson.ts`) and are escaped here; `zone` is `formatZoneLabel`'s output, already HTML-safe. */
+    listLine(name: string, aliases: string, zone: string): string {
+      return `${escapeHtml(name)} (${escapeHtml(aliases)}) — ${zone}`;
+    },
+    /** Placeholder shown instead of an empty alias list (both the list line and the card). */
+    noAliases: 'без алиасов',
+    /** `/people`'s per-member card heading. */
+    cardTitle(name: string): string {
+      return `👤 ${escapeHtml(name)}`;
+    },
+    cardAliasesLine(aliases: string): string {
+      return `Алиасы: ${escapeHtml(aliases)}`;
+    },
+    /** `zone` is `formatZoneLabel`'s output (already HTML-safe, same as `texts.timezone.saved`). */
+    cardZoneLine(zone: string): string {
+      return `Часовой пояс: ${zone}`;
+    },
+    editButton: '✏️ Изменить',
+    backButton: '◀️ Назад',
+    /** First step of the edit dialog (`editPerson.ts`): the current name, and how to keep it unchanged. */
+    namePrompt(current: string): string {
+      return `Текущее имя: <b>${escapeHtml(current)}</b>\nВведите новое имя или отправьте «-», чтобы оставить как есть.`;
+    },
+    /** Second step: the current aliases, the input format, and the limits `parseAliases` enforces. */
+    aliasesPrompt(current: string): string {
+      return (
+        `Текущие алиасы: <b>${escapeHtml(current)}</b>\n` +
+        `Введите алиасы через запятую (не более ${String(MAX_ALIASES_PER_PERSON)}, каждый до ${String(MAX_ALIAS_LENGTH)} символов) ` +
+        'или отправьте «-», чтобы оставить как есть.'
+      );
+    },
+    /** `AliasValidationError('too_many')` — re-prompts within the same dialog step. */
+    aliasesTooMany(): string {
+      return `Слишком много алиасов — не более ${String(MAX_ALIASES_PER_PERSON)}. Попробуйте ещё раз.`;
+    },
+    /** `AliasValidationError('too_long')` — re-prompts within the same dialog step. */
+    aliasesTooLong(): string {
+      return `Каждый алиас должен быть не длиннее ${String(MAX_ALIAS_LENGTH)} символов. Попробуйте ещё раз.`;
+    },
+    /** Shown when an update other than a text message arrives while the dialog expects one. */
+    textHint: 'Пожалуйста, отправьте текстовое сообщение.',
+    /** Both steps were skipped («-» twice) — nothing was written to the DB. */
+    nothingChanged: 'Изменений не было — данные оставлены как есть.',
+    /** At least one field was saved. */
+    saved: 'Данные участника сохранены.',
   },
   privacy: {
     /**

@@ -20,8 +20,10 @@ import { registerAdminHandlers } from './handlers/admin.js';
 import { registerTransferHandlers } from './handlers/transfer.js';
 import { registerChatMemberHandlers } from './handlers/chatMember.js';
 import { registerChatsHandlers } from './handlers/chats.js';
+import { registerPeopleHandlers } from './handlers/people.js';
 import { registerGroupHandlers } from './handlers/group.js';
 import { registerTimezoneConversation } from './conversations/timezone.js';
+import { registerEditPersonConversation } from './conversations/editPerson.js';
 
 /**
  * The subset of `AppDeps` (`src/deps.ts`) that bot construction and its
@@ -90,11 +92,13 @@ export function createBot(
   bot.use(conversations());
 
   registerTimezoneConversation(bot, deps);
+  registerEditPersonConversation(bot, deps);
   registerDmHandlers(bot);
   registerAdminHandlers(bot, deps, startedAt);
   registerTransferHandlers(bot, deps);
   registerChatMemberHandlers(bot, deps);
   registerChatsHandlers(bot, deps);
+  registerPeopleHandlers(bot, deps);
   registerGroupHandlers(bot, deps);
 
   bot.catch((err) => {

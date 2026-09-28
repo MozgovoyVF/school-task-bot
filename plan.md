@@ -1369,16 +1369,16 @@ describe('stage 0 heuristics (SPEC §7.3)', () => {
 
 **Интерфейсы:** Produces `parseAliases(input: string): string[]` в `src/domain/people/repo.ts`, а также `updatePerson(db, { membershipId, displayName?, aliases? })` (без `notifyAssignments`, D40).
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
   - `parseAliases('Маша, Машенька ,маша,, ')` → `['Маша', 'Машенька']` (регистронезависимая дедупликация, пустые убираются).
   - Больше 10 алиасов или алиас длиннее 30 символов → ошибка.
   - `/people` (owner) → список: имя, алиасы, пояс (без переключателя уведомлений, D40).
   - Редактирование имени и алиасов через диалог сохраняется.
   - member → `forbidden`.
-- [ ] **Шаг 2:** FAIL.
-- [ ] **Шаг 3: реализация.** Кнопка «Удалить данные» появляется в задаче 3.12.
-- [ ] **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(people): add /people with names and aliases`.
+- [x] **Шаг 2:** FAIL.
+- [x] **Шаг 3: реализация.** Кнопка «Удалить данные» появляется в задаче 3.12.
+- [x] **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(people): add /people with names and aliases`.
 
 ### Task 1.11: Privacy mode, `/privacy`, меню команд
 
