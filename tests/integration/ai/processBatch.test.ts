@@ -222,8 +222,12 @@ describe('processBatch (plan.md Task 2.10)', () => {
         },
       },
     );
+    // Literal, independent of `resolveDue`'s own output (review round 1,
+    // M6) — Europe/Moscow is UTC+3 year-round (no DST since 2014), so
+    // 2026-10-02 18:00 MSK is 2026-10-02T15:00:00.000Z.
+    expect(expectedDue.dueAt?.toISOString()).toBe('2026-10-02T15:00:00.000Z');
     expect(payload.due).toEqual({
-      dueAt: expectedDue.dueAt?.toISOString(),
+      dueAt: '2026-10-02T15:00:00.000Z',
       allDay: false,
       tz: 'Europe/Moscow',
       inPast: false,
@@ -577,5 +581,70 @@ describe('processBatch (plan.md Task 2.10)', () => {
     // proves this call actually took the manual-mode path, not a fluke.
     expect(created[0]?.policyDecision).toBe('shown');
     expect(created[0]?.policyReason).toBe('manual_override');
+  });
+
+  it('resolves a reply to an earlier, already-analyzed message from a previous batch via the default reply-to-author assignee rule (review round 1, I2)', async () => {
+    const clock = fixedClock('2026-09-23T09:00:00Z');
+    const now = clock.now();
+    const noAssigneeRef: CompletionResponse = {
+      content: JSON.stringify({
+        actions: [
+          {
+            type: 'create',
+            category: 'assignment',
+            title: 'Добавить документы в папку',
+            description: null,
+            // No `assignee_ref`/`assignee_name_text` at all — this is
+            // exactly the case SPEC §9.6's default-assignee rule covers:
+            // an `assignment` in reply to someone goes to that person.
+            assignee_ref: null,
+            assignee_name_text: null,
+            due: { due_local: null, time_hint: 'none', due_text: null },
+            priority: 'normal',
+            source_message_ids: ['M1'],
+            confidence: 0.9,
+            reasoning: 'ответ на сообщение Бориса',
+          },
+        ],
+      }),
+      usage: { inputTokens: 100, outputTokens: 20, costUsd: 0.0001 },
+      model: 'fixture/primary',
+      raw: {},
+    };
+    const { extraction } = extractorFrom([noAssigneeRef]);
+    const deps = await makeDeps(clock, extraction);
+    const boris = await makeMember(deps.workspace.id, 1, 'Борис');
+    const owner = await makeMember(deps.workspace.id, 2, 'Директор', 'owner');
+    const chat = await makeChat(deps.workspace.id, -508, now);
+
+    // Simulates a message an *earlier* batch already ran through
+    // `processBatch` and marked `analyzed` — inserted directly here rather
+    // than via a real prior `processBatch` call, since only its presence
+    // and status matter for this test.
+    const earlier = await insertMessage(
+      chat.id,
+      1,
+      boris.id,
+      new Date(now.getTime() - 100_000),
+      'куплю папки сегодня',
+    );
+    await db.update(messages).set({ analysisStatus: 'analyzed' }).where(eq(messages.id, earlier.id));
+
+    const reply = await insertMessage(chat.id, 2, owner.id, now, 'ок, положите туда и документы тоже');
+    await db.update(messages).set({ replyToTgMessageId: 1 }).where(eq(messages.id, reply.id));
+    const batch = await makeBatch(chat.id, [reply.id]);
+
+    await processBatch(deps, batch, { mode: 'auto' });
+
+    const created = await proposalsForBatch(batch.id);
+    expect(created).toHaveLength(1);
+    const payload = created[0]?.payload as Record<string, unknown>;
+    // Resolved only via `replyToAuthorUserId`, which is only reachable
+    // because `earlier` (from a chat history *before* this batch, not
+    // within its own [earliest, latest] window) is loaded as context —
+    // proving this test is genuinely exercising I2's fix, not the
+    // narrower same-window case the "skipped message" test above already
+    // covers.
+    expect(payload.assignee).toEqual({ type: 'user', userId: boris.id });
   });
 });

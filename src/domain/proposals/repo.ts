@@ -70,6 +70,8 @@ export interface NewProposal {
   policyDecision: 'shown' | 'suppressed';
   policyReason: string;
   sourceMessageIds: number[];
+  /** CLAUDE.md: `ai/`/`domain/` code takes "now" only from `deps.clock.now()`, never the column's own `defaultNow()` — the caller (`processBatch`) passes its already-captured `now` through here. */
+  createdAt: Date;
 }
 
 /**
@@ -95,6 +97,7 @@ export async function insertProposal(tx: Tx, p: NewProposal): Promise<ProposalRo
       policyDecision: p.policyDecision,
       policyReason: p.policyReason,
       sourceMessageIds: p.sourceMessageIds,
+      createdAt: p.createdAt,
     })
     .returning();
   if (!row) throw new Error('insertProposal: insert returned no row');

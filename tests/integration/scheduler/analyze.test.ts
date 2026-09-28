@@ -13,7 +13,7 @@ import { ensureDefaultWorkspace } from '../../../src/domain/workspaces/repo.js';
 import { upsertTelegramUser } from '../../../src/domain/people/repo.js';
 import { upsertChatOnAdd } from '../../../src/domain/chats/repo.js';
 import { getState } from '../../../src/domain/system/appState.js';
-import { messages, memberships, analysisBatches } from '../../../src/db/schema/index.js';
+import { messages, memberships, analysisBatches, proposals } from '../../../src/db/schema/index.js';
 import { analyzeJob } from '../../../src/scheduler/jobs/analyze.js';
 import { enqueueBatches, claimNextBatch, recoverStaleBatches } from '../../../src/ai/pipeline/batcher.js';
 import { spentTodayUsd } from '../../../src/ai/budget.js';
@@ -565,5 +565,126 @@ describe('analyzeJob', () => {
     // `extractorFrom([])` rejects with "script exhausted" as soon as it is actually invoked — attempts
     // moving off 0 (and the batch leaving `queued` with no `error`) is the signal it was reached at all.
     expect(batchAfterResume?.attempts).toBe(1);
+  });
+
+  it('retries a batch whose processBatch transaction fails partway through, leaving it queued with attempts incremented and messages pending (review round 1, M3)', async () => {
+    const clock = fixedClock('2026-09-23T09:00:00Z');
+    const now = clock.now();
+    const twoAssignments: CompletionResponse = {
+      content: JSON.stringify({
+        actions: [
+          {
+            type: 'create',
+            category: 'assignment',
+            title: 'Заказать канцтовары',
+            description: null,
+            assignee_ref: null,
+            assignee_name_text: null,
+            due: { due_local: null, time_hint: 'none', due_text: null },
+            priority: 'normal',
+            source_message_ids: ['M1'],
+            confidence: 0.9,
+            reasoning: 'первое поручение',
+          },
+          {
+            type: 'create',
+            category: 'assignment',
+            title: 'Заказать канцтовары для второго класса',
+            description: null,
+            assignee_ref: null,
+            assignee_name_text: null,
+            due: { due_local: null, time_hint: 'none', due_text: null },
+            priority: 'normal',
+            source_message_ids: ['M2'],
+            confidence: 0.9,
+            reasoning: 'второе поручение',
+          },
+        ],
+      }),
+      usage: { inputTokens: 100, outputTokens: 20, costUsd: 0.0001 },
+      model: 'fixture/primary',
+      raw: {},
+    };
+    const ai: AiProviders = {
+      extraction: extractorFrom([twoAssignments]),
+      decision: null,
+      client: UNUSED_CLIENT,
+      models: { primary: 'fixture/primary', fallback: null },
+    };
+    const deps = await makeDeps(clock, ai);
+    await makeMember(deps.workspace.id, 900, 'Owner', 'owner');
+    const chat = await makeActiveChat(deps.workspace.id, -600, now);
+    const author = await makeMember(deps.workspace.id, 60, 'Author');
+    const m1 = await insertMessage(
+      chat.id,
+      1,
+      author.id,
+      new Date(now.getTime() - 200_000),
+      'первое поручение текст',
+    );
+    const m2 = await insertMessage(
+      chat.id,
+      2,
+      author.id,
+      new Date(now.getTime() - 190_000),
+      'второе поручение текст',
+    );
+
+    // Same technique as `processBatch.test.ts`'s own rollback test: forces
+    // a *real* Postgres unique-violation on the transaction's second
+    // `insertProposal` call by pre-occupying the id its own sequence would
+    // otherwise hand out next — see that test's comment for the full
+    // mechanics. This is the end-to-end version: driven through
+    // `analyzeJob.run`, not `processBatch` directly, so it actually proves
+    // the *job's* retry path (`markFailedOrRetry`) reacts correctly to a
+    // `ProcessBatchError`, not just that `processBatch` itself rolls back.
+    await db.insert(proposals).values({
+      id: 2,
+      workspaceId: deps.workspace.id,
+      kind: 'create',
+      category: null,
+      payload: { reasoning: 'placeholder', origin: 'ai', quote: null, quoteAuthorName: null },
+      confidence: 0,
+      policyDecision: 'suppressed',
+      policyReason: 'placeholder',
+      sourceMessageIds: [],
+    });
+
+    await analyzeJob.run(deps);
+
+    const [batch] = await db.select().from(analysisBatches).where(eq(analysisBatches.chatId, chat.id));
+    expect(batch?.status).toBe('queued');
+    expect(batch?.attempts).toBe(1);
+    expect(batch?.nextAttemptAt).not.toBeNull();
+    expect(batch?.model).toBeNull(); // never reached `done` — the whole update rolled back too
+
+    const [m1After] = await db.select().from(messages).where(eq(messages.id, m1.id));
+    const [m2After] = await db.select().from(messages).where(eq(messages.id, m2.id));
+    expect(m1After?.analysisStatus).toBe('pending');
+    expect(m2After?.analysisStatus).toBe('pending');
+
+    // Only the placeholder row survives — the transaction's own two inserts
+    // (including the first, which succeeded before the second failed) were
+    // rolled back with it.
+    const allProposals = await db.select().from(proposals);
+    expect(allProposals).toHaveLength(1);
+    expect(allProposals[0]?.id).toBe(2);
+
+    // The error stored on the batch (and, after a 5th failure, the
+    // superadmin alert) must never carry the raw Postgres/drizzle error
+    // message — that message embeds the failed query's bound parameters,
+    // which for a `proposals` insert can include real message text/names
+    // (review round 1, I1).
+    expect(batch?.error).not.toBeNull();
+    expect(batch?.error).not.toContain('канцтовары');
+    expect(batch?.error).not.toContain('INSERT INTO');
+    expect(batch?.error).not.toContain('params:');
+    // Precisely what `summarizeError` should produce: `ProcessBatchError`
+    // (the name of what `processBatch` actually threw) plus, walked
+    // through its `.cause` chain (`ProcessBatchError` -> drizzle's
+    // `DrizzleQueryError` -> the underlying `postgres.js` error),
+    // Postgres's own `23505` (unique_violation) code — proving `errorCode`
+    // genuinely walked the chain, not merely that nothing bad leaked.
+    expect(batch?.error).toBe('ProcessBatchError (code=23505)');
   });
 });

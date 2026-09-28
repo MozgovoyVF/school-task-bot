@@ -15,7 +15,7 @@ import {
   type BatchRow,
 } from '../../ai/pipeline/batcher.js';
 import { spentTodayUsd } from '../../ai/budget.js';
-import { processBatch } from '../../ai/pipeline/processBatch.js';
+import { processBatch, ProcessBatchError } from '../../ai/pipeline/processBatch.js';
 import type { ParticipantForLlm } from '../../ai/pseudonymize.js';
 import { loadPrompt } from '../../ai/prompts.js';
 import { ExtractionError, type Usage } from '../../ai/providers/types.js';
@@ -182,13 +182,56 @@ async function markSkippedByPrefilter(
 }
 
 /**
+ * Walks `err.cause` (and its own `.cause`, up to a few hops) looking for a
+ * string `.code` — how a Postgres error identifies itself (`postgres.js`'s
+ * `PostgresError`, e.g. `23505` for a unique violation), reachable either
+ * directly or through however many wrapper errors sit on top of it (e.g.
+ * `processBatch`'s own `ProcessBatchError` wrapping drizzle's
+ * `DrizzleQueryError` wrapping the `PostgresError`). The hop limit guards
+ * against an accidental circular `cause` chain, which should never happen
+ * but costs nothing to guard against.
+ */
+function errorCode(err: unknown): string | null {
+  let current: unknown = err;
+  for (let hop = 0; hop < 4 && current instanceof Error; hop += 1) {
+    const code = (current as { code?: unknown }).code;
+    if (typeof code === 'string') return code;
+    current = current.cause;
+  }
+  return null;
+}
+
+/**
+ * Review round 1, I1: turns any thrown error into an ID-safe summary for
+ * `analysis_batches.error` and the superadmin alert (CLAUDE.md §8/SPEC
+ * §18 — no message text, no names; also keeps the alert well under
+ * Telegram's 4096-char limit). `ExtractionError.message` is already a
+ * static, safe string (`'extraction failed on every model/attempt'`) and is
+ * used as-is. Everything else — in particular a `ProcessBatchError` from
+ * `processBatch`'s transaction (`insertProposal`, etc.) — can wrap a
+ * drizzle `DrizzleQueryError`, whose own `.message` embeds the failed query
+ * *and its bound parameters*: since those parameters can be
+ * `payload.quote` (message text) or `payload.quoteAuthorName` (a real
+ * name), only `err.name` plus, when found, a Postgres error code from
+ * {@link errorCode} ever survive into the summary — never `err.message`
+ * itself.
+ */
+function summarizeError(err: unknown): string {
+  if (err instanceof ExtractionError) return err.message;
+  if (!(err instanceof Error)) return 'unknown error';
+  const code = errorCode(err);
+  return code !== null ? `${err.name} (code=${code})` : err.name;
+}
+
+/**
  * SPEC §8/§9.2: on failure, the batch's messages are left untouched
  * (`pending`) — only the batch row moves, either back to `queued` with
  * backoff (via {@link nextAttemptAt}) or, after its 5th failed attempt, to
  * `failed` with a superadmin alert. Either way the consecutive-failure
  * streak is bumped, and `usage` (this attempt's prefilter + — if the
  * extractor was reached and itself failed — its billed-but-unparseable
- * `ExtractionError.usage`) is accumulated onto the batch's running
+ * `ExtractionError.usage`, or `processBatch`'s own `ProcessBatchError.usage`
+ * for a post-extraction failure) is accumulated onto the batch's running
  * token/cost totals via {@link accumulateUsage}: a model that returns
  * billed, invalid JSON on every attempt still spends real money, and that
  * spend must count toward `spentTodayUsd` even though the batch never
@@ -201,7 +244,7 @@ async function markFailedOrRetry(
   usage: Usage,
   now: Date,
 ): Promise<void> {
-  const message = err instanceof Error ? err.message : String(err);
+  const message = summarizeError(err);
   const attempts = batch.attempts + 1;
   const next = nextAttemptAt(attempts, now);
   const totals = accumulateUsage(batch, usage);
@@ -306,8 +349,8 @@ async function runOneBatch(deps: AppDeps, batch: BatchRow, now: Date): Promise<v
 
     // From here on, `processBatch` (Task 2.10) owns everything: it builds
     // its own fuller extraction input (participants, open tasks/proposals,
-    // `skipped`-in-window context, real reply-ref resolution — `input`
-    // above is only ever the prefilter's deliberately trivial version), the
+    // recent chat context, real reply-ref resolution — `input` above is
+    // only ever the prefilter's deliberately trivial version), the
     // extractor call itself, and resolving/policying/deduping the result
     // into proposals, all the way through marking the batch's messages
     // `analyzed` and the batch `done`, in one transaction. `usage`/
@@ -315,15 +358,10 @@ async function runOneBatch(deps: AppDeps, batch: BatchRow, now: Date): Promise<v
     // so `processBatch`'s own bookkeeping (`accumulateUsage`, and its
     // `prefilterModel` passthrough — it has no prefilter of its own) adds
     // its spend on top of what the prefilter above already spent, instead
-    // of losing it.
-    //
-    // Known gap (flagged for this task's reviewer): if `processBatch`'s
-    // *transaction* fails (e.g. `insertProposal`) *after* a successful,
-    // billed extraction call, that call's usage is not folded back into
-    // `usage` here — unlike an `ExtractionError`, a transaction failure
-    // carries no usage of its own to recover. The batch's `costUsd` will
-    // then under-count that one attempt; the retry's own extraction call
-    // (if it succeeds) records its usage normally on the next pass.
+    // of losing it. A failure *after* `processBatch`'s own extraction call
+    // succeeds no longer loses that call's usage either (review round 1,
+    // M1) — it surfaces as `ProcessBatchError`, folded in below exactly
+    // like `ExtractionError`.
     const batchWithPrefilter: BatchRow = {
       ...batch,
       inputTokens: (batch.inputTokens ?? 0) + usage.inputTokens,
@@ -337,8 +375,12 @@ async function runOneBatch(deps: AppDeps, batch: BatchRow, now: Date): Promise<v
     // `ExtractionError.usage` sums every attempt the extractor itself made
     // (all of it billed even though none parsed) — fold it into this
     // attempt's usage so a billed-but-invalid response is never lost, on
-    // top of whatever the prefilter already spent above.
-    if (err instanceof ExtractionError) {
+    // top of whatever the prefilter already spent above. `ProcessBatchError`
+    // (review round 1, M1) is the same idea for a failure *after* a
+    // successful extraction call: `processBatch` couldn't record that
+    // call's usage on the batch itself (its own transaction rolled back),
+    // so it carries it back out this way instead.
+    if (err instanceof ExtractionError || err instanceof ProcessBatchError) {
       usage = sumUsage(usage, err.usage);
     }
     await markFailedOrRetry(deps, batch, err, usage, now);

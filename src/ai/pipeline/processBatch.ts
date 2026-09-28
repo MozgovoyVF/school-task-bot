@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, inArray, lte } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, lt } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   CONTEXT_MESSAGES,
@@ -42,6 +42,32 @@ export interface ProcessBatchResult {
 export interface ProcessBatchOptions {
   mode?: PolicyMode;
   noReaction?: boolean;
+}
+
+/**
+ * Thrown by {@link processBatch} for any failure *after* a successful,
+ * billed extraction call (review round 1, M1) — resolving/policying/
+ * deduping the result, or the write transaction itself (`insertProposal`,
+ * the `analyzed`/`done` updates). Unlike `ExtractionError`, none of those
+ * steps normally carry their own usage to recover, so without this the
+ * extraction's real spend would be lost from `analysis_batches.cost_usd`
+ * whenever the failure happens downstream of a successful call. `usage` is
+ * exactly `extracted.usage` — the caller (`analyzeJob`'s `runOneBatch`)
+ * folds it into its own running total the same way it already does for
+ * `ExtractionError.usage`. `message` is always a static, safe string —
+ * never derived from `cause` — see `analyze.ts`'s `summarizeError` (review
+ * round 1, I1) for why the *original* error's `.message` must never reach
+ * `analysis_batches.error` or the superadmin alert unredacted.
+ */
+export class ProcessBatchError extends Error {
+  constructor(
+    message: string,
+    readonly usage: Usage,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = 'ProcessBatchError';
+  }
 }
 
 /** Mirrors `src/scheduler/jobs/analyze.ts`'s `accumulateUsage` — kept local (not imported) since `ai/pipeline` must not depend on `scheduler/` (CLAUDE.md's module boundaries). Adds this call's usage on top of whatever `batch` already carried in from an earlier failed attempt (SPEC §9.2). */
@@ -122,34 +148,42 @@ async function loadBatchMessages(db: AppDeps['db'], batchId: number): Promise<Me
 }
 
 /**
- * Brief step 7: `skipped` messages in the same chat, within the batch's own
- * time window (its earliest to its latest message, inclusive), are fed in
- * as *context* — never as new, actionable input. Returns `[]` when the
- * batch has no chat (a manual/reanalyze batch not tied to one, D5) or no
- * messages of its own to anchor a window against.
+ * SPEC §9.3's context window, plus brief step 7: the last {@link
+ * CONTEXT_MESSAGES} messages of the chat that are already `analyzed` or
+ * `skipped` (never `pending` — those are either this batch's own "new"
+ * messages or a different, still-unclaimed batch's) and sent strictly
+ * before the batch's own latest message, newest first then reversed back to
+ * chronological order. This is a superset of the original brief's
+ * "`skipped` messages in the batch's own time window" — a `skipped` message
+ * interleaved between two of the batch's own messages is `sent before` the
+ * latest one and so is still included — and additionally covers real
+ * conversation history from *before* the batch (review round 1, I2):
+ * without it, the model never sees prior context, and a reply to a message
+ * from an earlier batch could not resolve `replyToAuthorUserId` (SPEC
+ * §9.6's default-assignee rule for a reply). Returns `[]` when the batch has
+ * no chat (a manual/reanalyze batch not tied to one, D5) or no messages of
+ * its own to anchor the cutoff against.
  */
-async function loadSkippedContext(
+async function loadContext(
   db: AppDeps['db'],
   chatId: number | null,
   batchMessages: readonly MessageRow[],
 ): Promise<MessageRow[]> {
   if (chatId === null || batchMessages.length === 0) return [];
-  const sentTimes = batchMessages.map((m) => m.sentAt.getTime());
-  const from = new Date(Math.min(...sentTimes));
-  const to = new Date(Math.max(...sentTimes));
-  return db
+  const latestBatchSentAt = new Date(Math.max(...batchMessages.map((m) => m.sentAt.getTime())));
+  const rows = await db
     .select()
     .from(messages)
     .where(
       and(
         eq(messages.chatId, chatId),
-        eq(messages.analysisStatus, 'skipped'),
-        gte(messages.sentAt, from),
-        lte(messages.sentAt, to),
+        inArray(messages.analysisStatus, ['analyzed', 'skipped']),
+        lt(messages.sentAt, latestBatchSentAt),
       ),
     )
-    .orderBy(asc(messages.sentAt))
+    .orderBy(desc(messages.sentAt))
     .limit(CONTEXT_MESSAGES);
+  return rows.reverse();
 }
 
 function toPromptAssignee(
@@ -174,7 +208,12 @@ async function loadOpenTasks(
     .select()
     .from(tasks)
     .where(and(eq(tasks.workspaceId, workspaceId), inArray(tasks.status, ['open', 'in_progress'])))
-    .orderBy(asc(tasks.id))
+    // SPEC §9.3 wants open tasks ordered by date of change — most-recently-
+    // touched first — so that once a workspace has more than
+    // PROMPT_MAX_OPEN_TASKS, the ones dropped by the `.limit()` below are
+    // the stalest, not the newest (review round 1, I3): a recently-changed
+    // task is the one most likely to be referenced by a follow-up message.
+    .orderBy(desc(tasks.updatedAt))
     .limit(PROMPT_MAX_OPEN_TASKS);
   return rows.map((row) => ({
     id: row.id,
@@ -191,8 +230,25 @@ async function loadOpenProposals(db: AppDeps['db'], workspaceId: number): Promis
   const rows = await db
     .select()
     .from(proposals)
-    .where(and(eq(proposals.workspaceId, workspaceId), eq(proposals.status, 'pending')))
-    .orderBy(asc(proposals.id))
+    .where(
+      and(
+        eq(proposals.workspaceId, workspaceId),
+        eq(proposals.status, 'pending'),
+        // Review round 1, I3's ruling: only `shown` proposals were ever
+        // surfaced to the Owner, so only those are "in flight" from their
+        // point of view — a `suppressed` one was never displayed and
+        // shouldn't appear as something the model can reference/update via
+        // `R#`. This deliberately does NOT extend to `dedup.ts`'s
+        // `findPossibleDuplicate` (Task 2.7, already reviewed/out of
+        // scope) — that duplicate check keeps including suppressed
+        // proposals, matching Task 2.8's own precedent that a missed task
+        // outweighs one extra "possible duplicate" flag.
+        eq(proposals.policyDecision, 'shown'),
+      ),
+    )
+    // SPEC §9.3, same reasoning as `loadOpenTasks` above: newest first, so
+    // the limit below drops the stalest ones, not the most recent.
+    .orderBy(desc(proposals.createdAt))
     .limit(PROMPT_MAX_OPEN_PROPOSALS);
 
   const result: OpenProposalForLlm[] = [];
@@ -291,18 +347,22 @@ function buildPayload(
 /**
  * Turns one claimed batch into proposals (plan.md Task 2.10, SPEC
  * §9.3-9.7): assembles the extractor's full input (participants, open
- * tasks/proposals, `skipped`-in-window context, and the batch's own
- * messages, with real reply-ref resolution — unlike `analyze.ts`'s
- * prefilter-only input), calls `deps.ai.extraction.extract` *outside* any
- * transaction, then resolves/policies/dedups the result and, in **one**
- * transaction, writes every resulting proposal (`shown` and `suppressed`
- * alike), marks the batch's messages `analyzed`, and marks the batch
- * `done`. A failure anywhere inside that transaction — including
- * `insertProposal` itself, per the brief's step 6 — rolls every write in it
- * back: no partial proposals, no messages flipped to `analyzed`, no `done`
- * batch; the caller (`analyzeJob`) sees the rejection and re-queues the
- * batch for retry exactly as it does for an extractor failure. Cards are
- * never sent here — that is the outbox's job (Task 2.12).
+ * tasks/proposals, the last {@link CONTEXT_MESSAGES} `analyzed`/`skipped`
+ * messages of the chat sent before the batch, and the batch's own messages,
+ * with real reply-ref resolution — unlike `analyze.ts`'s prefilter-only
+ * input), calls `deps.ai.extraction.extract` *outside* any transaction,
+ * then resolves/policies/dedups the result and, in **one** transaction,
+ * writes every resulting proposal (`shown` and `suppressed` alike), marks
+ * the batch's messages `analyzed`, and marks the batch `done`. A failure
+ * anywhere inside that transaction — including `insertProposal` itself, per
+ * the brief's step 6 — rolls every write in it back: no partial proposals,
+ * no messages flipped to `analyzed`, no `done` batch. Once extraction has
+ * succeeded, any such failure is rethrown as {@link ProcessBatchError}
+ * (review round 1, M1) rather than the raw error, so the caller
+ * (`analyzeJob`) can still recover that call's billed usage; either way it
+ * sees a rejection and re-queues the batch for retry exactly as it does for
+ * an extractor failure. Cards are never sent here — that is the outbox's
+ * job (Task 2.12).
  */
 export async function processBatch(
   deps: AppDeps,
@@ -315,10 +375,22 @@ export async function processBatch(
 
   const batchMessages = await loadBatchMessages(deps.db, batch.id);
   if (batchMessages.length === 0) {
-    await deps.db
+    // Same concurrency guard as the transaction's own `done` update below
+    // (review round 1, M4): only a batch this call actually holds
+    // (`running`) gets marked `done` — zero rows matching means another
+    // worker already reclaimed it (past the stale-claim window) or it was
+    // otherwise already finished, and blindly marking it `done` here would
+    // silently stomp on whatever that other run is doing.
+    const [updated] = await deps.db
       .update(analysisBatches)
       .set({ status: 'done', finishedAt: now, nextAttemptAt: null })
-      .where(eq(analysisBatches.id, batch.id));
+      .where(and(eq(analysisBatches.id, batch.id), eq(analysisBatches.status, 'running')))
+      .returning();
+    if (!updated) {
+      throw new Error(
+        `processBatch: batch ${String(batch.id)} was not 'running' when marking it done (no messages)`,
+      );
+    }
     return { shown: 0, suppressed: 0 };
   }
 
@@ -330,13 +402,13 @@ export async function processBatch(
   const usersById = new Map(members.map((m) => [m.user.id, m.user]));
   const displayNameByUserId = new Map(members.map((m) => [m.user.id, m.membership.displayName]));
 
-  const skippedContext = await loadSkippedContext(deps.db, batch.chatId, batchMessages);
-  const relevant = [...skippedContext, ...batchMessages];
+  const context = await loadContext(deps.db, batch.chatId, batchMessages);
+  const relevant = [...context, ...batchMessages];
   const tgIdToDbId = new Map(relevant.map((m) => [m.tgMessageId, m.id]));
   const dbIdToAuthor = new Map(relevant.map((m) => [m.id, m.authorUserId]));
   const messagesById = new Map(relevant.map((m) => [m.id, m]));
 
-  const contextForLlm = skippedContext.map((row) => toMessageForLlm(row, usersById, tgIdToDbId));
+  const contextForLlm = context.map((row) => toMessageForLlm(row, usersById, tgIdToDbId));
   const newForLlm = batchMessages.map((row) => toMessageForLlm(row, usersById, tgIdToDbId));
 
   const openTasks = await loadOpenTasks(deps.db, deps.workspace.id, participants, owner.user.id);
@@ -391,75 +463,100 @@ export async function processBatch(
   const thresholds = settings.ai.thresholds;
   const batchIds = batchMessages.map((m) => m.id);
 
-  const result = await deps.db.transaction(async (tx) => {
-    let shown = 0;
-    let suppressed = 0;
-    const accepted: ResolvedAction[] = [];
+  // Everything from here on runs *after* a successful, billed extraction
+  // call — any failure (resolving refs, the write transaction,
+  // `insertProposal` itself) is rethrown as `ProcessBatchError` carrying
+  // `extracted.usage`, so the caller (`analyzeJob`) can still fold that
+  // real spend into `analysis_batches.cost_usd` instead of losing it
+  // (review round 1, M1 — see `ProcessBatchError`'s own doc comment).
+  try {
+    const result = await deps.db.transaction(async (tx) => {
+      let shown = 0;
+      let suppressed = 0;
+      const accepted: ResolvedAction[] = [];
 
-    for (const action of actions) {
-      if (isRepeatInBatch(accepted, action)) continue;
-      accepted.push(action);
+      for (const action of actions) {
+        if (isRepeatInBatch(accepted, action)) continue;
+        accepted.push(action);
 
-      const policy = applyPolicy(action, thresholds, mode);
+        const policy = applyPolicy(action, thresholds, mode);
 
-      let duplicateOf: ProposalPayload['duplicateOf'];
-      if (action.kind === 'create') {
-        const match = await findPossibleDuplicate(tx, {
+        let duplicateOf: ProposalPayload['duplicateOf'];
+        if (action.kind === 'create') {
+          const match = await findPossibleDuplicate(tx, {
+            workspaceId: deps.workspace.id,
+            title: action.title,
+            assignee: action.assignee,
+            now,
+          });
+          if (match) duplicateOf = { type: match.type, id: match.id, title: match.title };
+        }
+
+        const quote = buildQuote(action, messagesById, displayNameByUserId);
+        const payload = buildPayload(action, quote, duplicateOf, opts?.noReaction);
+
+        const newProposal: NewProposal = {
           workspaceId: deps.workspace.id,
-          title: action.title,
-          assignee: action.assignee,
-          now,
-        });
-        if (match) duplicateOf = { type: match.type, id: match.id, title: match.title };
+          chatId: batch.chatId,
+          batchId: batch.id,
+          kind: action.kind,
+          category: action.kind === 'create' ? action.category : null,
+          payload,
+          targetTaskId: targetTaskIdOf(action),
+          confidence: action.confidence,
+          policyDecision: policy.decision,
+          policyReason: policy.reason,
+          sourceMessageIds: action.sourceMessageIds,
+          createdAt: now,
+        };
+
+        const inserted = await insertProposal(tx, newProposal);
+        if (inserted.policyDecision === 'shown') shown += 1;
+        else suppressed += 1;
       }
 
-      const quote = buildQuote(action, messagesById, displayNameByUserId);
-      const payload = buildPayload(action, quote, duplicateOf, opts?.noReaction);
+      await tx.update(messages).set({ analysisStatus: 'analyzed' }).where(inArray(messages.id, batchIds));
 
-      const newProposal: NewProposal = {
-        workspaceId: deps.workspace.id,
-        chatId: batch.chatId,
-        batchId: batch.id,
-        kind: action.kind,
-        category: action.kind === 'create' ? action.category : null,
-        payload,
-        targetTaskId: targetTaskIdOf(action),
-        confidence: action.confidence,
-        policyDecision: policy.decision,
-        policyReason: policy.reason,
-        sourceMessageIds: action.sourceMessageIds,
-      };
+      const totals = accumulateUsage(batch, extracted.usage);
+      // `WHERE status='running' … RETURNING` (review round 1, M4, same
+      // idempotency pattern CLAUDE.md prescribes elsewhere): if this batch
+      // is no longer `running` — reclaimed by another worker past the
+      // stale-claim window, or otherwise already finished — zero rows come
+      // back, and throwing here rolls the whole transaction back (no
+      // proposals, no `analyzed` messages either) instead of silently
+      // overwriting whatever that other run already did.
+      const [updatedBatch] = await tx
+        .update(analysisBatches)
+        .set({
+          status: 'done',
+          finishedAt: now,
+          model: extracted.model,
+          promptVersion: input.promptVersion,
+          // Preserves whatever the caller (`analyzeJob`'s prefilter step,
+          // when it ran and decided to proceed) already set on the `batch`
+          // it handed us — this function has no prefilter of its own to
+          // record.
+          prefilterModel: batch.prefilterModel,
+          inputTokens: totals.inputTokens,
+          outputTokens: totals.outputTokens,
+          costUsd: totals.costUsd,
+          latencyMs: finishedAt.getTime() - startedAt.getTime(),
+          rawResponse: extracted.raw,
+          nextAttemptAt: null,
+        })
+        .where(and(eq(analysisBatches.id, batch.id), eq(analysisBatches.status, 'running')))
+        .returning();
+      if (!updatedBatch) {
+        throw new Error(`processBatch: batch ${String(batch.id)} was not 'running' when its update ran`);
+      }
 
-      const inserted = await insertProposal(tx, newProposal);
-      if (inserted.policyDecision === 'shown') shown += 1;
-      else suppressed += 1;
-    }
+      return { shown, suppressed };
+    });
 
-    await tx.update(messages).set({ analysisStatus: 'analyzed' }).where(inArray(messages.id, batchIds));
-
-    const totals = accumulateUsage(batch, extracted.usage);
-    await tx
-      .update(analysisBatches)
-      .set({
-        status: 'done',
-        finishedAt: now,
-        model: extracted.model,
-        promptVersion: input.promptVersion,
-        // Preserves whatever the caller (`analyzeJob`'s prefilter step, when
-        // it ran and decided to proceed) already set on the `batch` it
-        // handed us — this function has no prefilter of its own to record.
-        prefilterModel: batch.prefilterModel,
-        inputTokens: totals.inputTokens,
-        outputTokens: totals.outputTokens,
-        costUsd: totals.costUsd,
-        latencyMs: finishedAt.getTime() - startedAt.getTime(),
-        rawResponse: extracted.raw,
-        nextAttemptAt: null,
-      })
-      .where(eq(analysisBatches.id, batch.id));
-
-    return { shown, suppressed };
-  });
-
-  return result;
+    return result;
+  } catch (err) {
+    throw new ProcessBatchError('processBatch failed after a successful extraction call', extracted.usage, {
+      cause: err,
+    });
+  }
 }
