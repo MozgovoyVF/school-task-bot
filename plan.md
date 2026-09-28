@@ -448,7 +448,7 @@ export interface AiProviders { extraction: ExtractionProvider; decision: Decisio
   - `interface ResolvedDue { dueAt: Date | null; allDay: boolean; tz: string | null; inPast: boolean; invalid: boolean; dueText: string | null }`;
   - `resolveDue(due: DueT, opts: { zone: string; now: Date; fuzzy: FuzzyTimes }): ResolvedDue`.
 
-- [ ] **Шаг 1: падающие тесты** (SPEC §10; значения проверены на luxon 3.7.2)
+- [x] **Шаг 1: падающие тесты** (SPEC §10; значения проверены на luxon 3.7.2)
 
 ```ts
 import { describe, it, expect } from 'vitest';
@@ -530,13 +530,13 @@ describe('resolveDue (SPEC §10)', () => {
 });
 ```
 
-- [ ] **Шаг 2:** FAIL.
-- [ ] **Шаг 3: реализация.**
+- [x] **Шаг 2:** FAIL.
+- [x] **Шаг 3: реализация.**
   - Только luxon. Выходные — сб и вс, праздники не учитываются (SPEC §30.2).
   - `end_of_week`: кандидат — пятница текущей ISO-недели в `endOfWeekTime`. Если кандидат ≤ `now`, берётся +7 дней.
   - `soon`: прибавлять дни, пропуская выходные, пока не наберётся `soonWorkdays` рабочих дней, потом поставить `defaultTime`.
-- [ ] **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(time): resolve fuzzy due dates across zones and DST`.
+- [x] **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(time): resolve fuzzy due dates across zones and DST`.
 
 ### Task 2.6: Разрешение ссылок и исполнителя
 
