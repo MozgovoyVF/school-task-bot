@@ -208,7 +208,7 @@ export interface TaskHook { name: string; afterChange(tx: Tx, task: TaskRow | nu
   - `extractionJsonSchema(): Record<string, unknown>` — `z.toJSONSchema(ExtractionWire)`;
   - `parseExtraction(raw: unknown): { ok: true; value: ExtractionResultT } | { ok: false; error: string }` — сначала нормализует wire-данные (`null` → поле отсутствует у `changes.*`), потом проверяет строгой схемой. `error` — короткий человекочитаемый список проблем для повторного запроса.
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
 
 ```ts
 import { describe, it, expect } from 'vitest';
@@ -267,10 +267,10 @@ describe('extraction schema', () => {
 
 Примечание: в `update.changes` wire-поле `assignee_ref: null` неоднозначно: это «не менять» или «снять исполнителя»? Правило: `null` в wire означает «не менять». Снятие исполнителя моделью не поддерживается, Owner делает это через «Изменить».
 
-- [ ] **Шаг 2:** FAIL.
-- [ ] **Шаг 3: реализация.** API `z.toJSONSchema` сверить через Context7 → zod v4. Если для `discriminatedUnion` генерируется `oneOf`, при построении wire-схемы заменить его на `anyOf`.
-- [ ] **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(ai): add extraction zod schemas and strict wire schema`.
+- [x] **Шаг 2:** FAIL.
+- [x] **Шаг 3: реализация.** API `z.toJSONSchema` сверить через Context7 → zod v4. Если для `discriminatedUnion` генерируется `oneOf`, при построении wire-схемы заменить его на `anyOf`.
+- [x] **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(ai): add extraction zod schemas and strict wire schema`.
 
 ### Task 2.2: Псевдонимизация
 
