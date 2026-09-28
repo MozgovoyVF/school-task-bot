@@ -21,6 +21,15 @@ function pluralizeRaz(count: number): string {
   return 'раз';
 }
 
+/** "1 предложение" / "2 предложения" / "5 предложений" — used by `texts.cards`' outbox summary messages. */
+function pluralizePredlozhenie(count: number): string {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) return 'предложение';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'предложения';
+  return 'предложений';
+}
+
 function formatContext(context: Record<string, unknown>): string {
   const entries = Object.entries(context);
   if (entries.length === 0) return '—';
@@ -613,6 +622,28 @@ export const texts = {
       return `🗑 Похоже, отменено: T${String(taskId)} «${title}»${evidence}`;
     },
     cancelTaskButton: '🗑 Отменить задачу',
+  },
+  /**
+   * The card outbox (`src/scheduler/jobs/cards.ts`, plan.md Task 2.12): the
+   * two summary messages it sends instead of a proposal card, plus the
+   * quiet-hours batch's button label.
+   */
+  cards: {
+    /** Sent once per batch group once it has more than `MAX_CARDS_PER_BATCH` shown proposals — `count` is however many were left over. */
+    moreProposals(count: number): string {
+      return `Ещё ${String(count)} ${pluralizePredlozhenie(count)}: /inbox`;
+    },
+    /** SPEC §13.5/D10: everything found while the Owner was in quiet hours arrives as one message once they end, instead of individual cards. */
+    quietBatch(count: number): string {
+      return `🌙 За время тишины найдено ${String(count)} ${pluralizePredlozhenie(count)}`;
+    },
+    /** The quiet-hours batch message's only button — opens `/inbox` (Task 2.15's future callback handling). */
+    openInboxButton: '📥 Разобрать',
+    /** Superadmin alert (throttled hourly by `ErrorReporter.alert`): the workspace has no Owner yet, so the outbox has nowhere to deliver cards. */
+    noOwner: '⚠️ У рабочего пространства нет руководителя — карточки предложений некому отправлять.',
+    /** Superadmin alert (throttled hourly): the Owner has a membership but has never opened a DM with the bot (no `/start` yet), so cards pile up undelivered. */
+    ownerNotStarted:
+      '⚠️ Руководитель ещё не запускал бота в личных сообщениях (/start) — карточки предложений не доставляются.',
   },
   /**
    * Labels prefixed to a media message's caption when normalizing incoming

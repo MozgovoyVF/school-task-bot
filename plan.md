@@ -847,7 +847,7 @@ describe('messageLink', () => {
 
 **Интерфейсы:** Produces `isQuietAt(instant: Date, zone: string, quiet: Settings['quiet']): boolean` и `cardsJob: Job`.
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
 
 ```ts
 import { describe, it, expect } from 'vitest';
@@ -896,10 +896,10 @@ describe('quiet hours (SPEC §13.5, D10)', () => {
 4. Owner не начал DM → ничего не отправлено, superadmin получает оповещение не чаще раза в час. После `/start` owner'а карточки уходят.
 5. `send` бросает `forbidden` → `users.dm_blocked=true`, `notified_at` пусто.
 6. Suppressed-proposals никогда не отправляются.
-- [ ] **Шаг 2:** FAIL.
-- [ ] **Шаг 3: реализация.** `notified_at` проставляется **после** успешной отправки (at-least-once). Группировка идёт по `batch_id`, карточки упорядочены по `created_at`.
-- [ ] **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(scheduler): deliver proposal cards via outbox with quiet hours and reactions`.
+- [x] **Шаг 2:** FAIL.
+- [x] **Шаг 3: реализация.** `notified_at` проставляется **после** успешной отправки (at-least-once). Группировка идёт по `batch_id`, карточки упорядочены по `created_at`.
+- [x] **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(scheduler): deliver proposal cards via outbox with quiet hours and reactions`.
 
 ### Task 2.13: Ядро задач и решения по proposals
 
