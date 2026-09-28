@@ -12,6 +12,7 @@ import { CONVERSATION_TIMEOUT_MS } from '../../config/constants.js';
 import { texts } from '../texts/ru.js';
 import { toInlineKeyboard } from '../keyboards/build.js';
 import { renderPersonCard } from '../views/people.js';
+import { privateOnly } from '../middleware/privateOnly.js';
 import type { BotContext } from '../context.js';
 
 export const EDIT_PERSON_CONVERSATION_ID = 'editPerson';
@@ -127,12 +128,21 @@ function buildEditPersonConversation(db: Db) {
   };
 }
 
-/** Registers the `editPerson` conversation (entered from `people.ts`'s `v1:u:edt:<membershipId>` callback). */
+/**
+ * Registers the `editPerson` conversation (entered from `people.ts`'s
+ * `v1:u:edt:<membershipId>` callback, already DM-only-guarded there). Wrapped
+ * in `privateOnly` too (final Phase 1 review's C1 fix) — `@grammyjs/conversations`
+ * throws if a `createConversation(...)` middleware runs on an update where
+ * `conversations()` itself didn't install its controls first, which is now
+ * only true for private chats (`bot.ts`) — see `privateOnly.ts`'s doc comment.
+ */
 export function registerEditPersonConversation(bot: Bot<BotContext>, deps: { db: Db }): void {
   bot.use(
-    createConversation(buildEditPersonConversation(deps.db), {
-      id: EDIT_PERSON_CONVERSATION_ID,
-      maxMillisecondsToWait: CONVERSATION_TIMEOUT_MS,
-    }),
+    privateOnly(
+      createConversation(buildEditPersonConversation(deps.db), {
+        id: EDIT_PERSON_CONVERSATION_ID,
+        maxMillisecondsToWait: CONVERSATION_TIMEOUT_MS,
+      }),
+    ),
   );
 }

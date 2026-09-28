@@ -9,6 +9,7 @@ import { texts, formatZoneLabel } from '../texts/ru.js';
 import { encodeCallback, decodeCallback } from '../keyboards/callbackCodec.js';
 import { toInlineKeyboard } from '../keyboards/build.js';
 import { renderHelp } from '../views/help.js';
+import { privateOnly } from '../middleware/privateOnly.js';
 import type { BotContext } from '../context.js';
 
 export const TIMEZONE_CONVERSATION_ID = 'timezone';
@@ -140,16 +141,25 @@ function buildTimezoneConversation(db: Db) {
   };
 }
 
-/** Registers the `timezone` conversation and the `/timezone` command that enters it (SPEC §12.2). */
+/**
+ * Registers the `timezone` conversation and the `/timezone` command that
+ * enters it (SPEC §12.2). Both the conversation registration and the
+ * command are DM-only (final Phase 1 review's C1 fix): `/timezone` typed in
+ * a group must never start this dialog there — see `privateOnly.ts`'s doc
+ * comment.
+ */
 export function registerTimezoneConversation(bot: Bot<BotContext>, deps: { db: Db }): void {
   bot.use(
-    createConversation(buildTimezoneConversation(deps.db), {
-      id: TIMEZONE_CONVERSATION_ID,
-      maxMillisecondsToWait: CONVERSATION_TIMEOUT_MS,
-    }),
+    privateOnly(
+      createConversation(buildTimezoneConversation(deps.db), {
+        id: TIMEZONE_CONVERSATION_ID,
+        maxMillisecondsToWait: CONVERSATION_TIMEOUT_MS,
+      }),
+    ),
   );
 
   bot.command('timezone', async (ctx) => {
+    if (ctx.chat?.type !== 'private') return;
     await ctx.conversation.enter(TIMEZONE_CONVERSATION_ID, 'timezone');
   });
 }

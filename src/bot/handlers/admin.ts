@@ -25,9 +25,13 @@ export interface AdminHandlersDeps {
  * is deliberately silent for non-superadmins — no reply, no error report —
  * so the command's mere existence isn't discoverable. The thrown error is
  * caught and reported by `src/bot/middleware/errors.ts`, not here.
+ *
+ * `/admin` is DM-only (final Phase 1 review's C1 fix): SPEC §12.2 lets only
+ * `/privacy` post text in a group.
  */
 export function registerAdminHandlers(bot: Bot<BotContext>, deps: AdminHandlersDeps, startedAt: Date): void {
   bot.command('admin', async (ctx) => {
+    if (ctx.chat?.type !== 'private') return;
     if (!ctx.state.actor.isSuperadmin) {
       await ctx.reply(texts.common.forbidden, { parse_mode: 'HTML' });
       return;

@@ -10,6 +10,9 @@ import type { ChatRow } from '../../../src/domain/chats/repo.js';
 const GROUP = { id: -1002222, type: 'supergroup' as const, title: 'Учительская' };
 const MEMBER = { id: 210, firstName: 'Мария Иванова' };
 const BOT_SENDER = { id: 999, firstName: 'Другой бот', isBot: true };
+/** `id` matches `botHarness.ts`'s `DEFAULT_SUPERADMIN_IDS[0]` — a fresh row, `users.timezone` unset. */
+const SUPERADMIN = { id: 900000001, firstName: 'Анна Директор' };
+const OTHER_MEMBER = { id: 211, firstName: 'Пётр Сидоров' };
 
 /** Directly inserts a `chats` row (bypassing `onBotAdded`) so a test can pick its exact `status`/`analysis_enabled`. */
 async function makeChat(
@@ -286,5 +289,57 @@ describe('group message intake (SPEC §7.2, plan.md Task 1.8)', () => {
     expect(await listMessages(harness, chat.id)).toHaveLength(0);
     expect(lines.some((line) => line.includes('/task received'))).toBe(true);
     expect(harness.replies(GROUP.id)).toEqual([]);
+  });
+});
+
+/**
+ * Final Phase 1 review's C1 fix: `/start`/`/help`/`/timezone`/`/admin` are
+ * DM-only commands (SPEC §12.2: only `/privacy` may post text in a group).
+ * Before the fix, `/start`/`/timezone` in an active group would enter the
+ * `timezone` conversation *scoped to that group chat* — every later message
+ * in the group, from anyone, would then be swallowed by the conversation's
+ * resume handler ("Пожалуйста, нажмите одну из кнопок ниже") instead of
+ * reaching `registerGroupHandlers`' intake, for up to
+ * `CONVERSATION_TIMEOUT_MS`. Each case below asserts both halves: nothing
+ * was posted into the group by the command itself, and an ordinary message
+ * sent right after — from a *different* member — is still saved normally.
+ */
+describe('/start, /help, /timezone, /admin have no effect in a group (final Phase 1 review’s C1 fix)', () => {
+  async function expectGroupUnaffectedAfter(harness: BotHarness, chat: ChatRow, commandText: string) {
+    await harness.send(groupText(GROUP, SUPERADMIN, commandText));
+    expect(harness.replies(GROUP.id)).toEqual([]);
+
+    const update = groupText(GROUP, OTHER_MEMBER, 'Обычное сообщение после команды');
+    await harness.send(update);
+
+    const tgMessageId = update.message?.message_id;
+    if (tgMessageId === undefined) throw new Error('expected a message_id');
+    const row = await getMessageRow(harness, chat.id, tgMessageId);
+    expect(row?.text).toBe('Обычное сообщение после команды');
+    expect(harness.replies(GROUP.id)).toEqual([]);
+  }
+
+  it('/start (first run, would otherwise enter the timezone conversation) has no effect in a group', async () => {
+    const harness = await createBotHarness();
+    const chat = await makeChat(harness);
+    await expectGroupUnaffectedAfter(harness, chat, '/start');
+  });
+
+  it('/help has no effect in a group', async () => {
+    const harness = await createBotHarness();
+    const chat = await makeChat(harness);
+    await expectGroupUnaffectedAfter(harness, chat, '/help');
+  });
+
+  it('/timezone (would otherwise enter the timezone conversation) has no effect in a group', async () => {
+    const harness = await createBotHarness();
+    const chat = await makeChat(harness);
+    await expectGroupUnaffectedAfter(harness, chat, '/timezone');
+  });
+
+  it('/admin has no effect in a group', async () => {
+    const harness = await createBotHarness();
+    const chat = await makeChat(harness);
+    await expectGroupUnaffectedAfter(harness, chat, '/admin');
   });
 });

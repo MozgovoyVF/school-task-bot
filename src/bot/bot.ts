@@ -15,6 +15,7 @@ import type { WorkspaceRow } from '../domain/workspaces/repo.js';
 import type { BotContext } from './context.js';
 import { createErrorsMiddleware } from './middleware/errors.js';
 import { createContextMiddleware } from './middleware/context.js';
+import { privateOnly } from './middleware/privateOnly.js';
 import { registerDmHandlers } from './handlers/dm.js';
 import { registerAdminHandlers } from './handlers/admin.js';
 import { registerTransferHandlers } from './handlers/transfer.js';
@@ -90,7 +91,11 @@ export function createBot(
   bot.use(sequentialize((ctx) => ctx.chat?.id.toString()));
   bot.use(createErrorsMiddleware(deps));
   bot.use(createContextMiddleware(deps));
-  bot.use(conversations());
+  // Scoped to private chats only (final Phase 1 review's C1 fix, belt-and-suspenders on top of each
+  // conversation-entering command's own private-chat guard) — see `privateOnly.ts`'s doc comment for why
+  // every `createConversation(...)` registration (`timezone.ts`, `editPerson.ts`) must be wrapped the
+  // same way.
+  bot.use(privateOnly(conversations()));
 
   registerTimezoneConversation(bot, deps);
   registerEditPersonConversation(bot, deps);
