@@ -281,7 +281,7 @@ describe('extraction schema', () => {
   - `interface ParticipantForLlm { code: string; userId: number; displayName: string; aliases: string[]; username: string | null; lastName: string | null; isOwner: boolean }`;
   - `pseudonymizeText(text: string, participants: readonly ParticipantForLlm[]): string`.
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
 
 ```ts
 import { describe, it, expect } from 'vitest';
@@ -330,14 +330,14 @@ describe('pseudonymize (SPEC §19.3.2)', () => {
 });
 ```
 
-- [ ] **Шаг 2:** FAIL.
-- [ ] **Шаг 3: реализация.**
+- [x] **Шаг 2:** FAIL.
+- [x] **Шаг 3: реализация.**
   - Порядок замен: URL → e-mail → `@username` → номера карт и счетов (16–20 цифр с разделителями) → телефоны → фамилии.
   - Границы слов: `(?<![\p{L}\p{N}_])` и `(?![\p{L}\p{N}_])` с флагом `u`, без `\b`.
   - «Имя Фамилия», где имя совпадает с `displayName` или алиасом, превращается в «Имя». Отдельная фамилия превращается в `P#`. Совпадение по фамилии регистронезависимое и точное: падежные формы в MVP не обрабатываются, это отмечено в `/privacy`.
   - Имена третьих лиц не заменяются (SPEC §19.3.2).
-- [ ] **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(ai): add pseudonymization before LLM calls`.
+- [x] **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(ai): add pseudonymization before LLM calls`.
 
 ### Task 2.3: Промпты, few-shot и сборка входа extractor
 

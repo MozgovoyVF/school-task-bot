@@ -40,6 +40,14 @@ export const DEFAULT_STOP_LIST = [
   'ясно',
 ];
 export const MSK_TOKENS = ['мск', 'msk'];
+// SPEC §19.3.2 — pseudonymization markers substituted into LLM input.
+export const PII_MARKERS = {
+  phone: '[телефон]',
+  email: '[email]',
+  requisites: '[реквизиты]',
+  link: '[ссылка]',
+  unknownUser: '@user',
+} as const;
 export const COMPLETION_SIGNALS = [
   'готово',
   'сделала',
