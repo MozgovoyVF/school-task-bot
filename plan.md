@@ -586,7 +586,7 @@ export function defaultAssignee(category: Category, ctx: { authorUserId: number;
 
 **Интерфейсы:** Produces `applyPolicy(a: ResolvedAction, thresholds: Settings['ai']['thresholds'], mode: 'auto' | 'manual'): { decision: 'shown' | 'suppressed'; reason: string }`.
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
 
 ```ts
 import { describe, it, expect } from 'vitest';
@@ -631,8 +631,8 @@ describe('policy (SPEC §9.6)', () => {
 });
 ```
 
-- [ ] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(ai): add display policy with configurable thresholds`.
+- [x] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(ai): add display policy with configurable thresholds`.
 
 ### Task 2.8: Дедупликация
 
