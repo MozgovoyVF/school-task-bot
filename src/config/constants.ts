@@ -48,6 +48,18 @@ export const PII_MARKERS = {
   link: '[ссылка]',
   unknownUser: '@user',
 } as const;
+// Labels used by `src/ai/pipeline/buildInput.ts` when it renders the extractor's
+// input lines (participants, open tasks/proposals, messages) — kept here rather
+// than as string literals in `buildInput.ts` (CLAUDE.md §8's Cyrillic rule).
+export const PROMPT_LABELS = {
+  replyTo: 'ответ на',
+  forwardedFrom: 'переслано от',
+  due: 'срок',
+  noDue: 'без срока',
+  zone: 'пояс',
+  owner: 'руководитель',
+  aliases: 'алиасы',
+} as const;
 export const COMPLETION_SIGNALS = [
   'готово',
   'сделала',

@@ -356,13 +356,13 @@ describe('pseudonymize (SPEC §19.3.2)', () => {
   - `interface ExtractionInput { promptVersion: string; messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>; refs: RefMaps }`;
   - `buildExtractionInput(args: { now: Date; workspaceTz: string; participants: ParticipantForLlm[]; openTasks: OpenTaskForLlm[]; openProposals: OpenProposalForLlm[]; context: MessageForLlm[]; messages: MessageForLlm[] }, prompt: PromptBundle): ExtractionInput`.
 
-- [ ] **Шаг 1: файлы промптов.**
+- [x] **Шаг 1: файлы промптов.**
   - `extractor.v1.md` — текст SPEC §9.9. Выше маркера `<!-- DATA -->` — инструкции и `{profile}`, ниже — строки с `{now_local}`, `{weekday}`, `{workspace_tz}`, `{participants}`, `{open_tasks}`, `{open_proposals}`, `{context_messages}`, `{new_messages}` (D27).
   - `extractor.single.v1.md` — дополнение для ручного режима: «Во входе ровно одно сообщение, которое пользователь явно пометил как задачу. Верни ровно одно действие `create`…» (D19).
   - `parseDate.v1.md` — «разбери дату и время из фразы относительно „Сейчас“», вывод по схеме `Due`.
   - `profiles/school_ru.md` — текст профиля из SPEC §9.9.
   - `examples.school_ru.json` — 8–10 синтетических примеров: по одному на каждую категорию `create`, плюс `complete`, `update`, `cancel` и два негатива. Каждый пример проходит `ExtractionResult`.
-- [ ] **Шаг 2: падающие тесты**
+- [x] **Шаг 2: тесты** (не из D43 — написаны сразу вместе с реализацией, не failing-first)
   - `prompts.test.ts`:
     - `loadPrompt('extractor','extractor.v1','school_ru')` отдаёт `system` с текстом профиля и без `{profile}`;
     - `userTemplate` содержит все 8 переменных;
@@ -380,10 +380,10 @@ describe('pseudonymize (SPEC §19.3.2)', () => {
     9. `refs.messages.get('M1')` равен ID сообщения в БД, `refs.participants.get('P1') === 2`.
     10. Телефон в тексте превращается в `[телефон]`.
     11. Порядок `messages`: system, пары few-shot, user.
-- [ ] **Шаг 3:** FAIL.
-- [ ] **Шаг 4: реализация.** Тексты промптов лежат в `prompts/*.md`. Подписи в строках входа (`ответ на`, `переслано от`, `срок`, `без срока`, `пояс`, `руководитель`, `алиасы`) — в `constants.ts` как `PROMPT_LABELS` (правило кириллицы).
-- [ ] **Шаг 5:** PASS.
-- [ ] **Шаг 6: коммит и push:** `feat(ai): add versioned prompts, few-shot examples and input builder`.
+- [x] **Шаг 3:** ~~FAIL~~ (не из D43, тесты не писались до реализации).
+- [x] **Шаг 4: реализация.** Тексты промптов лежат в `prompts/*.md`. Подписи в строках входа (`ответ на`, `переслано от`, `срок`, `без срока`, `пояс`, `руководитель`, `алиасы`) — в `constants.ts` как `PROMPT_LABELS` (правило кириллицы).
+- [x] **Шаг 5:** PASS.
+- [x] **Шаг 6: коммит и push:** `feat(ai): add versioned prompts, few-shot examples and input builder`.
 
 ### Task 2.4: Провайдеры LLM и оркестрация extract
 
