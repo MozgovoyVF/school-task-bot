@@ -13,7 +13,7 @@ import { messageLink } from '../../bot/views/links.js';
 import { renderProposalCard, type ProposalCardView } from '../../bot/views/proposalCard.js';
 import { encodeCallback } from '../../bot/keyboards/callbackCodec.js';
 import { texts } from '../../bot/texts/ru.js';
-import { MessengerError, type Buttons } from '../../domain/messenger.js';
+import { MessengerError, type Buttons, type MessengerErrorKind } from '../../domain/messenger.js';
 import type { Job } from '../ticker.js';
 import type { Category } from '../../ai/pipeline/resolve.js';
 
@@ -62,6 +62,18 @@ const PayloadSchema = z.object({
   quoteAuthorName: z.string().nullable(),
 });
 type ProposalPayload = z.infer<typeof PayloadSchema>;
+
+/**
+ * Whether `row` is flagged `noReaction` (Task 2.10's `/reanalyze` flag) — used on its own, independent of
+ * `buildCardView`, because reactions (I2, fix round 1) run for every eligible proposal up front, before
+ * this job decides whether/when to send its *card*, not just for the ones that get one. An unparsable
+ * payload defaults to `false` (react anyway) rather than blocking the reaction on a card-rendering concern
+ * that has nothing to do with whether the source message should get its 👀.
+ */
+function parseNoReaction(row: ProposalRow): boolean {
+  const parsed = PayloadSchema.safeParse(row.payload);
+  return parsed.success && parsed.data.noReaction === true;
+}
 
 /** Per-run caches (this job never mutates `chats`/`messages`/`tasks`, so a plain id→row map is safe) — avoids re-querying the same chat/message/task for every proposal that shares it. */
 interface Loaders {
@@ -143,22 +155,18 @@ interface BuildCtx {
   logger: AppDeps['logger'];
 }
 
-interface BuiltCard {
-  view: ProposalCardView;
-  noReaction: boolean;
-}
-
 /**
  * Turns one `proposals` row into a `ProposalCardView` (`src/bot/views/proposalCard.ts`, Task 2.11) ready
- * for `renderProposalCard`. Returns `null` — logging why, id-only (CLAUDE.md §8) — for anything this job
- * cannot safely render: an unparsable payload, or an `update`/`complete`/`cancel` proposal whose target is
- * itself still a pending proposal rather than a task (`payload.targetProposalId`, D44 — an explicitly open
- * business-rule question, not something to guess at here) or whose target task no longer exists. `null`
- * proposals are simply skipped this tick — `notified_at` stays empty, so a future tick retries them once
- * (for D44) the business rule lands, matching CLAUDE.md's "a missed task is worse than a false positive"
- * for every other proposal in the same run.
+ * for `renderProposalCard`. Returns `null` — logging why (CLAUDE.md §8: id-only, never message text) —
+ * for anything this job cannot safely render: an unparsable payload, or an `update`/`complete`/`cancel`
+ * proposal whose target is itself still a pending proposal rather than a task (`payload.targetProposalId`,
+ * D44 — an explicitly open business-rule question, not something to guess at here — logged at `warn`, not
+ * `error`: it is an expected, recurring state until D44 is decided, not a bug) or whose target task no
+ * longer exists (genuinely unexpected — logged at `error`). `null` proposals are simply skipped this tick —
+ * `notified_at` stays empty, so a future tick retries them once (for D44) the business rule lands, matching
+ * CLAUDE.md's "a missed task is worse than a false positive" for every other proposal in the same run.
  */
-async function buildCardView(ctx: BuildCtx, row: ProposalRow): Promise<BuiltCard | null> {
+async function buildCardView(ctx: BuildCtx, row: ProposalRow): Promise<ProposalCardView | null> {
   const parsed = PayloadSchema.safeParse(row.payload);
   if (!parsed.success) {
     ctx.logger.error({ proposalId: row.id }, 'cardsJob: unparsable proposal payload, skipping this tick');
@@ -177,7 +185,6 @@ async function buildCardView(ctx: BuildCtx, row: ProposalRow): Promise<BuiltCard
 
   const manual = payload.origin !== 'ai';
   const category: Category | 'manual' | null = row.category;
-  const noReaction = payload.noReaction === true;
 
   if (row.kind === 'create') {
     const assignee = assigneeView(payload.assignee, ctx.displayNameByUserId);
@@ -204,15 +211,25 @@ async function buildCardView(ctx: BuildCtx, row: ProposalRow): Promise<BuiltCard
       duplicateOf,
       target: null,
     };
-    return { view, noReaction };
+    return view;
   }
 
-  // update / complete / cancel all target an existing task.
+  // update / complete / cancel all target an existing task. `targetTaskId === null` normally means D44
+  // (the action's real target is `payload.targetProposalId`, a still-pending proposal — checked explicitly
+  // rather than inferred from `targetTaskId` alone, so a genuinely malformed row with neither id logs as
+  // the distinct, actually-unexpected case below instead of being silently mislabeled as D44).
   if (row.targetTaskId === null) {
-    ctx.logger.error(
-      { proposalId: row.id, kind: row.kind },
-      'cardsJob: proposal targets a pending proposal, not a task (D44) — skipping this tick',
-    );
+    if (payload.targetProposalId !== undefined) {
+      ctx.logger.warn(
+        { proposalId: row.id, kind: row.kind },
+        'cardsJob: proposal targets a pending proposal, not a task (D44) — skipping this tick',
+      );
+    } else {
+      ctx.logger.error(
+        { proposalId: row.id, kind: row.kind },
+        'cardsJob: non-create proposal has neither a target task nor a target proposal, skipping this tick',
+      );
+    }
     return null;
   }
   const task = await loadTask(ctx.loaders, row.targetTaskId);
@@ -264,7 +281,7 @@ async function buildCardView(ctx: BuildCtx, row: ProposalRow): Promise<BuiltCard
       duplicateOf: null,
       target: { taskId: task.id, title: task.title, before, after, field },
     };
-    return { view, noReaction };
+    return view;
   }
 
   const view: ProposalCardView = {
@@ -286,12 +303,12 @@ async function buildCardView(ctx: BuildCtx, row: ProposalRow): Promise<BuiltCard
     duplicateOf: null,
     target: { taskId: task.id, title: task.title, before: null, after: null, field: null },
   };
-  return { view, noReaction };
+  return view;
 }
 
-type SendResult = { ok: true; messageId: number } | { ok: false; forbidden: boolean };
+type SendResult = { ok: true; messageId: number } | { ok: false; kind: MessengerErrorKind };
 
-/** Sends one DM to the Owner, translating a `Messenger` failure into `SendResult` instead of throwing. Either way a failure means "stop sending for this tick, retry later" (the caller sets `blocked`); `forbidden` additionally means the Owner blocked the bot, so the caller also flips `users.dm_blocked` — see {@link handleSendFailure}. */
+/** Sends one DM to the Owner, translating a `Messenger` failure into `SendResult` instead of throwing — never logs itself, so every call site can react to `result.kind` its own way (a single card's `bad_request` is not the same situation as a whole group's). */
 async function sendToOwner(
   deps: AppDeps,
   ownerTgUserId: number,
@@ -302,23 +319,30 @@ async function sendToOwner(
     const { messageId } = await deps.messenger.send(ownerTgUserId, text, buttons ? { buttons } : undefined);
     return { ok: true, messageId };
   } catch (err) {
-    if (err instanceof MessengerError) {
-      if (err.kind !== 'forbidden') {
-        deps.logger.error({ err, kind: err.kind }, 'cardsJob: failed to send a card to the Owner');
-      }
-      return { ok: false, forbidden: err.kind === 'forbidden' };
-    }
+    if (err instanceof MessengerError) return { ok: false, kind: err.kind };
     throw err;
   }
 }
 
-/** Applies the one side effect a failed {@link sendToOwner} call needs — `users.dm_blocked=true` when the failure was `forbidden` — so every call site handles a failure the same way. */
+/**
+ * The shared "stop sending for this group, retry later" reaction to a failed {@link sendToOwner} call
+ * (used for the quiet-hours summary and the per-batch overflow message — a single card's `bad_request` is
+ * handled separately inline, by `run`'s per-card loop, since that one is allowed to `continue` past it —
+ * fix round 1, I1): `forbidden` means the Owner blocked the bot, so `users.dm_blocked` is flipped *and*
+ * superadmin is alerted (throttled hourly, same pattern as the "Owner never started a DM" gate — fix round
+ * 1, M4, previously missing); anything else is just logged.
+ */
 async function handleSendFailure(
   deps: AppDeps,
   ownerId: number,
   result: Extract<SendResult, { ok: false }>,
 ): Promise<void> {
-  if (result.forbidden) await markDmBlocked(deps.db, ownerId, true);
+  if (result.kind === 'forbidden') {
+    await markDmBlocked(deps.db, ownerId, true);
+    await deps.errors.alert('cards:owner-blocked', texts.cards.ownerBlocked);
+  } else {
+    deps.logger.error({ kind: result.kind }, 'cardsJob: failed to send to the Owner');
+  }
 }
 
 async function markCardSent(
@@ -342,11 +366,13 @@ async function markNotifiedOnly(db: AppDeps['db'], ids: number[], now: Date): Pr
 }
 
 /**
- * SPEC §11.1/D-table: 👀 on the first source message of a freshly-carded, group-chat proposal — gated on
- * the chat's own `reactions_enabled`, the workspace's `reactions.onDetect` emoji being configured, and the
- * proposal not being flagged `noReaction` (Task 2.10's `/reanalyze` flag). Best-effort only: any failure —
- * `bad_request` or otherwise — is logged and swallowed, never undoing the card delivery that already
- * happened before this is called.
+ * SPEC §9/§11.1: 👀 on the first source message of a group-chat proposal — gated only on the chat's own
+ * `reactions_enabled`, the workspace's `reactions.onDetect` emoji being configured, and the proposal not
+ * being flagged `noReaction` (Task 2.10's `/reanalyze` flag). Deliberately *not* gated on quiet hours (fix
+ * round 1, I2): SPEC §13.5's quiet-hours suppression list is summary/`pre_due`/`overdue`/proposal cards —
+ * reactions aren't on it, and `run` below calls this for every eligible proposal up front, independent of
+ * whether that proposal's *card* is delayed by quiet hours or fails to send. Best-effort only: any
+ * failure — `bad_request` or otherwise — is logged and swallowed, never blocking anything else in this run.
  */
 async function reactToSource(
   deps: AppDeps,
@@ -370,28 +396,33 @@ async function reactToSource(
 }
 
 /**
- * The card outbox (plan.md Task 2.12, SPEC §11.1/§13.5, D10/D40): delivers every `shown`, still-`pending`,
- * not-yet-`notified_at` proposal to the Owner's DM — the only recipient (D40) — as individual cards
- * (`renderProposalCard`), capped at `MAX_CARDS_PER_BATCH` per `batch_id` group with one overflow message
- * for the rest, plus a 👀 reaction on each card's first source message. `notified_at` is set only *after*
+ * The card outbox (plan.md Task 2.12, SPEC §9/§11.1/§13.5, D10/D40): delivers every `shown`, still-
+ * `pending`, not-yet-`notified_at` proposal to the Owner's DM — the only recipient (D40) — as individual
+ * cards (`renderProposalCard`), capped at `MAX_CARDS_PER_BATCH` per `batch_id` group with one overflow
+ * message for the rest, plus a best-effort 👀 reaction on each proposal's first source message
+ * (independent of card delivery — see `reactToSource`, fix round 1 I2). `notified_at` is set only *after*
  * a successful send (at-least-once delivery, brief step 3): a crash between sending and this update means
  * the next tick sends that card again rather than silently dropping it.
  *
- * Three gates run before any of that, in order:
- * 1. No Owner at all → superadmin alerted (`ErrorReporter.alert`'s own hourly throttle), nothing sent.
- * 2. The Owner has a membership but has never opened a DM (`users.dm_started_at IS NULL`, no `/start` yet)
- *    → same throttled alert, nothing sent (a real Telegram send would fail anyway — Telegram requires the
- *    user to have started the bot first).
- * 3. It is currently quiet hours in the Owner's own zone (`isQuietAt`, D10) → nothing sent at all this
- *    tick, not even proposals created outside quiet hours; they simply wait for a later, non-quiet tick.
+ * Two gates run first: no Owner at all, or an Owner who has a membership but has never opened a DM
+ * (`users.dm_started_at IS NULL`, no `/start` yet) both alert superadmin (`ErrorReporter.alert`'s own
+ * hourly throttle) and send nothing at all, not even reactions (there is no card outbox to speak of yet).
  *
- * Once past those gates, eligible proposals split into two independent groups, each by their own
+ * Past those, every eligible proposal gets its reaction attempt regardless of anything else — quiet hours,
+ * batch grouping, or whether its own card ever sends. Only *card* delivery is gated on quiet hours
+ * (`isQuietAt(now, …)`, D10): while it is currently quiet in the Owner's zone, no card or summary is sent
+ * this tick (they simply wait). Once past that, eligible proposals split into two groups by their own
  * `created_at` (not "now" — D10's "cards created during the quiet period"): any whose `created_at` itself
  * fell inside quiet hours become one grouped "found while you were away" summary (any count, no per-batch
- * cap, no individual cards or reactions — SPEC §13.5); the rest go through the normal per-batch card flow.
- * A `forbidden` from `messenger.send` (the Owner blocked the bot) flips `users.dm_blocked` and stops the
- * rest of this tick's sends (their `notified_at` stays empty, retried later); any other send failure just
- * stops this tick's sends without touching `dm_blocked`.
+ * cap, no individual cards — SPEC §13.5); the rest go through the normal per-batch card flow.
+ *
+ * Send failures: `forbidden` (the Owner blocked the bot) flips `users.dm_blocked`, alerts superadmin
+ * (throttled, fix round 1 M4) and stops the rest of this tick's sends. For the per-card loop specifically,
+ * `bad_request` on one card (fix round 1, I1 — e.g. Telegram rejecting its HTML or an oversized keyboard)
+ * is reported (`errors.report`, deduped/throttled by its own fingerprint) and that one card is skipped —
+ * `notified_at` stays empty for a future retry — without blocking every other card behind it in the queue.
+ * Any other failure (`rate_limited`/`network`/`other`) stops the tick's sends, same as `forbidden` minus the
+ * `dm_blocked` flip.
  */
 export const cardsJob: Job = {
   name: 'cards',
@@ -411,8 +442,6 @@ export const cardsJob: Job = {
     const settings = await getSettings(deps.db, deps.workspace.id);
     const zone = userZone(owner.user, deps.workspace);
 
-    if (isQuietAt(now, zone, settings.quiet)) return;
-
     const eligible = await deps.db
       .select()
       .from(proposals)
@@ -427,6 +456,20 @@ export const cardsJob: Job = {
       .orderBy(asc(proposals.createdAt), asc(proposals.id));
     if (eligible.length === 0) return;
 
+    const loaders = makeLoaders(deps.db);
+
+    // Reactions run for every eligible proposal up front — before the quiet-hours gate below, and even for
+    // ones whose card will end up delayed or skipped — since SPEC gates 👀 only on the chat's own
+    // `reactions_enabled`, never on quiet hours or card-delivery outcome (fix round 1, I2). Re-attempted
+    // each tick until the proposal's card finally sends (there is no separate "already reacted" column to
+    // dedupe against); Telegram's reaction API is idempotent for the same emoji, so this is wasted calls at
+    // worst, never a duplicate user-visible effect.
+    for (const p of eligible) {
+      await reactToSource(deps, loaders, p, parseNoReaction(p), settings.reactions.onDetect);
+    }
+
+    if (isQuietAt(now, zone, settings.quiet)) return;
+
     const quietGroup: ProposalRow[] = [];
     const freshGroup: ProposalRow[] = [];
     for (const p of eligible) {
@@ -435,14 +478,20 @@ export const cardsJob: Job = {
 
     const members = await listMembersWithUsers(deps.db, deps.workspace.id);
     const displayNameByUserId = new Map(members.map((m) => [m.user.id, m.membership.displayName]));
-    const loaders = makeLoaders(deps.db);
     const buildCtx: BuildCtx = { loaders, displayNameByUserId, ownerZone: zone, logger: deps.logger };
 
     let blocked = false;
 
     if (quietGroup.length > 0) {
       const buttons: Buttons = [
-        [{ text: texts.cards.openInboxButton, data: encodeCallback({ entity: 'p', action: 'nbx', id: 0 }) }],
+        [
+          {
+            // No handler for `nbx` exists yet — a forward reference to Task 2.15's `/inbox`, which is
+            // expected to add it. Not a bug: the button is simply inert until then.
+            text: texts.cards.openInboxButton,
+            data: encodeCallback({ entity: 'p', action: 'nbx', id: 0 }),
+          },
+        ],
       ];
       const result = await sendToOwner(
         deps,
@@ -476,16 +525,25 @@ export const cardsJob: Job = {
         const overflow = group.slice(MAX_CARDS_PER_BATCH);
 
         for (const p of cardBatch) {
-          const built = await buildCardView(buildCtx, p);
-          if (built === null) continue;
-          const { text, buttons } = renderProposalCard(built.view, zone);
+          const view = await buildCardView(buildCtx, p);
+          if (view === null) continue;
+          const { text, buttons } = renderProposalCard(view, zone);
           const result = await sendToOwner(deps, owner.user.tgUserId, text, buttons);
           if (!result.ok) {
+            if (result.kind === 'bad_request') {
+              deps.logger.error(
+                { proposalId: p.id },
+                'cardsJob: Telegram rejected this card (bad_request) — skipping it, not blocking the rest of the tick',
+              );
+              await deps.errors.report(new Error('cardsJob: bad_request sending a proposal card'), {
+                proposalId: p.id,
+              });
+              continue;
+            }
             await handleSendFailure(deps, owner.user.id, result);
             break outer;
           }
           await markCardSent(deps.db, p.id, now, result.messageId);
-          await reactToSource(deps, loaders, p, built.noReaction, settings.reactions.onDetect);
         }
 
         if (overflow.length > 0) {

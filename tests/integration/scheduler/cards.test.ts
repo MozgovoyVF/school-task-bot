@@ -1,15 +1,15 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { eq, inArray } from 'drizzle-orm';
 import { getTestDb, truncateAll } from '../../helpers/db.js';
 import { fixedClock } from '../../helpers/clock.js';
 import { FakeMessenger } from '../../helpers/fakeMessenger.js';
-import { createLogger } from '../../../src/ops/logger.js';
+import { createLogger, type Logger } from '../../../src/ops/logger.js';
 import { createErrorReporter } from '../../../src/ops/errorReporter.js';
 import { loadEnv } from '../../../src/config/env.js';
 import { ensureDefaultWorkspace, updateSettings } from '../../../src/domain/workspaces/repo.js';
 import { upsertTelegramUser, markDmStarted } from '../../../src/domain/people/repo.js';
 import { upsertChatOnAdd } from '../../../src/domain/chats/repo.js';
-import { proposals, messages, memberships, users, chats } from '../../../src/db/schema/index.js';
+import { proposals, messages, memberships, users, chats, tasks } from '../../../src/db/schema/index.js';
 import type { NewProposal, ProposalPayload } from '../../../src/domain/proposals/repo.js';
 import { insertProposal } from '../../../src/domain/proposals/repo.js';
 import { cardsJob } from '../../../src/scheduler/jobs/cards.js';
@@ -34,10 +34,10 @@ function makeConfig() {
 async function makeDeps(
   clock: ReturnType<typeof fixedClock>,
   messenger: FakeMessenger = new FakeMessenger(),
+  logger: Logger = createLogger({ level: 'silent' }),
 ): Promise<{ deps: AppDeps; messenger: FakeMessenger }> {
   const workspace = await ensureDefaultWorkspace(db, { name: 'School', timezone: 'Europe/Moscow' });
   const config = makeConfig();
-  const logger = createLogger({ level: 'silent' });
   const errors = createErrorReporter({
     db,
     messenger,
@@ -97,6 +97,25 @@ function basePayload(overrides: Partial<ProposalPayload> = {}): ProposalPayload 
     quoteAuthorName: 'Анна',
     ...overrides,
   };
+}
+
+async function makeTask(
+  workspaceId: number,
+  overrides: Partial<{ title: string; dueAt: Date | null; dueAllDay: boolean; dueTz: string | null }> = {},
+) {
+  const [row] = await db
+    .insert(tasks)
+    .values({
+      workspaceId,
+      title: overrides.title ?? 'Подготовить расписание',
+      origin: 'ai',
+      dueAt: overrides.dueAt ?? null,
+      dueAllDay: overrides.dueAllDay ?? false,
+      dueTz: overrides.dueTz ?? null,
+    })
+    .returning();
+  if (!row) throw new Error('failed to insert test task');
+  return row;
 }
 
 async function makeProposal(overrides: Partial<NewProposal> & { workspaceId: number; createdAt: Date }) {
@@ -226,6 +245,110 @@ describe('cardsJob', () => {
     expect(after?.notifiedAt).not.toBeNull();
   });
 
+  it('logs a react() failure (M1)', async () => {
+    const clock = fixedClock('2026-09-23T09:00:00Z');
+    class ReactFailingMessenger extends FakeMessenger {
+      override react(): Promise<void> {
+        return Promise.reject(new MessengerError('bad_request', 'reaction rejected'));
+      }
+    }
+    const messenger = new ReactFailingMessenger();
+    const logger = createLogger({ level: 'silent' });
+    const errorSpy = vi.spyOn(logger, 'error');
+    const { deps } = await makeDeps(clock, messenger, logger);
+    await makeOwner(deps.workspace.id, 42, 'Anna');
+    const now = clock.now();
+    const chat = await makeChat(deps.workspace.id, -1001111111114, now, true);
+    const msg = await makeMessage(chat.id, 701, now);
+    await makeProposal({
+      workspaceId: deps.workspace.id,
+      chatId: chat.id,
+      sourceMessageIds: [msg.id],
+      createdAt: now,
+    });
+
+    await cardsJob.run(deps);
+
+    expect(errorSpy).toHaveBeenCalled();
+    const reactionFailureCall = errorSpy.mock.calls.find(
+      ([, msg2]) => typeof msg2 === 'string' && msg2.includes('react'),
+    );
+    expect(reactionFailureCall).toBeDefined();
+  });
+
+  it('does not gate 👀 on onDetect=null — no reaction, but the card still sends (brief scenario 2)', async () => {
+    const clock = fixedClock('2026-09-23T09:00:00Z');
+    const { deps, messenger } = await makeDeps(clock);
+    await makeOwner(deps.workspace.id, 42, 'Anna');
+    await updateSettings(db, deps.workspace.id, { reactions: { onDetect: null, onAccept: null } });
+    const now = clock.now();
+    const chat = await makeChat(deps.workspace.id, -1001111111115, now, true);
+    const msg = await makeMessage(chat.id, 801, now);
+    const p = await makeProposal({
+      workspaceId: deps.workspace.id,
+      chatId: chat.id,
+      sourceMessageIds: [msg.id],
+      createdAt: now,
+    });
+
+    await cardsJob.run(deps);
+
+    expect(messenger.reactions).toHaveLength(0);
+    expect(messenger.sent).toHaveLength(1);
+    const [after] = await proposalsByIds([p.id]);
+    expect(after?.notifiedAt).not.toBeNull();
+  });
+
+  it('reacts to a proposal created during quiet hours even though its card is delayed (I2)', async () => {
+    const clock = fixedClock('2026-09-23T12:00:00Z'); // 15:00 MSK
+    const { deps, messenger } = await makeDeps(clock);
+    await makeOwner(deps.workspace.id, 42, 'Anna');
+    await updateSettings(db, deps.workspace.id, {
+      quiet: { enabled: true, weekdays: [], windows: [{ from: '14:00', to: '16:00' }], dateRanges: [] },
+    });
+    const now = clock.now();
+    const chat = await makeChat(deps.workspace.id, -1001111111116, now, true);
+    const msg = await makeMessage(chat.id, 901, now);
+    const p = await makeProposal({
+      workspaceId: deps.workspace.id,
+      chatId: chat.id,
+      sourceMessageIds: [msg.id],
+      createdAt: now,
+    });
+
+    await cardsJob.run(deps); // still 15:00 MSK — quiet hours
+
+    expect(messenger.sent).toHaveLength(0); // card delayed
+    expect(messenger.reactions).toEqual([{ chatId: chat.tgChatId, messageId: 901, emoji: '👀' }]); // reaction fires anyway
+    const [after] = await proposalsByIds([p.id]);
+    expect(after?.notifiedAt).toBeNull();
+  });
+
+  it('does not let one card rejected with bad_request block the rest of the tick (I1)', async () => {
+    const clock = fixedClock('2026-09-23T09:00:00Z');
+    const { deps, messenger } = await makeDeps(clock);
+    await makeOwner(deps.workspace.id, 42, 'Anna');
+    const now = clock.now();
+    const p1 = await makeProposal({ workspaceId: deps.workspace.id, createdAt: now });
+    const p2 = await makeProposal({
+      workspaceId: deps.workspace.id,
+      createdAt: new Date(now.getTime() + 1000),
+    });
+
+    messenger.failNextWith(new MessengerError('bad_request', 'entities: can’t parse entities'));
+    await cardsJob.run(deps);
+
+    const ownerSends = messenger.sent.filter((s) => s.chatId === 42);
+    expect(ownerSends).toHaveLength(1); // p1's card failed; p2's still went out
+    const superadminSends = messenger.sent.filter((s) => s.chatId === SUPERADMIN_ID);
+    expect(superadminSends).toHaveLength(1); // errors.report fired for the rejected card
+
+    const after = await proposalsByIds([p1.id, p2.id]);
+    const byId = new Map(after.map((row) => [row.id, row]));
+    expect(byId.get(p1.id)?.notifiedAt).toBeNull(); // left for a future retry
+    expect(byId.get(p2.id)?.notifiedAt).not.toBeNull();
+  });
+
   it('sends nothing during quiet hours, then one grouped summary once they end (D10)', async () => {
     const clock = fixedClock('2026-09-23T12:00:00Z'); // 15:00 MSK
     const { deps, messenger } = await makeDeps(clock);
@@ -285,7 +408,7 @@ describe('cardsJob', () => {
     expect(after?.notifiedAt).not.toBeNull();
   });
 
-  it('marks users.dm_blocked on a forbidden send and leaves notified_at empty for retry', async () => {
+  it('marks users.dm_blocked on a forbidden send, alerts superadmin (M4), and leaves notified_at empty for retry', async () => {
     const clock = fixedClock('2026-09-23T09:00:00Z');
     const { deps, messenger } = await makeDeps(clock);
     const owner = await makeOwner(deps.workspace.id, 42, 'Anna');
@@ -299,6 +422,88 @@ describe('cardsJob', () => {
     expect(ownerAfter?.dmBlocked).toBe(true);
     const [after] = await proposalsByIds([p.id]);
     expect(after?.notifiedAt).toBeNull();
+    expect(messenger.sent.filter((s) => s.chatId === SUPERADMIN_ID)).toHaveLength(1);
+  });
+
+  it('builds a real update-kind card from a target task, selecting the due field and formatting before/after (M1)', async () => {
+    const clock = fixedClock('2026-09-23T09:00:00Z');
+    const { deps, messenger } = await makeDeps(clock);
+    await makeOwner(deps.workspace.id, 42, 'Anna');
+    const now = clock.now();
+
+    const task = await makeTask(deps.workspace.id, {
+      title: 'Подготовить расписание',
+      dueAt: new Date('2026-09-25T20:59:00Z'), // 23:59 МСК, пт 25 сен
+      dueAllDay: true,
+      dueTz: 'Europe/Moscow',
+    });
+    await makeProposal({
+      workspaceId: deps.workspace.id,
+      kind: 'update',
+      category: null,
+      targetTaskId: task.id,
+      createdAt: now,
+      payload: {
+        reasoning: 'test',
+        origin: 'ai',
+        quote: null,
+        quoteAuthorName: null,
+        changes: {
+          due: {
+            dueAt: '2026-09-28T20:59:00Z', // 23:59 МСК, пн 28 сен
+            allDay: true,
+            tz: 'Europe/Moscow',
+            inPast: false,
+            invalid: false,
+          },
+        },
+      },
+    });
+
+    await cardsJob.run(deps);
+
+    expect(messenger.sent).toHaveLength(1);
+    expect(messenger.sent[0]?.text).toContain(
+      `Перенос срока: T${String(task.id)} «Подготовить расписание» · было пт, 25 сен → стало пн, 28 сен`,
+    );
+    expect(messenger.sent[0]?.opts?.buttons?.flat().map((b) => b.text)).toEqual([
+      '✅ Применить',
+      '✏️ Изменить',
+      '❌ Игнорировать',
+    ]);
+  });
+
+  it('skips (does not silently drop) a proposal action targeting another pending proposal instead of a task (D44)', async () => {
+    const clock = fixedClock('2026-09-23T09:00:00Z');
+    const logger = createLogger({ level: 'silent' });
+    const warnSpy = vi.spyOn(logger, 'warn');
+    const { deps, messenger } = await makeDeps(clock, new FakeMessenger(), logger);
+    await makeOwner(deps.workspace.id, 42, 'Anna');
+    const now = clock.now();
+
+    const p = await makeProposal({
+      workspaceId: deps.workspace.id,
+      kind: 'update',
+      category: null,
+      targetTaskId: null,
+      createdAt: now,
+      payload: {
+        reasoning: 'test',
+        origin: 'ai',
+        quote: null,
+        quoteAuthorName: null,
+        targetProposalId: 999,
+        changes: { title: 'Другое название' },
+      },
+    });
+
+    await cardsJob.run(deps);
+    await cardsJob.run(deps); // a later tick retries it — still skipped, not dropped forever
+
+    expect(messenger.sent).toHaveLength(0);
+    const [after] = await proposalsByIds([p.id]);
+    expect(after?.notifiedAt).toBeNull();
+    expect(warnSpy).toHaveBeenCalled();
   });
 
   it('never sends suppressed proposals', async () => {

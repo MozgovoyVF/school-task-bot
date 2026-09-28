@@ -644,6 +644,8 @@ export const texts = {
     /** Superadmin alert (throttled hourly): the Owner has a membership but has never opened a DM with the bot (no `/start` yet), so cards pile up undelivered. */
     ownerNotStarted:
       '⚠️ Руководитель ещё не запускал бота в личных сообщениях (/start) — карточки предложений не доставляются.',
+    /** Superadmin alert (throttled hourly): a card send just came back `forbidden` — the Owner blocked the bot in Telegram, so cards pile up undelivered until they unblock it. */
+    ownerBlocked: '⚠️ Руководитель заблокировал бота в Telegram — карточки предложений не доставляются.',
   },
   /**
    * Labels prefixed to a media message's caption when normalizing incoming
