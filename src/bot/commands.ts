@@ -33,8 +33,15 @@ function cmd(name: string, description: string): BotCommand {
   return { command: name, description };
 }
 
-/** Every private chat (SPEC §12.2's "everyone" rows): no `/my` (D40 drops it entirely). */
-const DM_COMMANDS: BotCommand[] = [
+/**
+ * Every private chat (SPEC §12.2's "everyone" rows): no `/my` (D40 drops it
+ * entirely). Also `/start`/`/help`'s (`src/bot/views/help.ts`) source of
+ * truth for a Member's own command list — no chat-scope `setMyCommands` call
+ * below gives a Member (as opposed to the Owner or a superadmin) any
+ * commands beyond this generic list, so it doubles as "what a Member
+ * actually has access to".
+ */
+export const DM_COMMANDS: BotCommand[] = [
   cmd('start', texts.commands.start),
   cmd('help', texts.commands.help),
   cmd('timezone', texts.commands.timezone),
@@ -53,9 +60,12 @@ const GROUP_COMMANDS: BotCommand[] = [
  * grammY/Telegram's scope-resolution algorithm, confirmed via Context7):
  * SPEC §12.2's full command table, minus `/my` (D40) and the superadmin-only
  * technical commands (`/admin`/`/debug`/`/reanalyze`, added on top for a
- * superadmin's own chat scope below).
+ * superadmin's own chat scope below). Also `/start`/`/help`'s
+ * (`src/bot/views/help.ts`) source of truth for the Owner's own command
+ * list — kept as the single place that list is derived, per the final
+ * Phase 1 review's I2 fix, rather than a second hardcoded copy in `texts/ru.ts`.
  */
-const OWNER_COMMANDS: BotCommand[] = [
+export const OWNER_COMMANDS: BotCommand[] = [
   cmd('start', texts.commands.start),
   cmd('tasks', texts.commands.tasks),
   cmd('today', texts.commands.today),

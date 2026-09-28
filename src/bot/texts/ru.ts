@@ -142,7 +142,36 @@ export const texts = {
         '/help — эта справка',
       ].join('\n');
     },
-    /** `/start`'s welcome overview for anyone the bot does not yet recognize (no owner/member concept before phase 1). */
+    /**
+     * `/start`'s welcome overview for the workspace Owner. `commandList` is
+     * `src/bot/views/help.ts`'s rendering of `src/bot/commands.ts`'s
+     * `OWNER_COMMANDS` (single source of truth for what commands the Owner
+     * actually has — final Phase 1 review's I2 fix).
+     */
+    owner(commandList: string): string {
+      return [
+        '👋 Здравствуйте! Я — Секретарь школы.',
+        'Слежу за рабочими группами, нахожу поручения и договорённости и веду список задач.',
+        '',
+        'Доступные команды:',
+        commandList,
+      ].join('\n');
+    },
+    /**
+     * `/start`'s welcome overview for a recognized Member (has a membership,
+     * not the Owner). `commandList` is `src/bot/commands.ts`'s `DM_COMMANDS`
+     * rendered the same way (final Phase 1 review's I2 fix).
+     */
+    member(commandList: string): string {
+      return [
+        '👋 Здравствуйте! Я — Секретарь школы.',
+        'Слежу за рабочими группами, нахожу поручения и договорённости и веду список задач.',
+        '',
+        'Доступные команды:',
+        commandList,
+      ].join('\n');
+    },
+    /** `/start`'s welcome overview for anyone the bot does not yet recognize (no membership at all). */
     stranger(): string {
       return (
         'Этот бот работает для сотрудников школы французского языка и настраивается её руководителем. ' +
@@ -159,11 +188,15 @@ export const texts = {
    * `src/bot/conversations/timezone.ts`, right after that first-run zone
    * selection completes (SPEC §10.10: "...краткая справка по роли").
    *
-   * Only `superadmin`/`staff`/`stranger` are distinguished: through Task 1.4,
-   * Owner and Member have no commands of their own yet (those arrive in
-   * later phases — see plan.md's Phase 1 task list), so both currently get
-   * the same `staff` text; `can()` (`src/domain/people/permissions.ts`) has
-   * nothing yet to differentiate between them here.
+   * `superadmin`/`owner`/`member`/`stranger` are each distinguished (final
+   * Phase 1 review's I2 fix — through this fix, Owner and Member shared one
+   * `staff` text that told the Owner to "contact the Owner" and listed only
+   * `/timezone`/`/help`, missing every command this phase actually added for
+   * them). `owner`/`member`'s `commandList` argument is
+   * `src/bot/views/help.ts`'s rendering of `src/bot/commands.ts`'s
+   * `OWNER_COMMANDS`/`DM_COMMANDS` — the same source of truth Task 1.11's
+   * `syncCommands` uses for each role's Telegram command menu, so this text
+   * and that menu can never drift apart.
    */
   help: {
     /** `/help` for a superadmin. */
@@ -175,9 +208,13 @@ export const texts = {
         '/help — эта справка',
       ].join('\n');
     },
-    /** `/help` for a recognized Owner or Member (no role-specific commands exist yet — see the doc comment above). */
-    staff(): string {
-      return ['📋 Доступные команды:', '/timezone — часовой пояс', '/help — эта справка'].join('\n');
+    /** `/help` for the workspace Owner. */
+    owner(commandList: string): string {
+      return ['📋 Доступные команды:', commandList].join('\n');
+    },
+    /** `/help` for a recognized Member (has a membership, not the Owner). */
+    member(commandList: string): string {
+      return ['📋 Доступные команды:', commandList].join('\n');
     },
     /** `/help` for anyone the bot does not yet recognize. */
     stranger(): string {
