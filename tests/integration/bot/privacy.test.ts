@@ -105,14 +105,15 @@ describe('/privacy', () => {
     expect(harness.replies(MEMBER.id)).toEqual([texts.privacy.full()]);
   });
 
-  it('does not swallow /task in a group — group intake still runs for other commands', async () => {
+  it('does not swallow /task in the same group — registering /privacy first does not block group intake', async () => {
     const harness = await createBotHarness();
     await makeOwner(harness, OWNER);
 
     await harness.send(groupText(GROUP, MEMBER, '/privacy'));
-    await harness.send(groupText(GROUP, MEMBER, 'обычное сообщение'));
+    await harness.send(groupText(GROUP, MEMBER, '/task купить бумагу'));
 
-    // Sanity: /privacy replied, and a later plain message wasn't affected by /privacy's handler.
+    // /privacy still gets exactly one reply; /task is handled by group.ts's own (silent, Task 1.8
+    // stub) handler, not by the /privacy command handler registered ahead of it in bot.ts.
     expect(harness.replies(GROUP.id)).toEqual([texts.privacy.full()]);
   });
 });

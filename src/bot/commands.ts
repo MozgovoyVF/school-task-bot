@@ -6,13 +6,17 @@ import { texts } from './texts/ru.js';
 /**
  * The minimal surface {@link syncCommands} needs from grammY's `Api`
  * (`api.setMyCommands(commands, { scope })`) — kept as our own structural
- * type, not `import type { Api } from 'grammy'`, so that
- * `src/domain/people/ownerChanged.ts` (which calls `syncCommands` after a
- * successful `/claim`, plan.md's Task 1.11 interface note) can hold a field
- * typed off this module instead of importing grammY itself (CLAUDE.md §7:
- * `domain/` never imports grammY — the same reasoning `chats/lifecycle.ts`
- * documents for its `bot/texts`/`bot/views` imports). Real grammY `Api`/`ctx.api`
- * values satisfy this structurally, with no cast needed at call sites.
+ * type, not `import type { Api } from 'grammy'`, purely so this module and
+ * its tests don't need a full grammY `Api` instance. `syncCommands` itself
+ * stays bot-layer only: `src/domain/people/ownerChanged.ts` never imports
+ * this module or this type — it calls `syncCommands` after a successful
+ * `/claim` only indirectly, through a plain `() => Promise<void>` callback
+ * that `src/bot/handlers/transfer.ts` (bot layer) binds and injects, per
+ * CLAUDE.md §7 (`domain/` never imports grammY or does Telegram I/O itself —
+ * `syncCommands` does real `setMyCommands` calls, so it can't live behind a
+ * domain-held type the way `chats/lifecycle.ts`'s pure `bot/texts`/`bot/views`
+ * imports can). Real grammY `Api`/`ctx.api` values satisfy this structurally,
+ * with no cast needed at call sites.
  */
 export interface CommandsApi {
   setMyCommands(commands: readonly BotCommand[], other?: { scope?: BotCommandScope }): Promise<unknown>;

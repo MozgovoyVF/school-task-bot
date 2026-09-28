@@ -12,6 +12,7 @@ import {
   type PreviousOwnerAction,
 } from '../../domain/people/claim.js';
 import { afterOwnerChanged } from '../../domain/people/ownerChanged.js';
+import { syncCommands } from '../commands.js';
 import { texts } from '../texts/ru.js';
 import { decodeCallback } from '../keyboards/callbackCodec.js';
 import { toInlineKeyboard } from '../keyboards/build.js';
@@ -23,7 +24,7 @@ export interface TransferHandlersDeps {
   clock: Clock;
   logger: Logger;
   messenger: Messenger;
-  /** Only `SUPERADMIN_TG_IDS` is needed — forwarded to `afterOwnerChanged`'s `syncCommands` call (Task 1.11). */
+  /** Only `SUPERADMIN_TG_IDS` is needed — used to bind the `syncCommands` callback handed to `afterOwnerChanged` (Task 1.11). */
   config: Pick<Env, 'SUPERADMIN_TG_IDS'>;
 }
 
@@ -138,8 +139,17 @@ export function registerTransferHandlers(bot: Bot<BotContext>, deps: TransferHan
         logger: deps.logger,
         messenger: deps.messenger,
         clock: deps.clock,
-        api: ctx.api,
-        superadminIds: deps.config.SUPERADMIN_TG_IDS,
+        // Binds the real syncCommands (bot-layer, does real Telegram I/O) to this update's `ctx.api`
+        // and the claimed workspace — `afterOwnerChanged` (domain/) only ever sees a no-arg callback.
+        syncCommands: () =>
+          syncCommands(
+            {
+              db: deps.db,
+              workspace: { id: result.workspaceId },
+              superadminIds: deps.config.SUPERADMIN_TG_IDS,
+            },
+            ctx.api,
+          ),
       },
       result.workspaceId,
     );
