@@ -562,7 +562,7 @@ export function resolveActions(result: ExtractionResultT, ctx: ResolveContext): 
 export function defaultAssignee(category: Category, ctx: { authorUserId: number; replyToAuthorUserId: number | null; ownerUserId: number }): AssigneeResolution;
 ```
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
   1. `source_message_ids: ['M1','M9']`, где M9 неизвестна → M9 отброшена, действие осталось. `['M9']` → действие отброшено, в `dropped` причина `unknown_message_refs`.
   2. `target_ref: 'T99'`, которого нет → отброшено (`unknown_target`). `R5` из входа → `{ proposalId }`.
   3. `assignee_ref: 'P7'`, которого нет → применяется правило исполнителя по умолчанию, пишется warn.
@@ -575,10 +575,10 @@ export function defaultAssignee(category: Category, ctx: { authorUserId: number;
      - `event` → `none`.
   6. Срок считается в поясе автора первого исходного сообщения (`users.timezone`, иначе пояс workspace).
   7. `update.changes.due` тоже проходит `resolveDue`.
-- [ ] **Шаг 2:** FAIL.
-- [ ] **Шаг 3: реализация.**
-- [ ] **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(ai): resolve model references, assignees and dates`.
+- [x] **Шаг 2:** FAIL.
+- [x] **Шаг 3: реализация.**
+- [x] **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(ai): resolve model references, assignees and dates`.
 
 ### Task 2.7: Policy — правила показа
 
