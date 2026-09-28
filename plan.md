@@ -727,7 +727,7 @@ describe('nextAttemptAt', () => {
   - `insertProposal(tx, p: NewProposal): Promise<ProposalRow>`;
   - payload proposal: `{ title, description, category, assignee, due, priority, dueText, reasoning, duplicateOf?: { type, id, title }, changes?, origin: 'ai' | 'manual_group' | 'manual_dm' | 'forward', noReaction?: boolean, quote, quoteAuthorName }`.
 
-- [ ] **Шаг 1: падающие тесты** (FixtureClient, фиксированные часы)
+- [x] **Шаг 1: падающие тесты** (FixtureClient, фиксированные часы)
   1. Сообщение «Маша, подготовь расписание к пятнице» от owner и fixture `valid_assignment`:
      - один proposal `shown`, `kind='create'`, `category='assignment'`, исполнитель Мария, срок — пятница, 23:59 МСК, all-day;
      - сообщения `analyzed`;
@@ -739,13 +739,13 @@ describe('nextAttemptAt', () => {
   6. **Падение посреди записи:** `insertProposal` бросает ошибку на втором proposal → транзакция откатилась (proposals нет, сообщения `pending`, batch не `done`), job переводит batch на повтор (Фокус ревью 1).
   7. `skipped`-сообщения из того же временного окна попадают во вход как контекст, а не как новые.
   8. В `/reanalyze`-режиме (`noReaction`) флаг сохраняется в payload.
-- [ ] **Шаг 2:** FAIL.
-- [ ] **Шаг 3: реализация.**
+- [x] **Шаг 2:** FAIL.
+- [x] **Шаг 3: реализация.**
   - Вызов LLM выполняется **вне** транзакции.
   - В одной транзакции: запись proposals (`shown` и `suppressed`) → сообщения `analyzed` → batch `done`.
   - Карточки здесь не отправляются: их отправляет outbox (2.12).
-- [ ] **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(ai): process batches into proposals transactionally`.
+- [x] **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(ai): process batches into proposals transactionally`.
 
 ### Task 2.11: Отображение — даты, ссылки, карточки proposals
 

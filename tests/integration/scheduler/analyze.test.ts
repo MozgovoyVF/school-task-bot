@@ -332,6 +332,12 @@ describe('analyzeJob', () => {
       models: { primary: 'fixture/primary', fallback: null },
     };
     const deps = await makeDeps(clock, ai);
+    // `processBatch` (Task 2.10, reached once the extraction attempt gets
+    // past `runOneBatch`'s prefilter step) needs a workspace owner to build
+    // its extraction input — without one, every attempt would fail with
+    // "workspace has no owner" instead of genuinely exercising the
+    // FixtureClient's scripted `llm down` errors this test is about.
+    await makeMember(deps.workspace.id, 222, 'Owner', 'owner');
     const chat = await makeActiveChat(deps.workspace.id, -202, clock.now());
     const author = await makeMember(deps.workspace.id, 22, 'Petr');
     const msg = await insertMessage(
@@ -389,6 +395,9 @@ describe('analyzeJob', () => {
       models: { primary: 'fixture/primary', fallback: null },
     };
     const deps = await makeDeps(clock, ai);
+    // See the identical comment in the previous test: `processBatch` needs
+    // a workspace owner to reach its own extraction call at all.
+    await makeMember(deps.workspace.id, 225, 'Owner', 'owner');
     const chat = await makeActiveChat(deps.workspace.id, -250, clock.now());
     const author = await makeMember(deps.workspace.id, 25, 'Costly');
     await insertMessage(chat.id, 1, author.id, new Date(clock.now().getTime() - 200_000), 'поручение');
@@ -423,6 +432,11 @@ describe('analyzeJob', () => {
     };
     const deps = await makeDeps(clock, ai);
     const now = clock.now();
+    // See the identical comment on the "on an LLM failure" test above:
+    // `processBatch` needs a workspace owner to reach its own extraction
+    // call (and thus the scripted `llm down` failures this test is about)
+    // at all.
+    await makeMember(deps.workspace.id, 229, 'Owner', 'owner');
 
     for (let i = 0; i < 5; i++) {
       const chat = await makeActiveChat(deps.workspace.id, -300 - i, now);

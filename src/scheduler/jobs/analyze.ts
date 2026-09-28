@@ -15,6 +15,7 @@ import {
   type BatchRow,
 } from '../../ai/pipeline/batcher.js';
 import { spentTodayUsd } from '../../ai/budget.js';
+import { processBatch } from '../../ai/pipeline/processBatch.js';
 import type { ParticipantForLlm } from '../../ai/pseudonymize.js';
 import { loadPrompt } from '../../ai/prompts.js';
 import { ExtractionError, type Usage } from '../../ai/providers/types.js';
@@ -181,55 +182,6 @@ async function markSkippedByPrefilter(
 }
 
 /**
- * The extractor call succeeded. This deliberately stops at recording the
- * call's own bookkeeping (model, tokens, cost, latency, raw response) and
- * marking the messages `analyzed` — turning `extracted`'s actions into
- * `proposals` (resolving refs/dates, policy, dedup, all in one transaction
- * with this same bookkeeping) is Task 2.10's `processBatch`, which does not
- * exist yet. See this task's report for why: none of this task's brief
- * covers that path, and building it here would need open
- * tasks/proposals/participant context this job does not assemble. Marking
- * `analyzed` now (not leaving the batch `running`) is still required for
- * correctness — otherwise `recoverStaleBatches` would re-claim and
- * re-extract (and re-spend budget on) the same batch forever.
- */
-async function markDone(
-  db: DbOrTx,
-  batch: BatchRow,
-  messageIds: number[],
-  args: {
-    model: string;
-    promptVersion: string;
-    prefilterModel: string | null;
-    usage: Usage;
-    raw: unknown;
-    latencyMs: number;
-    now: Date;
-  },
-): Promise<void> {
-  const totals = accumulateUsage(batch, args.usage);
-  await db.transaction(async (tx) => {
-    await tx.update(messages).set({ analysisStatus: 'analyzed' }).where(inArray(messages.id, messageIds));
-    await tx
-      .update(analysisBatches)
-      .set({
-        status: 'done',
-        finishedAt: args.now,
-        model: args.model,
-        promptVersion: args.promptVersion,
-        prefilterModel: args.prefilterModel,
-        inputTokens: totals.inputTokens,
-        outputTokens: totals.outputTokens,
-        costUsd: totals.costUsd,
-        latencyMs: args.latencyMs,
-        rawResponse: args.raw,
-        nextAttemptAt: null,
-      })
-      .where(eq(analysisBatches.id, batch.id));
-  });
-}
-
-/**
  * SPEC §8/§9.2: on failure, the batch's messages are left untouched
  * (`pending`) — only the batch row moves, either back to `queued` with
  * backoff (via {@link nextAttemptAt}) or, after its 5th failed attempt, to
@@ -308,11 +260,12 @@ async function runOneBatch(deps: AppDeps, batch: BatchRow, now: Date): Promise<v
   const messageIds = batchMessages.map((m) => m.id);
 
   // Accumulated *this attempt's* usage only (prefilter, plus the extractor's
-  // if it failed) — `markFailedOrRetry`/`markDone` add it on top of the
-  // batch's own running totals from any earlier attempt via
-  // `accumulateUsage`. Read outside the `try` so the `catch` below can still
-  // see whatever was spent before the throw (SPEC §9.2 — every attempt's
-  // spend counts, success or failure).
+  // if it failed before `processBatch` could record its own) —
+  // `markFailedOrRetry`/`processBatch`'s `accumulateUsage` add it on top of
+  // the batch's own running totals from any earlier attempt. Read outside
+  // the `try` so the `catch` below can still see whatever was spent before
+  // the throw (SPEC §9.2 — every attempt's spend counts, success or
+  // failure).
   let usage = zeroUsage();
   try {
     const members = await listMembersWithUsers(deps.db, deps.workspace.id);
@@ -351,20 +304,34 @@ async function runOneBatch(deps: AppDeps, batch: BatchRow, now: Date): Promise<v
       }
     }
 
-    const startedAt = deps.clock.now();
-    const extracted = await ai.extraction.extract(input);
-    const finishedAt = deps.clock.now();
-    usage = sumUsage(usage, extracted.usage);
-
-    await markDone(deps.db, batch, messageIds, {
-      model: extracted.model,
-      promptVersion: input.promptVersion,
+    // From here on, `processBatch` (Task 2.10) owns everything: it builds
+    // its own fuller extraction input (participants, open tasks/proposals,
+    // `skipped`-in-window context, real reply-ref resolution — `input`
+    // above is only ever the prefilter's deliberately trivial version), the
+    // extractor call itself, and resolving/policying/deduping the result
+    // into proposals, all the way through marking the batch's messages
+    // `analyzed` and the batch `done`, in one transaction. `usage`/
+    // `prefilterModel` are folded into an in-memory copy of `batch` first
+    // so `processBatch`'s own bookkeeping (`accumulateUsage`, and its
+    // `prefilterModel` passthrough — it has no prefilter of its own) adds
+    // its spend on top of what the prefilter above already spent, instead
+    // of losing it.
+    //
+    // Known gap (flagged for this task's reviewer): if `processBatch`'s
+    // *transaction* fails (e.g. `insertProposal`) *after* a successful,
+    // billed extraction call, that call's usage is not folded back into
+    // `usage` here — unlike an `ExtractionError`, a transaction failure
+    // carries no usage of its own to recover. The batch's `costUsd` will
+    // then under-count that one attempt; the retry's own extraction call
+    // (if it succeeds) records its usage normally on the next pass.
+    const batchWithPrefilter: BatchRow = {
+      ...batch,
+      inputTokens: (batch.inputTokens ?? 0) + usage.inputTokens,
+      outputTokens: (batch.outputTokens ?? 0) + usage.outputTokens,
+      costUsd: String(Number(batch.costUsd ?? 0) + usage.costUsd),
       prefilterModel,
-      usage,
-      raw: extracted.raw,
-      latencyMs: finishedAt.getTime() - startedAt.getTime(),
-      now,
-    });
+    };
+    await processBatch(deps, batchWithPrefilter, { mode: 'auto' });
     await resetConsecutiveFailures(deps.db, now);
   } catch (err) {
     // `ExtractionError.usage` sums every attempt the extractor itself made
