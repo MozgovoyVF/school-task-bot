@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-09-28
+
 Phase 1 (groups): workspace settings, claim-code owner transfer, group-chat lifecycle
 (approve/pause/leave, 72h auto-leave for unapproved chats), message intake with stage-0
 heuristics, `/chats` and `/people` management, privacy-mode enforcement with `/privacy` and
