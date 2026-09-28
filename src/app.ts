@@ -111,11 +111,13 @@ export async function startApp(env: Env, overrides?: StartAppOverrides): Promise
     superadminIds: env.SUPERADMIN_TG_IDS,
   });
 
-  // `ai` is always `null` in phase 0 — no `src/ai/**` code exists yet (see
-  // `src/deps.ts`'s `AiProviders` placeholder / plan.md decision D32). This
-  // condition mirrors the check phase 2 will use to actually decide whether
-  // to build the real `AiProviders`, so the warning already fires correctly
-  // once that wiring lands.
+  // `ai` is still always `null` here: `src/deps.ts`'s `AiProviders` now
+  // types against the real interface (`src/ai/providers/types.ts`, plan.md
+  // decision D32), but this composition root does not yet construct one
+  // from env (OpenRouter client, extraction/decision providers) — that
+  // wiring is a separate, later task. This condition already matches the
+  // check that wiring will use to decide whether to build it, so the
+  // warning fires correctly today and keeps doing so once that lands.
   if (!env.OPENROUTER_API_KEY || !env.LLM_MODEL_PRIMARY) {
     logger.warn('AI analysis disabled: OPENROUTER_API_KEY or LLM_MODEL_PRIMARY is not set');
   }

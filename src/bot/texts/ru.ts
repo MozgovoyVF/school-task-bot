@@ -118,6 +118,27 @@ export const texts = {
     },
     /** A short, apologetic reply to the user whose action triggered an error the bot has already reported. */
     userFacing: 'Что-то пошло не так. Мы уже разбираемся, попробуйте, пожалуйста, ещё раз чуть позже.',
+    /** SPEC §8: sent to superadmin once an `analysis_batches` row gives up after its 5th failed attempt. */
+    batchFailed(batchId: number, message: string): string {
+      return [
+        '⚠️ Анализ сообщений не удался',
+        `Пачка: <code>${String(batchId)}</code>`,
+        `После 5 попыток анализ остановлен. Сообщения остаются в очереди, повторить можно через /reanalyze.`,
+        `Ошибка: <code>${escapeHtml(message)}</code>`,
+      ].join('\n');
+    },
+    /** SPEC §8/§9.2: sent to superadmin after 5 consecutive LLM-call failures across different batches. */
+    llmConsecutiveFailures(count: number): string {
+      return `⚠️ ${String(count)} ошибок LLM подряд. Проверьте доступность OpenRouter и ключ API.`;
+    },
+    /** SPEC §9.2: sent to superadmin and Owner once, per calendar day, when the daily LLM budget is exhausted. */
+    budgetPaused(spentUsd: number, budgetUsd: number): string {
+      return [
+        '⚠️ Дневной бюджет на анализ сообщений исчерпан',
+        `Потрачено ${spentUsd.toFixed(2)} $ из ${budgetUsd.toFixed(2)} $.`,
+        'Автоматический анализ приостановлен до завтра — новые сообщения сохраняются и будут разобраны, когда бюджет обновится. Ручные команды продолжают работать.',
+      ].join('\n');
+    },
   },
   common: {
     /** Sent when a user without the required role invokes a restricted command or callback. */

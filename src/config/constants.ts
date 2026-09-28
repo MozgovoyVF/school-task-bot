@@ -4,6 +4,12 @@ export const HEARTBEAT_MAX_AGE_MS = 60_000;
 export const BATCH_BACKOFF_MINUTES = [1, 5, 15, 15] as const; // после 1-й…4-й неудачи; 5-я → failed
 export const BATCH_MAX_ATTEMPTS = 5;
 export const STALE_RUNNING_BATCH_MS = 5 * 60_000;
+// How many queued batches one analyzeJob tick claims and processes at most (plan.md Task 2.9).
+export const MAX_BATCHES_PER_TICK = 5;
+// analysis_batches.prompt_version for the current extractor prompt file (prompts/extractor.v1.md).
+export const EXTRACTOR_PROMPT_VERSION = 'extractor.v1';
+// SPEC §8/§9.2 — consecutive LLM-call failures (across batches) before superadmin is alerted.
+export const LLM_CONSECUTIVE_FAILURES_ALERT_THRESHOLD = 5;
 export const MAX_ANALYSIS_TEXT_CHARS = 2000;
 export const QUOTE_MAX_CHARS = 200;
 export const TELEGRAM_TEXT_LIMIT = 4096;

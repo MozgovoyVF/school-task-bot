@@ -5,23 +5,18 @@ import type { Logger } from './ops/logger.js';
 import type { ErrorReporter } from './ops/errorReporter.js';
 import type { Messenger } from './domain/messenger.js';
 import type { WorkspaceRow } from './domain/workspaces/repo.js';
+import type { AiProviders } from './ai/providers/types.js';
 
-/**
- * Forward-declared placeholder for the real `AiProviders` interface (phase 2,
- * plan.md ~line 1635: `export interface AiProviders { extraction:
- * ExtractionProvider; decision: DecisionProvider | null; client:
- * ChatCompletionClient; models: { primary: string; fallback: string | null }
- * }`). `src/ai/**` doesn't exist yet in phase 0, and `deps.ai` is *always*
- * `null` until phase 2 wires up `AI_PREFILTER`/`OPENROUTER_API_KEY` handling,
- * so this placeholder only has to make `ai: AiProviders | null` type-check
- * today. See plan.md decision D32. Delete this interface and import the real
- * one (from `src/ai/providers/index.ts` or wherever phase 2 puts it) once it
- * exists — `AppDeps` below needs no other change, since `AiProviders | null`
- * stays syntactically the same.
- */
-export interface AiProviders {
-  readonly __placeholder?: never;
-}
+// plan.md decision D32: the phase-0 placeholder `AiProviders` (`{ readonly
+// __placeholder?: never }`) is gone — Task 2.9 is the first consumer that
+// actually calls `deps.ai.extraction`/`deps.ai.decision` (its `analyzeJob`),
+// so this now re-exports the real interface from `src/ai/providers/types.ts`
+// (built in Task 2.4). `AppDeps` below is unchanged: `ai: AiProviders |
+// null` still type-checks the same way, and `deps.ai` is still `null`
+// whenever `src/app.ts` decides AI analysis is disabled (no
+// `OPENROUTER_API_KEY`/`LLM_MODEL_PRIMARY`) — `src/app.ts` does not yet
+// construct a real `AiProviders` from env; that wiring is still to come.
+export type { AiProviders };
 
 /**
  * Forward-declared placeholder for the real `TaskHook` interface (phase 2,

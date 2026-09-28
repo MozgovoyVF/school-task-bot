@@ -672,7 +672,7 @@ describe('policy (SPEC §9.6)', () => {
   - `spentTodayUsd(db, { now, tz }): Promise<number>`;
   - `analyzeJob: Job`.
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
 
 ```ts
 import { describe, it, expect } from 'vitest';
@@ -708,13 +708,13 @@ describe('nextAttemptAt', () => {
 6. `deps.ai = null` → job ничего не делает.
 7. Префильтр: `DecisionProvider` с `probability=0.1` при пороге 0.15 → extractor не вызывается, сообщения `analyzed`, proposals нет, стоимость префильтра учтена.
 8. `recoverStaleBatches`: `running` 6 мин назад → `queued`.
-- [ ] **Шаг 2:** FAIL.
-- [ ] **Шаг 3: реализация.**
+- [x] **Шаг 2:** FAIL.
+- [x] **Шаг 3: реализация.**
   - Порядок в job: `recoverStaleBatches` → `enqueueBatches` → проверка бюджета → до 5 раз `claimNextBatch` и `processBatch` (2.10).
   - Подряд идущие ошибки считаются в `app_state['llm:consecutive_failures']`.
   - Бюджетная пауза фиксируется в `app_state['budget:paused:<YYYY-MM-DD>']`.
-- [ ] **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(ai): add batching, retry backoff and daily LLM budget`.
+- [x] **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(ai): add batching, retry backoff and daily LLM budget`.
 
 ### Task 2.10: processBatch — от пачки к proposals в одной транзакции
 
