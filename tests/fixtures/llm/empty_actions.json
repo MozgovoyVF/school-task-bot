@@ -1,0 +1,6 @@
+{
+  "content": "{\"actions\":[]}",
+  "usage": { "inputTokens": 430, "outputTokens": 6, "costUsd": 0.00009 },
+  "model": "fixture/primary",
+  "raw": { "id": "fixture-empty-actions", "object": "chat.completion" }
+}

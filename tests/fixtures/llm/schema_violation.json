@@ -1,0 +1,6 @@
+{
+  "content": "{\"actions\":[{\"type\":\"complete\",\"target_ref\":\"T5\",\"source_message_ids\":[\"M2\"],\"confidence\":1.4,\"reasoning\":\"done\"}]}",
+  "usage": { "inputTokens": 470, "outputTokens": 30, "costUsd": 0.00048 },
+  "model": "fixture/primary",
+  "raw": { "id": "fixture-schema-violation", "object": "chat.completion" }
+}

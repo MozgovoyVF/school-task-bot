@@ -1,0 +1,6 @@
+{
+  "content": "{\"actions\":[{\"type\":\"create\",\"category\":\"assignment\",\"title\":\"Подготовить расписание на октябрь\",\"description\":null,\"assignee_ref\":\"P1\",\"assignee_name_text\":null,\"due\":{\"due_local\":\"2026-10-02\",\"time_hint\":\"end_of_week\",\"due_text\":\"к пятнице\"},\"priority\":\"normal\",\"source_message_ids\":[\"M1\"],\"confidence\":0.9,\"reasoning\":\"owner instructs P1 to prepare the schedule\"}]}",
+  "usage": { "inputTokens": 512, "outputTokens": 96, "costUsd": 0.00081 },
+  "model": "fixture/primary",
+  "raw": { "id": "fixture-valid-assignment", "object": "chat.completion" }
+}

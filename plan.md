@@ -415,8 +415,8 @@ export interface AiProviders { extraction: ExtractionProvider; decision: Decisio
   - `class LlmExtractionProvider implements ExtractionProvider` с конструктором `(client, { primary, fallback, timeoutMs = 30_000, jsonSchema })`;
   - `class FixtureClient implements ChatCompletionClient` с конструктором `(script: Array<CompletionResponse | Error>)`, отдаёт ответы по порядку и сохраняет запросы в `requests`.
 
-- [ ] **Шаг 1: fixtures** в `tests/fixtures/llm/`: `valid_assignment.json`, `valid_complete_t12.json`, `invalid_json.json` (`content: "{actions: ["`), `schema_violation.json` (confidence 1.4), `hallucinated_refs.json` (M9, P7, T99), `empty_actions.json`, `too_many_actions.json`. Формат — `CompletionResponse`.
-- [ ] **Шаг 2: падающие тесты**
+- [x] **Шаг 1: fixtures** в `tests/fixtures/llm/`: `valid_assignment.json`, `valid_complete_t12.json`, `invalid_json.json` (`content: "{actions: ["`), `schema_violation.json` (confidence 1.4), `hallucinated_refs.json` (M9, P7, T99), `empty_actions.json`, `too_many_actions.json`. Формат — `CompletionResponse`.
+- [x] **Шаг 2: падающие тесты**
   - `openrouter.test.ts` (подменный `fetch` через опцию клиента openai SDK; сверить через Context7):
     - в запросе: `baseURL` OpenRouter, `model`, `temperature: 0`, `response_format: { type: 'json_schema', json_schema: { name: 'extraction', strict: true, schema } }`, заголовки `HTTP-Referer` и `X-Title`;
     - из `usage.cost`, `prompt_tokens` и `completion_tokens` получается `Usage`;
@@ -430,13 +430,13 @@ export interface AiProviders { extraction: ExtractionProvider; decision: Decisio
     5. Все попытки неудачны → `ExtractionError` с суммарным `usage` и списком попыток.
     6. `fallback=null` и две неудачи → `ExtractionError`.
     7. `empty_actions` → `{ actions: [] }`, это не ошибка.
-- [ ] **Шаг 3:** FAIL.
-- [ ] **Шаг 4: реализация.**
+- [x] **Шаг 3:** FAIL.
+- [x] **Шаг 4: реализация.**
   - OpenAI SDK: `new OpenAI({ apiKey, baseURL: 'https://openrouter.ai/api/v1', defaultHeaders, fetch })`.
   - Дополнительно передать `provider: { require_parameters: true }` (сверить с документацией OpenRouter), чтобы запросы уходили только к провайдерам со structured outputs.
   - `usage` разбирать zod-схемой с `.passthrough()`: поле `cost` отсутствует в типах SDK.
-- [ ] **Шаг 5:** PASS.
-- [ ] **Шаг 6: коммит и push:** `feat(ai): add OpenRouter client and extraction provider with retry and fallback`.
+- [x] **Шаг 5:** PASS.
+- [x] **Шаг 6: коммит и push:** `feat(ai): add OpenRouter client and extraction provider with retry and fallback`.
 
 ### Task 2.5: Разрешение сроков (resolveDue)
 
