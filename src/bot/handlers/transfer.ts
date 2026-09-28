@@ -2,6 +2,7 @@ import type { Bot } from 'grammy';
 import type { Db } from '../../db/client.js';
 import type { Clock } from '../../time/clock.js';
 import type { Logger } from '../../ops/logger.js';
+import type { Env } from '../../config/env.js';
 import type { Messenger } from '../../domain/messenger.js';
 import { can } from '../../domain/people/permissions.js';
 import {
@@ -22,6 +23,8 @@ export interface TransferHandlersDeps {
   clock: Clock;
   logger: Logger;
   messenger: Messenger;
+  /** Only `SUPERADMIN_TG_IDS` is needed — forwarded to `afterOwnerChanged`'s `syncCommands` call (Task 1.11). */
+  config: Pick<Env, 'SUPERADMIN_TG_IDS'>;
 }
 
 /**
@@ -130,7 +133,14 @@ export function registerTransferHandlers(bot: Bot<BotContext>, deps: TransferHan
 
     await ctx.reply(texts.claim.success, { parse_mode: 'HTML' });
     await afterOwnerChanged(
-      { db: deps.db, logger: deps.logger, messenger: deps.messenger, clock: deps.clock },
+      {
+        db: deps.db,
+        logger: deps.logger,
+        messenger: deps.messenger,
+        clock: deps.clock,
+        api: ctx.api,
+        superadminIds: deps.config.SUPERADMIN_TG_IDS,
+      },
       result.workspaceId,
     );
   });

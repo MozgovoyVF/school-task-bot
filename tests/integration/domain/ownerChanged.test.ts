@@ -7,12 +7,32 @@ import { ensureDefaultWorkspace } from '../../../src/domain/workspaces/repo.js';
 import { upsertTelegramUser } from '../../../src/domain/people/repo.js';
 import { upsertChatOnAdd } from '../../../src/domain/chats/repo.js';
 import { afterOwnerChanged } from '../../../src/domain/people/ownerChanged.js';
+import type { CommandsApi } from '../../../src/bot/commands.js';
 import { chats, memberships } from '../../../src/db/schema/index.js';
 import { MessengerError } from '../../../src/domain/messenger.js';
 import { FakeMessenger } from '../../helpers/fakeMessenger.js';
 
 const db = getTestDb();
 beforeEach(() => truncateAll(db));
+
+interface RecordedSetMyCommands {
+  commands: unknown;
+  scope: unknown;
+}
+
+/** A minimal {@link CommandsApi} fake, recording every `setMyCommands` call instead of hitting Telegram. */
+function fakeCommandsApi(): { api: CommandsApi; calls: RecordedSetMyCommands[] } {
+  const calls: RecordedSetMyCommands[] = [];
+  return {
+    calls,
+    api: {
+      setMyCommands(commands, other) {
+        calls.push({ commands, scope: other?.scope });
+        return Promise.resolve(true);
+      },
+    },
+  };
+}
 
 describe('afterOwnerChanged', () => {
   it('keeps logging the owner change (Task 1.5) and, alongside that, requests pending approvals (Task 1.6)', async () => {
@@ -38,8 +58,9 @@ describe('afterOwnerChanged', () => {
     const messenger = new FakeMessenger();
     const logger = createLogger({ level: 'silent' });
     const infoSpy = vi.spyOn(logger, 'info');
+    const { api } = fakeCommandsApi();
 
-    await afterOwnerChanged({ db, logger, messenger, clock }, workspace.id);
+    await afterOwnerChanged({ db, logger, messenger, clock, api, superadminIds: [900000001] }, workspace.id);
 
     // The existing behaviour (Task 1.5) still happens.
     expect(infoSpy).toHaveBeenCalledWith({ workspaceId: workspace.id }, 'owner changed');
@@ -73,8 +94,12 @@ describe('afterOwnerChanged', () => {
     const logger = createLogger({ level: 'silent' });
     const failingMessenger = new FakeMessenger();
     failingMessenger.failNextWith(new MessengerError('other', 'boom'));
+    const { api } = fakeCommandsApi();
 
-    await afterOwnerChanged({ db, logger, messenger: failingMessenger, clock }, workspace.id);
+    await afterOwnerChanged(
+      { db, logger, messenger: failingMessenger, clock, api, superadminIds: [900000001] },
+      workspace.id,
+    );
 
     // The send failed, so the Owner never actually saw the approval request — the 72h auto-leave
     // clock must NOT have started (unlike the un-stamp-on-failure this mirrors, `publishNoticeOnce`'s
@@ -84,10 +109,36 @@ describe('afterOwnerChanged', () => {
 
     // A later call (e.g. the next /claim, or a retry) can still reach the Owner.
     const retryMessenger = new FakeMessenger();
-    await afterOwnerChanged({ db, logger, messenger: retryMessenger, clock }, workspace.id);
+    const { api: retryApi } = fakeCommandsApi();
+    await afterOwnerChanged(
+      { db, logger, messenger: retryMessenger, clock, api: retryApi, superadminIds: [900000001] },
+      workspace.id,
+    );
 
     const [chatAfterRetry] = await db.select().from(chats).where(eq(chats.id, pendingChat.id));
     expect(chatAfterRetry?.pendingSince).not.toBeNull();
     expect(retryMessenger.sent.some((m) => m.chatId === owner.tgUserId)).toBe(true);
+  });
+
+  it('also refreshes the new owner’s and every superadmin’s command menus (Task 1.11)', async () => {
+    const clock = fixedClock('2026-09-23T12:00:00Z');
+    const workspace = await ensureDefaultWorkspace(db, { name: 'School', timezone: 'Europe/Moscow' });
+    const owner = await upsertTelegramUser(db, { id: 1, first_name: 'Anna' });
+    await db
+      .insert(memberships)
+      .values({ workspaceId: workspace.id, userId: owner.id, role: 'owner', displayName: 'Anna' });
+
+    const messenger = new FakeMessenger();
+    const logger = createLogger({ level: 'silent' });
+    const { api, calls } = fakeCommandsApi();
+
+    await afterOwnerChanged({ db, logger, messenger, clock, api, superadminIds: [900000001] }, workspace.id);
+
+    const scopes = calls.map((c) => c.scope);
+    expect(scopes).toContainEqual({ type: 'all_private_chats' });
+    expect(scopes).toContainEqual({ type: 'all_group_chats' });
+    expect(scopes).toContainEqual({ type: 'chat', chat_id: owner.tgUserId });
+    expect(scopes).toContainEqual({ type: 'chat', chat_id: 900000001 });
+    expect(calls).toHaveLength(4);
   });
 });

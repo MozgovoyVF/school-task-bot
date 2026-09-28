@@ -1389,17 +1389,17 @@ describe('stage 0 heuristics (SPEC §7.3)', () => {
   - `checkPrivacyMode(deps, me: UserFromGetMe): Promise<void>` — при `can_read_all_group_messages === false` пишет warn в лог и вызывает `errors.alert('privacy_mode', texts.admin.privacyModeOn)`;
   - `syncCommands(deps, api)` — `setMyCommands` для scope: все личные чаты (`/start /help /timezone /privacy`; `/my` нет, D40), все группы (`/task /privacy`), чат owner (полный список SPEC §12.2), чаты superadmin (плюс `/admin /debug /reanalyze`).
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
   - `getMe` с `can_read_all_group_messages: false` → superadmin получает инструкцию «Отключите privacy mode и **заново добавьте бота** в группы».
   - При `true` сообщения нет.
   - `/privacy` в группе → бот отвечает полным текстом (единственный случай, когда бот пишет в группу).
   - `/privacy` в DM → тот же текст.
   - `syncCommands` делает 4 вызова `setMyCommands` с правильными `scope`.
   - После `/claim` меню owner обновляется.
-- [ ] **Шаг 2:** FAIL.
-- [ ] **Шаг 3: реализация.** Тексты `privacy_full` и уведомления в чате лежат в `ru.ts`. Их содержательные копии — в `docs/legal/*.md` с пометкой «проверить юристу». Обязательно указать, что имена третьих лиц в MVP не заменяются (SPEC §19.3.2).
-- [ ] **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(privacy): add privacy mode check, /privacy and scoped command menus`.
+- [x] **Шаг 2:** FAIL.
+- [x] **Шаг 3: реализация.** Тексты `privacy_full` и уведомления в чате лежат в `ru.ts`. Их содержательные копии — в `docs/legal/*.md` с пометкой «проверить юристу». Обязательно указать, что имена третьих лиц в MVP не заменяются (SPEC §19.3.2).
+- [x] **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(privacy): add privacy mode check, /privacy and scoped command menus`.
 
 ### Task 1.12: Очистка по сроку хранения и закрытие фазы
 

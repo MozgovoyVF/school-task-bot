@@ -236,6 +236,20 @@ export const texts = {
     },
     /** Button on the `/admin` panel that issues a claim code (Task 1.5, `src/bot/handlers/transfer.ts`). */
     ownerCodeButton: 'Код владельца',
+    /**
+     * `errors.alert('privacy_mode', ...)`'s text (Task 1.11,
+     * `src/bot/startupChecks.ts`'s `checkPrivacyMode`) — sent to every
+     * superadmin when `getMe().can_read_all_group_messages === false`: the
+     * bot only sees commands/replies in groups, not ordinary conversation,
+     * which breaks task detection entirely until privacy mode is turned off
+     * *and* the bot is re-added to every group it's already in (Telegram only
+     * re-syncs a bot's group visibility on re-add, not retroactively).
+     */
+    privacyModeOn: [
+      '⚠️ У бота включён privacy mode — он не получает обычные сообщения в группах, только команды и упоминания.',
+      'Отключите privacy mode у @BotFather (Bot Settings → Group Privacy → Turn off) и ' +
+        '<b>заново добавьте бота в группы</b>, где он уже состоит — иначе для уже добавленных чатов ничего не изменится.',
+    ].join('\n'),
   },
   transfer: {
     /** Prompt shown above `/transfer`'s two-button choice. */
@@ -378,6 +392,38 @@ export const texts = {
       'напоминать о них руководителю. Текст сообщений хранится не дольше 30 дней, затем удаляется; сохраняются ' +
       'только подтверждённые задачи. Для анализа текст передаётся сервису обработки (ИИ) без фамилий, @имён и ' +
       'контактов. Подробнее: /privacy. Вопросы — к руководителю.',
+    /**
+     * `/privacy`'s full answer (Task 1.11, SPEC §12.2's `/privacy` row and
+     * §19.5's `privacy_full.md`) — sent in both a group and a DM, identically
+     * (SPEC §12.2: `/privacy` is the one command the bot answers with text in
+     * a group). Its substantive copy lives in `docs/legal/privacy_full.md`
+     * (marked "проверить юристу", CLAUDE.md §... /SPEC §19.5) — keep both in
+     * sync. Explicitly notes SPEC §19.3 point 2: third parties' names (e.g.
+     * students) are *not* pseudonymized in free text in the MVP.
+     */
+    full(): string {
+      return [
+        '🔒 Что я делаю с данными',
+        '',
+        'Я читаю сообщения рабочих групп, куда меня добавили, чтобы находить задачи и договорённости для ' +
+          'руководителя школы.',
+        '',
+        '<b>Какие данные обрабатываю:</b> Telegram ID, имя и username сотрудников; тексты сообщений рабочих ' +
+          'групп — в них могут быть данные третьих лиц (учеников, родителей): имена, телефоны, суммы оплат.',
+        '<b>Зачем:</b> чтобы находить задачи, сроки и договорённости и напоминать о них руководителю.',
+        '<b>Сроки хранения:</b> текст сообщений хранится не дольше 30 дней и затем удаляется; в задаче остаётся ' +
+          'только короткая цитата (до 200 символов) и ссылка на исходное сообщение.',
+        '<b>Передача для анализа:</b> текст передаётся стороннему сервису обработки (ИИ). Перед отправкой из ' +
+          'него убираются @юзернеймы, телефоны, e-mail, номера карт и счетов, ссылки. <b>Имена третьих лиц ' +
+          '(например, учеников) в свободном тексте не заменяются</b> — в MVP это сильно ухудшило бы поиск задач.',
+        '<b>Кто видит данные:</b> руководитель школы (карточки задач, сводки) и, по техническим вопросам, ' +
+          'разработчик бота.',
+        '<b>Удаление данных:</b> обратитесь к руководителю школы — он может удалить участника через /people. ' +
+          'Полное удаление данных школы делает технический администратор бота.',
+        '',
+        'Это не юридическая консультация, а техническое описание. Вопросы — к руководителю школы.',
+      ].join('\n');
+    },
   },
   /**
    * Labels prefixed to a media message's caption when normalizing incoming
@@ -401,5 +447,34 @@ export const texts = {
     expired: 'Срок действия кода истёк. Попросите новый через /transfer.',
     /** The code matched but was already redeemed. */
     used: 'Этот код уже использован.',
+  },
+  /**
+   * Short (Telegram menu, ≤256 chars) descriptions for `setMyCommands`
+   * (Task 1.11, `src/bot/commands.ts`'s `syncCommands`) — one entry per
+   * command SPEC §12.2 lists, keyed by command name without the leading `/`.
+   * Deliberately no `my` entry (D40 drops `/my` entirely).
+   */
+  commands: {
+    start: 'Регистрация, часовой пояс, краткая справка',
+    tasks: 'Открытые задачи',
+    today: 'Задачи на сегодня и просроченные',
+    overdue: 'Просроченные задачи',
+    inbox: 'Неразобранные предложения',
+    new: 'Создать задачу',
+    archive: 'Выполненные и отменённые задачи',
+    search: 'Поиск по названию и описанию задач',
+    stats: 'Статистика по сотрудникам',
+    people: 'Участники: имена, алиасы, часовой пояс',
+    chats: 'Чаты: статус, анализ, реакции, пауза',
+    settings: 'Настройки бота',
+    transfer: 'Код передачи владения',
+    timezone: 'Часовой пояс',
+    privacy: 'Что бот делает с данными',
+    help: 'Справка по вашей роли',
+    claim: 'Стать владельцем по одноразовому коду',
+    task: 'Создать задачу из сообщения',
+    admin: 'Панель администратора',
+    debug: 'Диагностика последнего анализа чата',
+    reanalyze: 'Повторно проанализировать последние сообщения',
   },
 };

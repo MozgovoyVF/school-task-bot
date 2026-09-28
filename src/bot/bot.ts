@@ -21,6 +21,7 @@ import { registerTransferHandlers } from './handlers/transfer.js';
 import { registerChatMemberHandlers } from './handlers/chatMember.js';
 import { registerChatsHandlers } from './handlers/chats.js';
 import { registerPeopleHandlers } from './handlers/people.js';
+import { registerPrivacyHandlers } from './handlers/privacy.js';
 import { registerGroupHandlers } from './handlers/group.js';
 import { registerTimezoneConversation } from './conversations/timezone.js';
 import { registerEditPersonConversation } from './conversations/editPerson.js';
@@ -99,6 +100,10 @@ export function createBot(
   registerChatMemberHandlers(bot, deps);
   registerChatsHandlers(bot, deps);
   registerPeopleHandlers(bot, deps);
+  // Must run before registerGroupHandlers (privacy.ts's doc comment): its
+  // bot.on('message', ...) would otherwise swallow a /privacy update in a
+  // group before this command handler ever sees it.
+  registerPrivacyHandlers(bot);
   registerGroupHandlers(bot, deps);
 
   bot.catch((err) => {

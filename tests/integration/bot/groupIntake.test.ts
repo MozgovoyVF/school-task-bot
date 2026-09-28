@@ -278,7 +278,9 @@ describe('group message intake (SPEC §7.2, plan.md Task 1.8)', () => {
     const taskUpdate = groupText(GROUP, MEMBER, '/task купить бумагу');
     await harness.send(taskUpdate);
 
-    const otherUpdate = groupText(GROUP, MEMBER, '/privacy');
+    // A command other than /task (and other than /privacy, which Task 1.11 gives its own
+    // group-answering handler — see tests/integration/bot/privacy.test.ts) is still silently ignored.
+    const otherUpdate = groupText(GROUP, MEMBER, '/foobar');
     await harness.send(otherUpdate);
 
     expect(await listMessages(harness, chat.id)).toHaveLength(0);

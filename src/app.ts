@@ -1,4 +1,5 @@
 import { Api } from 'grammy';
+import type { ApiClientOptions } from 'grammy';
 import type { UserFromGetMe } from 'grammy/types';
 import { autoRetry } from '@grammyjs/auto-retry';
 import { apiThrottler } from '@grammyjs/transformer-throttler';
@@ -20,6 +21,8 @@ import type { Clock } from './time/clock.js';
 import { createTicker } from './scheduler/ticker.js';
 import { pendingChatsJob } from './scheduler/jobs/pendingChats.js';
 import { buildHttpServer } from './http/server.js';
+import { checkPrivacyMode } from './bot/startupChecks.js';
+import { syncCommands } from './bot/commands.js';
 import type { AppDeps } from './deps.js';
 
 /** Update types the production long-polling runner asks Telegram for (brief Step 3). */
@@ -39,6 +42,13 @@ export interface StartAppOverrides {
   /** Pre-seeds the bot's own identity, skipping the `getMe` round-trip grammY would otherwise do on first use. */
   botInfo?: UserFromGetMe;
   clock?: Clock;
+  /**
+   * Forwarded to `createBot`'s `opts.client` — fakes `bot.api`'s HTTP
+   * transport. Tests use this (alongside `botInfo`) so `bot.init()` and
+   * `syncCommands`'s `setMyCommands` calls (Task 1.11, below) never hit the
+   * real Telegram API.
+   */
+  client?: ApiClientOptions;
 }
 
 export interface StartedApp {
@@ -121,7 +131,14 @@ export async function startApp(env: Env, overrides?: StartAppOverrides): Promise
     taskHooks: [],
   };
 
-  const bot = createBot(deps, { botInfo: overrides?.botInfo });
+  const bot = createBot(deps, { botInfo: overrides?.botInfo, client: overrides?.client });
+
+  // `bot.init()` is a no-op once `me` is already known (e.g. `overrides.botInfo` in tests) —
+  // otherwise it fetches the bot's own identity from Telegram, which `checkPrivacyMode` and
+  // `syncCommands` below both need (Task 1.11).
+  await bot.init();
+  await checkPrivacyMode(deps, bot.botInfo);
+  await syncCommands({ db, workspace, superadminIds: env.SUPERADMIN_TG_IDS }, bot.api);
 
   const ticker = createTicker(deps, [pendingChatsJob]);
   // One synchronous tick before we start serving traffic, so `/healthz`
