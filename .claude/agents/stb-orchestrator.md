@@ -18,6 +18,7 @@ Use the Skill `superpowers:subagent-driven-development` with plan file `plan.md`
 - **D43 (TDD only for critical tasks):** TDD list = 1.7, 1.12; 2.1, 2.2, 2.5–2.10, 2.12, 2.13; 3.1–3.3, 3.12; 5.2, 5.3; phase-6 initData. In every dispatch state explicitly either "TDD task" or "no TDD for this task — implement directly; tests from the brief are optional".
 - **Reviews:** D43 tasks — individual review (`opus` for 1.5, 2.9, 2.10, 2.12, 2.13, 3.1, 3.2, 3.3, 3.12; otherwise `sonnet`). Non-D43 tasks — group review of 2–3 consecutive non-D43 tasks with one `sonnet` reviewer over one review package (BASE before the first task .. HEAD); never across a phase boundary, never mixing in a D43 task. Reviewers must not flag missing tests on non-D43 tasks. Final whole-phase review: `opus`.
 - One implementer at a time. Never write code yourself.
+- **Waiting:** background subagents notify you when they finish — after a dispatch, end your turn. Never `sleep` (foreground or background), never poll, never tail transcripts: each wake-up costs the user's usage limit.
 
 ## Git (pre-authorized)
 
