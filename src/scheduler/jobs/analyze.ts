@@ -17,7 +17,7 @@ import {
 import { spentTodayUsd } from '../../ai/budget.js';
 import type { ParticipantForLlm } from '../../ai/pseudonymize.js';
 import { loadPrompt } from '../../ai/prompts.js';
-import type { Usage } from '../../ai/providers/types.js';
+import { ExtractionError, type Usage } from '../../ai/providers/types.js';
 import { texts } from '../../bot/texts/ru.js';
 import type { AppDeps } from '../../deps.js';
 import type { DbOrTx } from '../../db/client.js';
@@ -42,6 +42,26 @@ function sumUsage(a: Usage, b: Usage): Usage {
     inputTokens: a.inputTokens + b.inputTokens,
     outputTokens: a.outputTokens + b.outputTokens,
     costUsd: a.costUsd + b.costUsd,
+  };
+}
+
+/**
+ * SPEC §9.2: `analysis_batches`' token/cost columns accumulate across every
+ * attempt made against that row — a batch that fails and is retried keeps
+ * every prior attempt's spend on top of the new one, instead of the latest
+ * attempt overwriting it. `batch` is the row as claimed at the *start* of
+ * this attempt, so its `inputTokens`/`outputTokens`/`costUsd` are exactly
+ * "everything spent on this batch before this attempt" (`null` for a
+ * brand-new batch, i.e. its first attempt).
+ */
+function accumulateUsage(
+  batch: BatchRow,
+  usage: Usage,
+): { inputTokens: number; outputTokens: number; costUsd: string } {
+  return {
+    inputTokens: (batch.inputTokens ?? 0) + usage.inputTokens,
+    outputTokens: (batch.outputTokens ?? 0) + usage.outputTokens,
+    costUsd: String(Number(batch.costUsd ?? 0) + usage.costUsd),
   };
 }
 
@@ -142,6 +162,7 @@ async function markSkippedByPrefilter(
   messageIds: number[],
   args: { prefilterModel: string; usage: Usage; now: Date },
 ): Promise<void> {
+  const totals = accumulateUsage(batch, args.usage);
   await db.transaction(async (tx) => {
     await tx.update(messages).set({ analysisStatus: 'analyzed' }).where(inArray(messages.id, messageIds));
     await tx
@@ -150,9 +171,9 @@ async function markSkippedByPrefilter(
         status: 'done',
         finishedAt: args.now,
         prefilterModel: args.prefilterModel,
-        inputTokens: args.usage.inputTokens,
-        outputTokens: args.usage.outputTokens,
-        costUsd: String(args.usage.costUsd),
+        inputTokens: totals.inputTokens,
+        outputTokens: totals.outputTokens,
+        costUsd: totals.costUsd,
         nextAttemptAt: null,
       })
       .where(eq(analysisBatches.id, batch.id));
@@ -186,6 +207,7 @@ async function markDone(
     now: Date;
   },
 ): Promise<void> {
+  const totals = accumulateUsage(batch, args.usage);
   await db.transaction(async (tx) => {
     await tx.update(messages).set({ analysisStatus: 'analyzed' }).where(inArray(messages.id, messageIds));
     await tx
@@ -196,9 +218,9 @@ async function markDone(
         model: args.model,
         promptVersion: args.promptVersion,
         prefilterModel: args.prefilterModel,
-        inputTokens: args.usage.inputTokens,
-        outputTokens: args.usage.outputTokens,
-        costUsd: String(args.usage.costUsd),
+        inputTokens: totals.inputTokens,
+        outputTokens: totals.outputTokens,
+        costUsd: totals.costUsd,
         latencyMs: args.latencyMs,
         rawResponse: args.raw,
         nextAttemptAt: null,
@@ -208,26 +230,57 @@ async function markDone(
 }
 
 /**
- * SPEC §8: on failure, the batch's messages are left untouched (`pending`)
- * — only the batch row moves, either back to `queued` with backoff (via
- * {@link nextAttemptAt}) or, after its 5th failed attempt, to `failed` with
- * a superadmin alert. Either way the consecutive-failure streak is bumped.
+ * SPEC §8/§9.2: on failure, the batch's messages are left untouched
+ * (`pending`) — only the batch row moves, either back to `queued` with
+ * backoff (via {@link nextAttemptAt}) or, after its 5th failed attempt, to
+ * `failed` with a superadmin alert. Either way the consecutive-failure
+ * streak is bumped, and `usage` (this attempt's prefilter + — if the
+ * extractor was reached and itself failed — its billed-but-unparseable
+ * `ExtractionError.usage`) is accumulated onto the batch's running
+ * token/cost totals via {@link accumulateUsage}: a model that returns
+ * billed, invalid JSON on every attempt still spends real money, and that
+ * spend must count toward `spentTodayUsd` even though the batch never
+ * succeeds (SPEC §9.2's budget cap would otherwise never trip).
  */
-async function markFailedOrRetry(deps: AppDeps, batch: BatchRow, err: unknown, now: Date): Promise<void> {
+async function markFailedOrRetry(
+  deps: AppDeps,
+  batch: BatchRow,
+  err: unknown,
+  usage: Usage,
+  now: Date,
+): Promise<void> {
   const message = err instanceof Error ? err.message : String(err);
   const attempts = batch.attempts + 1;
   const next = nextAttemptAt(attempts, now);
+  const totals = accumulateUsage(batch, usage);
 
   if (next === null) {
     await deps.db
       .update(analysisBatches)
-      .set({ status: 'failed', attempts, error: message, finishedAt: now, nextAttemptAt: null })
+      .set({
+        status: 'failed',
+        attempts,
+        error: message,
+        finishedAt: now,
+        nextAttemptAt: null,
+        inputTokens: totals.inputTokens,
+        outputTokens: totals.outputTokens,
+        costUsd: totals.costUsd,
+      })
       .where(eq(analysisBatches.id, batch.id));
     await deps.errors.alert(`batch-failed:${String(batch.id)}`, texts.errors.batchFailed(batch.id, message));
   } else {
     await deps.db
       .update(analysisBatches)
-      .set({ status: 'queued', attempts, error: message, nextAttemptAt: next })
+      .set({
+        status: 'queued',
+        attempts,
+        error: message,
+        nextAttemptAt: next,
+        inputTokens: totals.inputTokens,
+        outputTokens: totals.outputTokens,
+        costUsd: totals.costUsd,
+      })
       .where(eq(analysisBatches.id, batch.id));
   }
 
@@ -254,6 +307,13 @@ async function runOneBatch(deps: AppDeps, batch: BatchRow, now: Date): Promise<v
   }
   const messageIds = batchMessages.map((m) => m.id);
 
+  // Accumulated *this attempt's* usage only (prefilter, plus the extractor's
+  // if it failed) — `markFailedOrRetry`/`markDone` add it on top of the
+  // batch's own running totals from any earlier attempt via
+  // `accumulateUsage`. Read outside the `try` so the `catch` below can still
+  // see whatever was spent before the throw (SPEC §9.2 — every attempt's
+  // spend counts, success or failure).
+  let usage = zeroUsage();
   try {
     const members = await listMembersWithUsers(deps.db, deps.workspace.id);
     const participants = toParticipants(members);
@@ -278,7 +338,6 @@ async function runOneBatch(deps: AppDeps, batch: BatchRow, now: Date): Promise<v
       prompt,
     );
 
-    let usage = zeroUsage();
     let prefilterModel: string | null = null;
 
     if (ai.decision) {
@@ -308,7 +367,14 @@ async function runOneBatch(deps: AppDeps, batch: BatchRow, now: Date): Promise<v
     });
     await resetConsecutiveFailures(deps.db, now);
   } catch (err) {
-    await markFailedOrRetry(deps, batch, err, now);
+    // `ExtractionError.usage` sums every attempt the extractor itself made
+    // (all of it billed even though none parsed) — fold it into this
+    // attempt's usage so a billed-but-invalid response is never lost, on
+    // top of whatever the prefilter already spent above.
+    if (err instanceof ExtractionError) {
+      usage = sumUsage(usage, err.usage);
+    }
+    await markFailedOrRetry(deps, batch, err, usage, now);
   }
 }
 
@@ -366,9 +432,14 @@ export const analyzeJob: Job = {
     }
 
     for (let i = 0; i < MAX_BATCHES_PER_TICK; i++) {
-      const batch = await claimNextBatch(deps.db, { now });
+      // Fresh per batch, not the tick's `now` above: up to 5 batches run
+      // sequentially here, each potentially a real (slow) LLM call, so
+      // reusing one timestamp across all of them would let backoff/latency
+      // bookkeeping drift from wall-clock reality on a long tick.
+      const batchNow = deps.clock.now();
+      const batch = await claimNextBatch(deps.db, { now: batchNow });
       if (!batch) break;
-      await runOneBatch(deps, batch, now);
+      await runOneBatch(deps, batch, batchNow);
     }
   },
 };

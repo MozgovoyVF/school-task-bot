@@ -67,8 +67,12 @@ export async function enqueueBatches(db: Db, args: { now: Date }): Promise<numbe
     .select({
       chatId: messages.chatId,
       pendingCount: sql<number>`count(*)::int`,
-      lastMessageAt: sql<Date>`max(${messages.sentAt})`,
-      oldestPendingAt: sql<Date>`min(${messages.sentAt})`,
+      // postgres.js hands timestamps back as strings when read through a raw
+      // `sql` template (no column-level type info to parse against) — the
+      // `sql<string>` hint says so honestly; `sql<Date>` would be a
+      // compile-time-only lie, since nothing casts the runtime value.
+      lastMessageAt: sql<string>`max(${messages.sentAt})`,
+      oldestPendingAt: sql<string>`min(${messages.sentAt})`,
     })
     .from(messages)
     .where(and(eq(messages.analysisStatus, 'pending'), isNull(messages.batchId)))
@@ -86,8 +90,6 @@ export async function enqueueBatches(db: Db, args: { now: Date }): Promise<numbe
   for (const row of pendingByChat) {
     if (openChatIds.has(row.chatId)) continue;
 
-    // postgres.js does not know these two are timestamps (they come back through a raw `sql` template,
-    // not a typed column selection), so it hands them back as strings rather than parsing them to `Date`.
     const stats: PendingStats = {
       pendingCount: row.pendingCount,
       lastMessageAt: new Date(row.lastMessageAt),
@@ -133,11 +135,25 @@ async function enqueueOneChat(
         firstMessageId: ids[0],
         lastMessageId: ids[ids.length - 1],
         messageCount: ids.length,
+        // CLAUDE.md: business-logic "now" comes only from the injected
+        // clock, never SQL `now()` — without this, `createdAt` would fall
+        // back to the column's `defaultNow()` and diverge from the caller's
+        // clock (fixed under tests, and generally a hair behind SQL `now()`
+        // in production too).
+        createdAt: now,
       })
       .returning();
     if (!batch) throw new Error('enqueueBatches: insert into analysis_batches returned no row');
 
-    await tx.update(messages).set({ batchId: batch.id }).where(inArray(messages.id, ids));
+    // `AND batch_id IS NULL` is a belt-and-braces guard, not load-bearing:
+    // `ids` was just selected under this same transaction with that same
+    // filter, so it should already be true — but a message never being
+    // silently reassigned away from whatever batch it is already in is
+    // worth the extra clause.
+    await tx
+      .update(messages)
+      .set({ batchId: batch.id })
+      .where(and(inArray(messages.id, ids), isNull(messages.batchId)));
     return batch.id;
   });
 }

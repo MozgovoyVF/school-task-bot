@@ -16,6 +16,7 @@ import { getState } from '../../../src/domain/system/appState.js';
 import { messages, memberships, analysisBatches } from '../../../src/db/schema/index.js';
 import { analyzeJob } from '../../../src/scheduler/jobs/analyze.js';
 import { enqueueBatches, claimNextBatch, recoverStaleBatches } from '../../../src/ai/pipeline/batcher.js';
+import { spentTodayUsd } from '../../../src/ai/budget.js';
 import { LlmExtractionProvider } from '../../../src/ai/pipeline/extract.js';
 import { FixtureClient } from '../../../src/ai/providers/fixture.js';
 import type {
@@ -170,8 +171,11 @@ describe('enqueueBatches (SPEC §8)', () => {
       expect(after?.batchId).toBe(batch?.id);
     }
 
-    // A message saved after enqueueBatches ran is not swept into the already-created batch.
+    // A message saved after enqueueBatches ran is not swept into the already-created batch: re-running
+    // enqueueBatches while the first batch is still open (`queued`) must be a no-op for this chat.
     const m4 = await insertMessage(chat.id, 4, author.id, now, 'новое сообщение');
+    const secondRun = await enqueueBatches(db, { now });
+    expect(secondRun).toHaveLength(0);
     const [m4After] = await db.select().from(messages).where(eq(messages.id, m4.id));
     expect(m4After?.batchId).toBeNull();
   });
@@ -358,7 +362,49 @@ describe('analyzeJob', () => {
     expect(superadminAlerts).toHaveLength(1);
   });
 
-  it('alerts once after 5 consecutive LLM failures across different batches, and a success resets the streak', async () => {
+  it('accumulates cost from every failed attempt even though the batch never succeeds, so it still counts toward spentTodayUsd', async () => {
+    const clock = fixedClock('2026-09-23T09:00:00Z');
+    // A model that returns a *billed* response every time, but never one that parses as valid JSON:
+    // `LlmExtractionProvider` bills `response.usage` before it discovers the content does not parse
+    // (see `parseContent` in extract.ts), and after MAX_ATTEMPTS_PER_MODEL (2) tries per model throws
+    // `ExtractionError` carrying the summed usage of both calls. With one model configured (`fallback:
+    // null`), that is 2 billed calls per `analyzeJob` attempt.
+    const billedButInvalid: CompletionResponse = {
+      content: 'not valid json',
+      usage: { inputTokens: 50, outputTokens: 10, costUsd: 0.002 },
+      model: 'fixture/primary',
+      raw: {},
+    };
+    const script = Array.from({ length: 10 }, () => billedButInvalid);
+    const ai: AiProviders = {
+      extraction: extractorFrom(script),
+      decision: null,
+      client: UNUSED_CLIENT,
+      models: { primary: 'fixture/primary', fallback: null },
+    };
+    const deps = await makeDeps(clock, ai);
+    const chat = await makeActiveChat(deps.workspace.id, -250, clock.now());
+    const author = await makeMember(deps.workspace.id, 25, 'Costly');
+    await insertMessage(chat.id, 1, author.id, new Date(clock.now().getTime() - 200_000), 'поручение');
+
+    const backoffMinutes = [1, 5, 15, 15, null] as const;
+    for (const minutes of backoffMinutes) {
+      await analyzeJob.run(deps);
+      if (minutes !== null) clock.advance(minutes * 60_000 + 1000);
+    }
+
+    const [batch] = await db.select().from(analysisBatches).where(eq(analysisBatches.chatId, chat.id));
+    expect(batch?.status).toBe('failed');
+    // 5 failed attempts × 2 billed calls each × 0.002 = 0.02 — accumulated across every attempt, not
+    // just the last one (I1: a naive implementation that only recorded the final attempt, or none at
+    // all, would show 0 or 0.004 here).
+    expect(Number(batch?.costUsd)).toBeCloseTo(0.02, 6);
+
+    const spent = await spentTodayUsd(db, { now: clock.now(), tz: deps.workspace.timezone });
+    expect(spent).toBeCloseTo(0.02, 6);
+  });
+
+  it('alerts once after 5 consecutive LLM failures across different batches, and a success genuinely resets the streak (4 more failures after it do not re-alert)', async () => {
     const clock = fixedClock('2026-09-23T09:00:00Z');
     const failScript = Array.from({ length: 10 }, () => new Error('llm down'));
     const ai: AiProviders = {
@@ -403,6 +449,32 @@ describe('analyzeJob', () => {
     await analyzeJob.run(successDeps);
     const afterSuccess = await getState(db, 'llm:consecutive_failures', ConsecutiveFailuresState);
     expect(afterSuccess).toEqual({ count: 0 });
+
+    // Proof the streak was *genuinely* reset by the success above, not just coincidentally sitting at 0
+    // from the alert's own reset: 4 more failures — one short of the 5-in-a-row threshold — must not
+    // alert again. If the success above had not actually reset the counter (e.g. the reset call were
+    // deleted), this would still be counting up from wherever the first batch of 5 left it and could
+    // fire a second alert here, or fail to reach exactly {count: 4}.
+    for (let i = 0; i < 4; i++) {
+      const moreChat = await makeActiveChat(deps.workspace.id, -410 - i, clock.now());
+      const moreAuthor = await makeMember(deps.workspace.id, 41 + i, `Retry${String(i)}`);
+      await insertMessage(
+        moreChat.id,
+        1,
+        moreAuthor.id,
+        new Date(clock.now().getTime() - 200_000),
+        'ещё одно сообщение с поручением',
+      );
+    }
+    await analyzeJob.run(deps);
+
+    const afterFourMore = await getState(db, 'llm:consecutive_failures', ConsecutiveFailuresState);
+    expect(afterFourMore).toEqual({ count: 4 });
+
+    const alertTextsAfter = (deps.messenger as FakeMessenger).sent.filter(
+      (m) => m.chatId === SUPERADMIN_ID && m.text.includes('ошибок LLM подряд'),
+    );
+    expect(alertTextsAfter).toHaveLength(1); // still just the one alert from the first 5-in-a-row
   });
 
   it('pauses auto-analysis once the daily budget is spent, alerts superadmin and owner once per day, and resumes the next day', async () => {
