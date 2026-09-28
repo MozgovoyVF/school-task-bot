@@ -93,9 +93,10 @@ export const ExtractionWire = z.object({ actions: z.array(ActionWire).max(20) })
 
 /**
  * Recursively renames every `oneOf` key to `anyOf`. zod v4's `toJSONSchema`
- * emits `oneOf` for discriminated unions and for `.nullable()` (an
- * exclusive union with `null`); strict structured-output mode only
- * understands `anyOf` (D4).
+ * emits `oneOf` for `z.discriminatedUnion`; strict structured-output mode
+ * only understands `anyOf` (D4). The walk covers the whole tree (not just
+ * the discriminated union) to stay robust if the schema grows more unions
+ * or a future zod version changes what emits `oneOf`.
  */
 function replaceOneOfWithAnyOf(node: unknown): unknown {
   if (Array.isArray(node)) {
