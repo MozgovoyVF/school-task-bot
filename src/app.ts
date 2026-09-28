@@ -20,6 +20,7 @@ import { systemClock } from './time/clock.js';
 import type { Clock } from './time/clock.js';
 import { createTicker } from './scheduler/ticker.js';
 import { pendingChatsJob } from './scheduler/jobs/pendingChats.js';
+import { retentionJob } from './scheduler/jobs/retention.js';
 import { buildHttpServer } from './http/server.js';
 import { checkPrivacyMode } from './bot/startupChecks.js';
 import { syncCommands } from './bot/commands.js';
@@ -140,12 +141,13 @@ export async function startApp(env: Env, overrides?: StartAppOverrides): Promise
   await checkPrivacyMode(deps, bot.botInfo);
   await syncCommands({ db, workspace, superadminIds: env.SUPERADMIN_TG_IDS }, bot.api);
 
-  const ticker = createTicker(deps, [pendingChatsJob]);
+  const ticker = createTicker(deps, [pendingChatsJob, retentionJob]);
   // One synchronous tick before we start serving traffic, so `/healthz`
   // doesn't 503 on a cold start waiting for the first interval tick.
   // `start()` then keeps the heartbeat refreshed going forward; the extra
-  // immediate tick it fires is harmless (every job here — just
-  // `pendingChatsJob` as of Task 1.6 — is idempotent).
+  // immediate tick it fires is harmless (every job here is idempotent —
+  // `pendingChatsJob`'s CAS claims and `retentionJob`'s `dailyJob` wrapper
+  // both no-op on a repeat call).
   await ticker.tickOnce();
   ticker.start();
 

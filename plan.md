@@ -1407,17 +1407,17 @@ describe('stage 0 heuristics (SPEC §7.3)', () => {
 
 **Интерфейсы:** Produces `runRetention(db, { now: Date }): Promise<{ deletedMessages: number; clearedTexts: number; clearedRaw: number }>` и `retentionJob = dailyJob('retention', '03:30', …)`.
 
-- [ ] **Шаг 1: падающие тесты** (сдвиг времени через `fixedClock`)
+- [x] **Шаг 1: падающие тесты** (сдвиг времени через `fixedClock`)
   1. Сообщение старше 31 дня → строка удалена.
   2. Сообщение возрастом 29 дней → осталось.
   3. Сообщение старше 31 дня, на которое ссылается pending-proposal (`source_message_ids`) → строка осталась, `text=NULL`.
   4. У batch старше `batchRawDays` → `raw_response=NULL`.
   5. `messageDays` берётся из настроек workspace чата (например, 10).
   6. Job в тот же день второй раз не запускается.
-- [ ] **Шаг 2:** FAIL.
-- [ ] **Шаг 3: реализация.** SQL с параметром `$now`; удаление строк по условию `NOT EXISTS (SELECT 1 FROM proposals p WHERE p.status='pending' AND m.id = ANY(p.source_message_ids))`.
-- [ ] **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(retention): delete message texts after retention period`.
+- [x] **Шаг 2:** FAIL.
+- [x] **Шаг 3: реализация.** SQL с параметром `$now`; удаление строк по условию `NOT EXISTS (SELECT 1 FROM proposals p WHERE p.status='pending' AND m.id = ANY(p.source_message_ids))`.
+- [x] **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(retention): delete message texts after retention period`.
 - [ ] **Шаг 6: закрытие фазы.**
   1. `docs/` и `CHANGELOG.md` обновлены.
   2. RC-релиз `v0.2.0-rc.1` → деплой на dev (👤).
