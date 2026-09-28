@@ -643,7 +643,7 @@ describe('policy (SPEC §9.6)', () => {
   - `findPossibleDuplicate(db, { workspaceId: number; title: string; assignee: AssigneeResolution; now: Date }): Promise<{ type: 'task' | 'proposal'; id: number; title: string; similarity: number } | null>`;
   - `isRepeatInBatch(existing: ResolvedAction[], candidate: ResolvedAction): boolean` — тот же набор `sourceMessageIds` и то же нормализованное название (SPEC §9.7 п. 3).
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
   1. Открытая задача «Подготовить расписание на октябрь» (P1) и кандидат «подготовить расписание на октябрь!» (P1) → дубль, `type='task'`.
   2. Тот же текст с другим исполнителем → не дубль.
   3. Задача создана 15 дней назад → не дубль.
@@ -652,10 +652,10 @@ describe('policy (SPEC §9.6)', () => {
   6. Pending-proposal с похожим `payload.title` → дубль, `type='proposal'`.
   7. Совпадают исполнители `all` и `all`, а также `none` и `none`.
   8. `isRepeatInBatch`: одинаковые ID и название, различающееся регистром → `true`.
-- [ ] **Шаг 2:** FAIL.
-- [ ] **Шаг 3: реализация.** SQL: `similarity(lower(title), lower($title)) >= 0.6`, `status IN ('open','in_progress')`, `created_at >= $now - 14 days`. Для proposals — `status='pending'` и `payload->>'title'`. Берётся строка с максимальной похожестью.
-- [ ] **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(ai): detect possible duplicates with trigram similarity`.
+- [x] **Шаг 2:** FAIL.
+- [x] **Шаг 3: реализация.** SQL: `similarity(lower(title), lower($title)) >= 0.6`, `status IN ('open','in_progress')`, `created_at >= $now - 14 days`. Для proposals — `status='pending'` и `payload->>'title'`. Берётся строка с максимальной похожестью.
+- [x] **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(ai): detect possible duplicates with trigram similarity`.
 
 ### Task 2.9: Батчинг, analyze job, бюджет, backoff
 
