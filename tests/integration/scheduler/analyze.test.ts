@@ -172,9 +172,15 @@ describe('enqueueBatches (SPEC §8)', () => {
     }
 
     // A message saved after enqueueBatches ran is not swept into the already-created batch: re-running
-    // enqueueBatches while the first batch is still open (`queued`) must be a no-op for this chat.
+    // enqueueBatches while the first batch is still open (`queued`) must be a no-op for this chat — even
+    // once the new message is, on its own, old enough to satisfy shouldEnqueue's quiet period. Advancing
+    // the clock past quietSeconds (180s) before the second run makes the open-batch guard the *only*
+    // thing standing between m4 and a batch: removing `if (openChatIds.has(row.chatId)) continue;` in
+    // batcher.ts must fail this assertion.
     const m4 = await insertMessage(chat.id, 4, author.id, now, 'новое сообщение');
-    const secondRun = await enqueueBatches(db, { now });
+    clock.advance(200_000);
+    const laterNow = clock.now();
+    const secondRun = await enqueueBatches(db, { now: laterNow });
     expect(secondRun).toHaveLength(0);
     const [m4After] = await db.select().from(messages).where(eq(messages.id, m4.id));
     expect(m4After?.batchId).toBeNull();
@@ -404,9 +410,11 @@ describe('analyzeJob', () => {
     expect(spent).toBeCloseTo(0.02, 6);
   });
 
-  it('alerts once after 5 consecutive LLM failures across different batches, and a success genuinely resets the streak (4 more failures after it do not re-alert)', async () => {
+  it('alerts once after 5 consecutive LLM failures across different batches, and a success genuinely resets the streak (proven load-bearing by failures both before and after it)', async () => {
     const clock = fixedClock('2026-09-23T09:00:00Z');
-    const failScript = Array.from({ length: 10 }, () => new Error('llm down'));
+    // 11 failing batches happen across this test (5 + 2 + 4 = 11), each attempt costing
+    // MAX_ATTEMPTS_PER_MODEL (2) script entries (one model, no fallback) — comfortably under 30.
+    const failScript = Array.from({ length: 30 }, () => new Error('llm down'));
     const ai: AiProviders = {
       extraction: extractorFrom(failScript),
       decision: null,
@@ -433,8 +441,21 @@ describe('analyzeJob', () => {
     expect(alertTexts).toHaveLength(1);
     expect(alertTexts[0]?.text).toContain('5 ошибок LLM подряд');
 
-    // One more chat whose prefilter call *succeeds* (skips the extractor) resets the streak — it was
-    // already reset to 0 above, so this just proves a success keeps it at 0 rather than accumulating.
+    // Two MORE failures, below the 5-in-a-row threshold, so the counter genuinely moves off 0 *before*
+    // the success below runs. Without this, the success's own reset would land on an already-0 counter
+    // and prove nothing either way (this is exactly what the D43 re-review flagged: commenting out both
+    // `resetConsecutiveFailures` calls in analyze.ts still left the original version of this test green).
+    for (let i = 0; i < 2; i++) {
+      const chat = await makeActiveChat(deps.workspace.id, -320 - i, clock.now());
+      const author = await makeMember(deps.workspace.id, 50 + i, `Pre${String(i)}`);
+      await insertMessage(chat.id, 1, author.id, new Date(clock.now().getTime() - 200_000), 'ещё поручение');
+    }
+    await analyzeJob.run(deps);
+    const afterTwoMore = await getState(db, 'llm:consecutive_failures', ConsecutiveFailuresState);
+    expect(afterTwoMore).toEqual({ count: 2 });
+
+    // One more chat whose prefilter call *succeeds* (skips the extractor) must reset the streak from a
+    // genuinely nonzero 2, not from an already-0 counter.
     const successAi: AiProviders = {
       extraction: { extract: () => Promise.reject(new Error('should not be called')) },
       decision: fakeDecision(0.1),
@@ -450,11 +471,11 @@ describe('analyzeJob', () => {
     const afterSuccess = await getState(db, 'llm:consecutive_failures', ConsecutiveFailuresState);
     expect(afterSuccess).toEqual({ count: 0 });
 
-    // Proof the streak was *genuinely* reset by the success above, not just coincidentally sitting at 0
-    // from the alert's own reset: 4 more failures — one short of the 5-in-a-row threshold — must not
-    // alert again. If the success above had not actually reset the counter (e.g. the reset call were
-    // deleted), this would still be counting up from wherever the first batch of 5 left it and could
-    // fire a second alert here, or fail to reach exactly {count: 4}.
+    // Proof the streak was *genuinely* reset by the success above, from 2, not merely sitting at 0
+    // already: 4 more failures — one short of the 5-in-a-row threshold — must land at exactly
+    // {count: 4} with no second alert. If the success's reset had not run (e.g. its
+    // `resetConsecutiveFailures` call were deleted), the counter would instead resume from 2 and reach
+    // 2 + 4 = 6, tripping a second alert here — that is what makes this assertion load-bearing.
     for (let i = 0; i < 4; i++) {
       const moreChat = await makeActiveChat(deps.workspace.id, -410 - i, clock.now());
       const moreAuthor = await makeMember(deps.workspace.id, 41 + i, `Retry${String(i)}`);

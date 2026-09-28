@@ -167,7 +167,11 @@ async function enqueueOneChat(
  * deadline" to "stale-claim deadline": it is set to `now +
  * STALE_RUNNING_BATCH_MS`, which is what {@link recoverStaleBatches} later
  * compares against to reclaim a batch whose worker died mid-processing.
- * Returns `null` when nothing is claimable right now.
+ * Orders by `createdAt` then `id` — `createdAt` is now set from the
+ * injected clock (see `enqueueOneChat`), so a single `enqueueBatches` call
+ * can create several batches with the exact same timestamp; `id` breaks
+ * that tie deterministically instead of leaving Postgres to pick an
+ * arbitrary row order. Returns `null` when nothing is claimable right now.
  */
 export async function claimNextBatch(db: Db, args: { now: Date }): Promise<BatchRow | null> {
   return db.transaction(async (tx) => {
@@ -180,7 +184,7 @@ export async function claimNextBatch(db: Db, args: { now: Date }): Promise<Batch
           or(isNull(analysisBatches.nextAttemptAt), lte(analysisBatches.nextAttemptAt, args.now)),
         ),
       )
-      .orderBy(asc(analysisBatches.createdAt))
+      .orderBy(asc(analysisBatches.createdAt), asc(analysisBatches.id))
       .limit(1)
       .for('update', { skipLocked: true });
 
