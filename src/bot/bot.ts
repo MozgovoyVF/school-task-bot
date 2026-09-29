@@ -13,6 +13,7 @@ import type { ErrorReporter } from '../ops/errorReporter.js';
 import type { Messenger } from '../domain/messenger.js';
 import type { WorkspaceRow } from '../domain/workspaces/repo.js';
 import type { TaskHook } from '../domain/tasks/service.js';
+import type { AiProviders } from '../ai/providers/types.js';
 import type { BotContext } from './context.js';
 import { createErrorsMiddleware } from './middleware/errors.js';
 import { createContextMiddleware } from './middleware/context.js';
@@ -28,6 +29,7 @@ import { registerGroupHandlers } from './handlers/group.js';
 import { registerProposalCallbackHandlers } from './handlers/proposalCallbacks.js';
 import { registerTimezoneConversation } from './conversations/timezone.js';
 import { registerEditPersonConversation } from './conversations/editPerson.js';
+import { registerEditProposalConversation } from './conversations/editProposal.js';
 
 /**
  * The subset of `AppDeps` (`src/deps.ts`) that bot construction and its
@@ -43,8 +45,10 @@ import { registerEditPersonConversation } from './conversations/editPerson.js';
  * SPEC §5.2). `taskHooks` was added in Task 2.13 — `src/bot/handlers/
  * proposalCallbacks.ts`'s decision handlers need it for `createTaskService`
  * (D34's original "no benefit" reasoning for not widening this interface no
- * longer holds for this one field specifically; `ai` still has no handler
- * that needs it, so it stays off `BotDeps`).
+ * longer holds for this one field specifically). `ai` was added in Task
+ * 2.14 — `src/bot/conversations/editProposal.ts`'s free-text date step
+ * needs it for `parseDateText` (D34's reasoning finally runs out: a
+ * bot-layer handler now does call into `ai`).
  */
 export interface BotDeps {
   config: Env;
@@ -55,6 +59,7 @@ export interface BotDeps {
   messenger: Messenger;
   workspace: WorkspaceRow;
   taskHooks: TaskHook[];
+  ai: AiProviders | null;
 }
 
 /**
@@ -106,6 +111,7 @@ export function createBot(
 
   registerTimezoneConversation(bot, deps);
   registerEditPersonConversation(bot, deps);
+  registerEditProposalConversation(bot, deps);
   registerDmHandlers(bot);
   registerAdminHandlers(bot, deps, startedAt);
   registerTransferHandlers(bot, deps);

@@ -7,6 +7,7 @@ import { createLogger } from '../../src/ops/logger.js';
 import { loadEnv } from '../../src/config/env.js';
 import { ensureDefaultWorkspace } from '../../src/domain/workspaces/repo.js';
 import { DEFAULT_WORKSPACE_NAME } from '../../src/config/constants.js';
+import type { AiProviders } from '../../src/ai/providers/types.js';
 import { getTestDb, truncateAll } from './db.js';
 import { fixedClock } from './clock.js';
 import { FakeMessenger } from './fakeMessenger.js';
@@ -132,6 +133,13 @@ export async function createBotHarness(opts?: {
    * `capturingLogger`).
    */
   logger?: ReturnType<typeof createLogger>;
+  /**
+   * Overrides the harness's default `null` (AI analysis disabled) — a test exercising
+   * `src/bot/conversations/editProposal.ts`'s free-text date step (Task 2.14, needs `deps.ai.client`)
+   * passes a fixture-backed `AiProviders` here (mirrors `tests/integration/scheduler/analyze.test.ts`'s
+   * own pattern for building one around `FixtureClient`).
+   */
+  ai?: AiProviders | null;
 }): Promise<BotHarness> {
   const db = getTestDb();
   await truncateAll(db);
@@ -153,7 +161,17 @@ export async function createBotHarness(opts?: {
     name: DEFAULT_WORKSPACE_NAME,
     timezone: opts?.workspaceTimezone ?? 'Europe/Moscow',
   });
-  const deps: BotDeps = { config, db, clock, logger, errors, messenger, workspace, taskHooks: [] };
+  const deps: BotDeps = {
+    config,
+    db,
+    clock,
+    logger,
+    errors,
+    messenger,
+    workspace,
+    taskHooks: [],
+    ai: opts?.ai ?? null,
+  };
   const calls: RecordedCall[] = [];
   const bot = createBot(deps, { botInfo: defaultBotInfo(), client: { fetch: createFakeFetch(calls) } });
 

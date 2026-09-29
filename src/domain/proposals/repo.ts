@@ -22,6 +22,12 @@ export interface ProposalPayloadDuplicate {
   title: string;
 }
 
+/** One field's before/after pair, already rendered as a display string (plan.md Task 2.14's `ownerEdits`, SPEC §20.4). */
+export interface ProposalPayloadOwnerEdit {
+  before: string | null;
+  after: string | null;
+}
+
 /**
  * `proposals.payload` (jsonb, plan.md Task 2.10's brief): the card-facing
  * projection of one `ResolvedAction` (`src/ai/pipeline/resolve.ts`) plus the
@@ -58,6 +64,15 @@ export interface ProposalPayload {
   noReaction?: boolean;
   quote: string | null;
   quoteAuthorName: string | null;
+  /**
+   * Fields the Owner changed in the editProposal dialog (`src/bot/conversations/editProposal.ts`, plan.md
+   * Task 2.14) before accepting, keyed by field name (`title`/`assignee`/`due`/`priority`/`description`) —
+   * SPEC §20.4's before/after pairs. Written by `editProposal.ts` itself, in a best-effort follow-up write
+   * after `acceptProposal` (`src/domain/proposals/decide.ts`) has already succeeded — never by
+   * `acceptProposal` itself, which predates this field and is not touched by this task. Absent when the
+   * proposal was accepted with no edits, or was never accepted via that dialog at all.
+   */
+  ownerEdits?: Record<string, ProposalPayloadOwnerEdit>;
 }
 
 export interface NewProposal {
@@ -130,6 +145,8 @@ const DueSchema = z.object({
   invalid: z.boolean(),
 });
 
+const OwnerEditSchema = z.object({ before: z.string().nullable(), after: z.string().nullable() });
+
 export const ProposalPayloadSchema = z.object({
   title: z.string().optional(),
   description: z.string().nullable().optional(),
@@ -148,6 +165,7 @@ export const ProposalPayloadSchema = z.object({
   noReaction: z.boolean().optional(),
   quote: z.string().nullable(),
   quoteAuthorName: z.string().nullable(),
+  ownerEdits: z.record(z.string(), OwnerEditSchema).optional(),
 });
 
 /** `safeParse` wrapper — `null` on anything that doesn't match `ProposalPayload`'s shape (never throws). */

@@ -682,6 +682,74 @@ export const texts = {
     },
   },
   /**
+   * The "✏️ Изменить" edit dialog (`src/bot/conversations/editProposal.ts`,
+   * plan.md Task 2.14, D23) — only ever entered for a `create`-kind
+   * proposal (it ends in `acceptProposal`, which only accepts that kind).
+   * `menuHeader`/`descriptionLine` are assembled around `texts.proposalCard`'s
+   * own `titleLine`/`metaLine` (same card look as the original proposal
+   * card) — every parameter carrying user/DB text arrives here already
+   * HTML-escaped by the caller (`src/bot/views/editMenu.ts`), same
+   * convention as `texts.proposalCard` above. `titlePrompt`/`descriptionPrompt`,
+   * by contrast, are called directly from the conversation with a raw,
+   * unescaped current value (mirrors `texts.people.namePrompt`'s own
+   * convention) and escape it themselves.
+   */
+  editProposal: {
+    /** Shown instead of entering the dialog for any proposal `kind` other than `create` — the dialog's
+     * only exit, "Сохранить и создать", always calls `acceptProposal`, which only accepts that kind. */
+    notSupported: 'Изменение доступно только для новых задач.',
+    menuHeader: '✏️ Изменение задачи',
+    /** The "Описание" field's own "nothing set" placeholder — both the menu preview (`descriptionLine`) and the field prompt's current value (`src/bot/conversations/editProposal.ts`) use this. */
+    noDescription: 'без описания',
+    descriptionLine(description: string | null): string {
+      return `📝 ${description === null ? 'без описания' : description}`;
+    },
+    fieldTitleButton: 'Название',
+    fieldAssigneeButton: 'Исполнитель',
+    fieldDueButton: 'Срок',
+    fieldPriorityButton: 'Приоритет',
+    fieldDescriptionButton: 'Описание',
+    saveButton: '✅ Сохранить и создать',
+    backButton: '↩️ Назад',
+    /** Shown instead of a new value when an update that expects a button press arrives as something else. */
+    pickButtonHint: 'Пожалуйста, воспользуйтесь кнопками.',
+    /** The dialog's own "↩️ Назад" — leaves without saving. */
+    cancelled: 'Изменения отменены.',
+    /** Shown when an update other than a text message arrives while a field's new value is expected. */
+    textHint: 'Пожалуйста, отправьте текстовое сообщение.',
+    /** The "Название" field's own prompt — `current` is the proposal's own (unescaped) title. */
+    titlePrompt(current: string): string {
+      return `Текущее название: <b>${escapeHtml(current)}</b>\nВведите новое название.`;
+    },
+    /** The "Описание" field's own prompt — `current` is already a display string ("без описания" or the
+     * proposal's own unescaped description). */
+    descriptionPrompt(current: string): string {
+      return (
+        `Текущее описание: <b>${escapeHtml(current)}</b>\n` +
+        'Введите новое описание или отправьте «-», чтобы убрать его.'
+      );
+    },
+    assigneeMenuTitle: 'Кому назначить?',
+    /** Assigns to the Owner themselves — this dialog is Owner-only (D40), so "Я" always means the Owner. */
+    assigneeSelfButton: 'Я',
+    priorityMenuTitle: 'Приоритет?',
+    dueMenuTitle: 'Срок?',
+    dueTodayButton: 'Сегодня',
+    dueTomorrowButton: 'Завтра',
+    dueFriButton: 'Пт',
+    dueNextMonButton: 'След. пн',
+    dueNoneButton: 'Без срока',
+    dueEnterButton: 'Ввести…',
+    dueTextPrompt: 'Введите дату и время свободным текстом, например «15.10 14:00» или «в четверг в 11».',
+    /** `label` is `texts.formatDue`'s own output for the parsed date. */
+    duePreview(label: string): string {
+      return `${label} — верно?`;
+    },
+    dateNotParsed: 'Не удалось разобрать дату. Попробуйте ещё раз, например «15.10 14:00».',
+    yesButton: 'Да',
+    noButton: 'Нет',
+  },
+  /**
    * The card outbox (`src/scheduler/jobs/cards.ts`, plan.md Task 2.12): the
    * two summary messages it sends instead of a proposal card, plus the
    * quiet-hours batch's button label.

@@ -965,7 +965,7 @@ export interface ProposalEdits { title?: string; assignee?: AssigneeResolution; 
   - `parseDateText(deps: AppDeps, text: string, ctx: { zone: string; now: Date }): Promise<ResolvedDue | null>` — промпт `parseDate.v1`, схема `Due`, дальше `resolveDue`; стоимость записывается как `analysis_batches` с `kind='manual'`;
   - `editProposalConversation` — conversations v2, `maxMillisecondsToWait = CONVERSATION_TIMEOUT_MS`.
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
   - `quickDue` (сейчас среда 2026-09-23 12:00 МСК):
     - `today` → 2026-09-23 all-day (23:59 МСК = `20:59Z`);
     - `tomorrow` → 24.09;
@@ -981,10 +981,11 @@ export interface ProposalEdits { title?: string; assignee?: AssigneeResolution; 
     3. «Срок» → `[Сегодня] [Завтра] [Пт] [След. пн] [Без срока] [Ввести…]`. «Ввести…» → текст «15.10 14:00» → превью «чт, 15 окт, 14:00 — верно?» → `[Да] [Нет]`.
     4. «Сохранить и создать» → задача с правками. В `proposals.payload.ownerEdits` записаны пары было/стало по полям (для SPEC §20.4).
     5. Member не может войти в диалог.
-- [ ] **Шаг 2:** FAIL.
-- [ ] **Шаг 3: реализация.** Все обращения к БД и LLM внутри диалога — через `conversation.external`. Сверить через Context7 → grammY conversations.
-- [ ] **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(bot): add proposal editing dialog with quick and free-text dates`.
+  - Не TDD-задача (D43): тесты написаны вместе с реализацией, не строго тест-первым — `tests/unit/time/quickDue.test.ts`, `tests/integration/ai/parseDate.test.ts` (нужен реальный `Db` для `settings.fuzzyTimes`/`analysis_batches` — не `tests/unit/ai/...`, вопреки брифу), `tests/integration/bot/editProposal.test.ts`.
+- [x] **Шаг 2:** FAIL.
+- [x] **Шаг 3: реализация.** Все обращения к БД и LLM внутри диалога — через `conversation.external`. Сверено через Context7 → grammY conversations (`wait`/`waitForCallbackQuery`/`external`/`skip`/`halt`'s `next` option — подтверждает, что во время активного диалога прочие `bot.callbackQuery` не видят обновление, пока диалог явно не отдаст его дальше).
+- [x] **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(bot): add proposal editing dialog with quick and free-text dates`.
 
 ### Task 2.15: `/inbox`, `/debug`, `/reanalyze`, расширенный `/admin`, истечение proposals
 
