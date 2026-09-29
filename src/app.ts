@@ -21,6 +21,9 @@ import type { Clock } from './time/clock.js';
 import { createTicker } from './scheduler/ticker.js';
 import { pendingChatsJob } from './scheduler/jobs/pendingChats.js';
 import { retentionJob } from './scheduler/jobs/retention.js';
+import { analyzeJob } from './scheduler/jobs/analyze.js';
+import { cardsJob } from './scheduler/jobs/cards.js';
+import { expireProposalsJob } from './scheduler/jobs/expireProposals.js';
 import { buildHttpServer } from './http/server.js';
 import { checkPrivacyMode } from './bot/startupChecks.js';
 import { syncCommands } from './bot/commands.js';
@@ -143,13 +146,27 @@ export async function startApp(env: Env, overrides?: StartAppOverrides): Promise
   await checkPrivacyMode(deps, bot.botInfo);
   await syncCommands({ db, workspace, superadminIds: env.SUPERADMIN_TG_IDS }, bot.api);
 
-  const ticker = createTicker(deps, [pendingChatsJob, retentionJob]);
+  // `analyzeJob`/`cardsJob` (Task 2.9/2.10/2.12) and `expireProposalsJob` (Task 2.15, D11) were built in
+  // Phase 2 but never registered here until now — the whole AI pipeline (batching, extraction, the card
+  // outbox, proposal expiry) previously never ran in production. `analyzeJob` itself still no-ops whenever
+  // `deps.ai` is `null` (no `OPENROUTER_API_KEY`/`LLM_MODEL_PRIMARY`, or — always true today — this
+  // composition root not yet constructing a real `AiProviders`, see `deps.ai: null` below), so this change
+  // alone doesn't yet turn AI analysis on; it only stops silently dropping it once that wiring lands.
+  const ticker = createTicker(deps, [
+    pendingChatsJob,
+    analyzeJob,
+    cardsJob,
+    expireProposalsJob,
+    retentionJob,
+  ]);
   // One synchronous tick before we start serving traffic, so `/healthz`
   // doesn't 503 on a cold start waiting for the first interval tick.
   // `start()` then keeps the heartbeat refreshed going forward; the extra
   // immediate tick it fires is harmless (every job here is idempotent —
-  // `pendingChatsJob`'s CAS claims and `retentionJob`'s `dailyJob` wrapper
-  // both no-op on a repeat call).
+  // `pendingChatsJob`'s CAS claims, `analyzeJob`'s `FOR UPDATE SKIP LOCKED`
+  // batch claim, `cardsJob`'s `notified_at` outbox guard, and
+  // `retentionJob`/`expireProposalsJob`'s shared `dailyJob` wrapper all
+  // no-op on a repeat call).
   await ticker.tickOnce();
   ticker.start();
 

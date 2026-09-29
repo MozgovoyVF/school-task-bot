@@ -10,7 +10,11 @@ import { userZone } from '../../time/zones.js';
 import { isQuietAt } from '../../time/quiet.js';
 import { formatDue } from '../../time/format.js';
 import { messageLink } from '../../bot/views/links.js';
-import { renderProposalCard, type ProposalCardView } from '../../bot/views/proposalCard.js';
+import {
+  renderProposalCard,
+  type ProposalCardRender,
+  type ProposalCardView,
+} from '../../bot/views/proposalCard.js';
 import { encodeCallback } from '../../bot/keyboards/callbackCodec.js';
 import { texts } from '../../bot/texts/ru.js';
 import { MessengerError, type Buttons, type MessengerErrorKind } from '../../domain/messenger.js';
@@ -305,6 +309,30 @@ async function buildCardView(ctx: BuildCtx, row: ProposalRow): Promise<ProposalC
     target: { taskId: task.id, title: task.title, before: null, after: null, field: null },
   };
   return view;
+}
+
+/**
+ * `/inbox`'s "press to resend" (plan.md Task 2.15): rebuilds and renders one proposal's card exactly as
+ * this job's own outbox loop would (`buildCardView` + `renderProposalCard`), for on-demand re-display —
+ * never wired into the outbox loop itself, and never touches `notified_at`/`owner_dm_message_id` (a resend
+ * is not a first delivery). Builds its own single-proposal `Loaders`/`BuildCtx` rather than sharing the
+ * outbox's per-tick ones, since a `/inbox` tap is a one-off, not part of a batch run. Returns `null` under
+ * the same conditions `buildCardView` does (see its own doc comment) — an unparsable payload, a D44
+ * target-is-a-proposal case, or a missing target task.
+ */
+export async function renderProposalCardForResend(
+  deps: Pick<AppDeps, 'db' | 'workspace' | 'logger'>,
+  row: ProposalRow,
+): Promise<ProposalCardRender | null> {
+  const owner = await getOwner(deps.db, deps.workspace.id);
+  const zone = owner ? userZone(owner.user, deps.workspace) : deps.workspace.timezone;
+  const members = await listMembersWithUsers(deps.db, deps.workspace.id);
+  const displayNameByUserId = new Map(members.map((m) => [m.user.id, m.membership.displayName]));
+  const loaders = makeLoaders(deps.db);
+  const buildCtx: BuildCtx = { loaders, displayNameByUserId, ownerZone: zone, logger: deps.logger };
+
+  const view = await buildCardView(buildCtx, row);
+  return view === null ? null : renderProposalCard(view, zone);
 }
 
 type SendResult = { ok: true; messageId: number } | { ok: false; kind: MessengerErrorKind };

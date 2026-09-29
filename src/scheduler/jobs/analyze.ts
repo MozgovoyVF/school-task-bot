@@ -369,7 +369,12 @@ async function runOneBatch(deps: AppDeps, batch: BatchRow, now: Date): Promise<v
       costUsd: String(Number(batch.costUsd ?? 0) + usage.costUsd),
       prefilterModel,
     };
-    await processBatch(deps, batchWithPrefilter, { mode: 'auto' });
+    // `kind === 'reanalyze'` (Task 2.15's `/reanalyze <chat> <N>`, superadmin-only) always suppresses the
+    // 👀 reaction on its source messages — `src/domain/proposals/queries.ts`'s `createReanalyzeBatch`
+    // builds the batch itself but has no way to stamp this onto the row (`analysis_batches` carries no
+    // `noReaction` column, only `kind`), so it is derived here, at the one place that actually calls
+    // `processBatch` for every batch kind alike (`ProcessBatchOptions.noReaction`, Task 2.10).
+    await processBatch(deps, batchWithPrefilter, { mode: 'auto', noReaction: batch.kind === 'reanalyze' });
     await resetConsecutiveFailures(deps.db, now);
   } catch (err) {
     // `ExtractionError.usage` sums every attempt the extractor itself made

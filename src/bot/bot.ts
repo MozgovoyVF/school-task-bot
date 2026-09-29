@@ -27,6 +27,7 @@ import { registerPeopleHandlers } from './handlers/people.js';
 import { registerPrivacyHandlers } from './handlers/privacy.js';
 import { registerGroupHandlers } from './handlers/group.js';
 import { registerProposalCallbackHandlers } from './handlers/proposalCallbacks.js';
+import { registerInboxHandlers } from './handlers/inbox.js';
 import { registerTimezoneConversation } from './conversations/timezone.js';
 import { registerEditPersonConversation } from './conversations/editPerson.js';
 import { registerEditProposalConversation } from './conversations/editProposal.js';
@@ -118,10 +119,18 @@ export function createBot(
   registerChatMemberHandlers(bot, deps);
   registerChatsHandlers(bot, deps);
   registerPeopleHandlers(bot, deps);
-  // Must run before registerGroupHandlers (privacy.ts's doc comment): its
-  // bot.on('message', ...) would otherwise swallow a /privacy update in a
-  // group before this command handler ever sees it.
+  // Must run before registerGroupHandlers (privacy.ts's doc comment, and — for the same reason —
+  // registerInboxHandlers's own `/inbox` command below): its bot.on('message', ...) would otherwise
+  // swallow a DM command update in a group before this handler ever sees it (`/privacy` and `/inbox`
+  // are both message-type updates; `registerGroupHandlers`'s catch-all matches every chat type and only
+  // returns early for non-group ones without calling `next()`, which — per grammY's middleware chain —
+  // stops any handler registered after it from ever running).
   registerPrivacyHandlers(bot);
+  // `registerInboxHandlers`'s `v1:p:*` callback half doesn't have this ordering constraint relative to
+  // `registerProposalCallbackHandlers` below (different update type — `callback_query`, not `message` —
+  // and both fall through unknown actions via `next()` symmetrically), only its `/inbox` command half
+  // does; registering the whole thing here, ahead of `registerGroupHandlers`, satisfies that.
+  registerInboxHandlers(bot, deps);
   registerGroupHandlers(bot, deps);
   registerProposalCallbackHandlers(bot, deps);
 

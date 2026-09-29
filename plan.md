@@ -1001,15 +1001,16 @@ export interface ProposalEdits { title?: string; assignee?: AssigneeResolution; 
   - `reanalyze(deps, { chatId, lastN?: number })` — если `lastN` не задан, failed-batch'и чата возвращаются в очередь (`batch_id=null` у их сообщений). Если задан, последние N сообщений с текстом переводятся в `pending` и собираются в новый batch с `kind='reanalyze'` и `noReaction`;
   - `expireProposalsJob = dailyJob('expire-proposals', '03:40', …)` (D11).
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
   1. `/inbox` → список неразобранных (по 5 на страницу). Нажатие → карточка присылается заново.
   2. `/debug` (superadmin) → последние 10 batch: время, число сообщений, shown и suppressed с причинами, стоимость, модель, статус и ошибка. Не-superadmin → `forbidden`.
   3. `/reanalyze <chatId> 10` → новый batch `reanalyze`; повторные proposals помечаются дублями (дедуп работает); реакции не ставятся.
   4. `/reanalyze <chatId>` без N → failed-сообщения снова в очереди.
   5. `/admin` показывает стоимость за сегодня и месяц, статистику за 7 дней и precision = accepted/(accepted+rejected); при нуле знаменателя — «н/д».
   6. Proposal возрастом 8 дней → `expired`. Возрастом 6 дней — остаётся.
-- [ ] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(bot): add /inbox, /debug, /reanalyze and AI stats in /admin`.
+  - Не TDD-задача (D43): тесты написаны вместе с реализацией, не строго тест-первым. Также: SPEC §12.2's команда `/reanalyze` — Superadmin, не Owner (бриф задачи ошибочно называл её owner-only «по D40»; реализовано по SPEC/`src/bot/commands.ts`, см. коммит).
+- [x] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(bot): add /inbox, /debug, /reanalyze and AI stats in /admin`.
 
 ### Task 2.16: Eval-датасет (≥150 синтетических кейсов)
 

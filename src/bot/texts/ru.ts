@@ -45,6 +45,9 @@ function pluralizeChas(count: number): string {
   return 'часов';
 }
 
+/** `/admin`'s precision line and other "nothing decided yet" ratios (SPEC §11.2's "н/д" — zero denominator). */
+const NO_DATA_LABEL = 'н/д';
+
 /** "1ч 02мин 03с" — a short, fixed-order duration for `/admin`'s uptime line. */
 function formatUptime(totalSeconds: number): string {
   const seconds = Math.max(0, Math.round(totalSeconds));
@@ -329,12 +332,34 @@ export const texts = {
     },
   },
   admin: {
-    /** `/admin` panel for a superadmin: build version and elapsed process uptime. */
-    panel(gitSha: string, uptimeSec: number): string {
+    /**
+     * `/admin` panel for a superadmin: build version, elapsed process uptime, and (Task 2.15) a short
+     * AI-pipeline summary — today's/this month's LLM spend, the last 7 days' shown/suppressed/accepted/
+     * rejected proposal counts, and `accepted/(accepted+rejected)` precision (`NO_DATA_LABEL` when that
+     * denominator is zero — SPEC §11.2's own "н/д" case, not a bug).
+     */
+    panel(
+      gitSha: string,
+      uptimeSec: number,
+      ai: {
+        costToday: number;
+        costMonth: number;
+        last7: { shown: number; suppressed: number; accepted: number; rejected: number };
+        precision: number | null;
+      },
+    ): string {
+      const precisionLabel =
+        ai.precision === null ? NO_DATA_LABEL : `${String(Math.round(ai.precision * 100))}%`;
       return [
         '🛠 Панель администратора',
         `Версия: <code>${escapeHtml(gitSha)}</code>`,
         `Аптайм: ${formatUptime(uptimeSec)}`,
+        '',
+        '🤖 ИИ-анализ',
+        `Стоимость сегодня: ${ai.costToday.toFixed(2)} $ · за месяц: ${ai.costMonth.toFixed(2)} $`,
+        `За 7 дней: показано ${String(ai.last7.shown)}, скрыто ${String(ai.last7.suppressed)}, ` +
+          `принято ${String(ai.last7.accepted)}, отклонено ${String(ai.last7.rejected)}`,
+        `Точность (принято / принято+отклонено): ${precisionLabel}`,
       ].join('\n');
     },
     /** Button on the `/admin` panel that issues a claim code (Task 1.5, `src/bot/handlers/transfer.ts`). */
@@ -353,6 +378,74 @@ export const texts = {
       'Отключите privacy mode у @BotFather (Bot Settings → Group Privacy → Turn off) и ' +
         '<b>заново добавьте бота в группы</b>, где он уже состоит — иначе для уже добавленных чатов ничего не изменится.',
     ].join('\n'),
+  },
+  /**
+   * `/debug [chat]` (SPEC §12.2 row, Task 2.15): superadmin-only diagnostics for the last 10
+   * `analysis_batches`, optionally filtered to one chat. `src/bot/views/debug.ts` assembles each batch's
+   * block from these line-builders, mirroring `texts.proposalCard`'s split (views build structure, `ru.ts`
+   * owns wording); every dynamic string here is escaped by the caller before it arrives (same convention).
+   */
+  debug: {
+    header: '🔍 Диагностика анализа',
+    /** No batches at all yet (or none for the given chat). */
+    empty: 'Пока нет ни одного batch.',
+    /** One batch's heading line — `chatLabel` is already `escapeHtml`'d, or `null` for a batch with no chat (a manual/DM call, D5). */
+    batchHeader(id: number, whenLabel: string, chatLabel: string | null): string {
+      const chat = chatLabel === null ? 'без чата' : chatLabel;
+      return `<b>#${String(id)}</b> · ${whenLabel} · ${chat}`;
+    },
+    countsLine(messageCount: number, statusLabel: string): string {
+      return `Сообщений: ${String(messageCount)} · Статус: ${statusLabel}`;
+    },
+    /** `reasonsLabel` is `"below_low: 2, commitment_without_due_below_high: 1"`-style, or `''` when nothing was suppressed. */
+    decisionLine(shown: number, suppressed: number, reasonsLabel: string): string {
+      const reasons = reasonsLabel === '' ? '' : ` (${reasonsLabel})`;
+      return `Показано: ${String(shown)} · Скрыто: ${String(suppressed)}${reasons}`;
+    },
+    /** `modelLabel` is already `escapeHtml`'d, or `null` when the batch never reached the extractor (e.g. prefilter-skipped). */
+    costLine(modelLabel: string | null, costUsd: number): string {
+      return `Модель: ${modelLabel ?? '—'} · Стоимость: ${costUsd.toFixed(4)} $`;
+    },
+    /** Only shown for a `failed` batch — `errorLabel` is already `escapeHtml`'d. */
+    errorLine(errorLabel: string): string {
+      return `Ошибка: <code>${errorLabel}</code>`;
+    },
+    statusQueued: 'в очереди',
+    statusRunning: 'выполняется',
+    statusDone: 'готово',
+    statusFailed: 'ошибка',
+    /** `/debug`'s optional `<chatId>` argument didn't parse as a positive integer. */
+    invalidChatArg: 'Не удалось распознать id чата. Использование: /debug [id чата].',
+  },
+  /**
+   * `/reanalyze <chat> [N]` (SPEC §12.2 row, Task 2.15): superadmin-only — re-queues a chat's failed
+   * batches (no `N`) or builds a fresh `kind='reanalyze'` batch over its last `N` text messages (SPEC §8:
+   * "Сообщения по-прежнему `pending` и доступны для `/reanalyze`"). Both paths only ever *enqueue* work —
+   * the actual LLM call still runs on the ticker's own schedule (`analyzeJob`), so these confirm "queued",
+   * not "done".
+   */
+  reanalyze: {
+    usage: 'Использование: /reanalyze <id чата> [число последних сообщений].',
+    invalidArgs:
+      'Не удалось распознать команду. Использование: /reanalyze <id чата> [число последних сообщений].',
+    chatNotFound: 'Чат не найден.',
+    /** `lastN` path found no text messages in this chat to reanalyze at all. */
+    noMessages: 'В этом чате нет сообщений с текстом для повторного анализа.',
+    /** No `N` given: `batchCount` failed batches had their messages' `batch_id` cleared. */
+    requeued(batchCount: number, messageCount: number): string {
+      if (batchCount === 0) return 'Неудачных batch для этого чата не найдено — нечего возвращать в очередь.';
+      return (
+        `Возвращено в очередь: batch — ${String(batchCount)}, сообщений — ${String(messageCount)}. ` +
+        'Будут повторно проанализированы в общем порядке.'
+      );
+    },
+    /** `N` given: a fresh `kind='reanalyze'` batch was queued over the chat's last `messageCount` text messages. */
+    created(messageCount: number): string {
+      return (
+        `Создан batch на переанализ: сообщений — ${String(messageCount)}. ` +
+        'Дубликаты будут помечены автоматически, реакции на исходные сообщения не ставятся.'
+      );
+    },
   },
   transfer: {
     /** Prompt shown above `/transfer`'s two-button choice. */
@@ -772,6 +865,39 @@ export const texts = {
       '⚠️ Руководитель ещё не запускал бота в личных сообщениях (/start) — карточки предложений не доставляются.',
     /** Superadmin alert (throttled hourly): a card send just came back `forbidden` — the Owner blocked the bot in Telegram, so cards pile up undelivered until they unblock it. */
     ownerBlocked: '⚠️ Руководитель заблокировал бота в Telegram — карточки предложений не доставляются.',
+  },
+  /**
+   * `/inbox` (SPEC §12.2 row, Owner only — D40, Task 2.15): every still-`pending` proposal (`shown` *and*
+   * `suppressed` alike — this is deliberately the one place a `suppressed` proposal is ever surfaced to
+   * the Owner, so a message the auto-pipeline hid below threshold is never permanently lost, CLAUDE.md's
+   * "a missed task is worse than a false positive"), `PAGE_SIZE` per page. Tapping a list button resends
+   * that proposal's card as a fresh DM message (`src/scheduler/jobs/cards.ts`'s `renderProposalCardForResend`) —
+   * this list itself never carries the accept/reject buttons, only the resend/pagination ones.
+   */
+  inbox: {
+    header: '📥 Входящие предложения',
+    /** No `pending` proposals at all right now. */
+    empty: 'Нет неразобранных предложений.',
+    pageFooter(page: number, totalPages: number): string {
+      return `Стр. ${String(page)}/${String(totalPages)}`;
+    },
+    /** One list row's button label — `title`/`chatTitle` are plain (unescaped: Telegram button text isn't HTML-parsed, CLAUDE.md's `escapeHtml` rule is for `parse_mode: 'HTML'` message bodies only). */
+    itemButton(icon: string, title: string, chatTitle: string | null): string {
+      const safeTitle = title === '' ? 'без названия' : title;
+      return chatTitle === null ? `${icon} ${safeTitle}` : `${icon} ${safeTitle} — ${chatTitle}`;
+    },
+    kindCreateIcon: '🆕',
+    kindUpdateIcon: '✏️',
+    kindCompleteIcon: '✅',
+    kindCancelIcon: '❌',
+    prevButton: '« Назад',
+    nextButton: 'Вперёд »',
+    /** `answerCallbackQuery` toast once the tapped proposal's card has been resent. */
+    resent: 'Карточка отправлена заново.',
+    /** The tapped proposal could no longer be rendered as a card (SPEC §11.1's D44 gap, or its target task/chat is gone) — same "skip, don't crash" stance as `cardsJob`'s own `buildCardView`. */
+    cardUnavailable: 'Не удалось собрать карточку для этого предложения.',
+    /** The tapped proposal is no longer `pending` (decided or expired between opening `/inbox` and tapping it). */
+    noLongerPending: 'Это предложение уже не в очереди — обновите список.',
   },
   /**
    * Labels prefixed to a media message's caption when normalizing incoming
