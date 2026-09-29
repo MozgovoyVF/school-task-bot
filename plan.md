@@ -1108,19 +1108,19 @@ describe('eval dataset (SPEC §20.1)', () => {
   - `estimateCostUsd(cases, pricing): number`.
 - CLI: `pnpm eval --model <id> [--fallback <id>] [--prefilter off|llm|jev] [--prompt-version v1] [--limit N] [--concurrency 4] [--yes] [--provider openrouter|fixture]`.
 
-- [ ] **Шаг 1: падающие тесты** (`computeMetrics` на ручных данных)
+- [x] **Шаг 1: тесты** (не из D43 — написаны сразу вместе с реализацией, не failing-first; `computeMetrics` на ручных данных)
   1. 4 кейса: TP (ожидалось и показано), FN (ожидалось, ничего не показано), FP (не ожидалось, показано), TN → recall 0.5, precision 0.5.
   2. Сопоставление действий: по типу и `targetRef`, для `create` — по категории. Верный тип при неверной категории: `typeAccuracy` 1, `categoryAccuracy` 0.
   3. Исполнитель сравнивается только у сопоставленных `create`, где исполнитель ожидался.
   4. Срок: ожидаемый срок прогоняется через `resolveDue` и сравнивается с предсказанным `dueAt`. Всё, что не all-day, должно совпадать с точностью до минуты; у all-day — дата.
   5. Suppressed-действия не считаются показанными (метрики отражают то, что увидит Owner).
-- [ ] **Шаг 2:** FAIL.
-- [ ] **Шаг 3: реализация.**
+- [x] **Шаг 2:** PASS.
+- [x] **Шаг 3: реализация.**
   - `run.ts` берёт цену модели из `GET https://openrouter.ai/api/v1/models`, оценивает стоимость (символы / 3 × цена токена), печатает оценку. Если оценка больше $1 и нет `--yes`, спрашивает подтверждение через `readline`. После прогона печатает фактическую стоимость.
   - Отчёт: `eval/reports/<YYYY-MM-DD>-<model>-<prompt>.md` плюс строка в `eval/reports/COMPARISON.md`.
   - `--provider fixture` отвечает эталоном: даёт метрики 1.0 и служит smoke-проверкой без затрат.
-- [ ] **Шаг 4:** PASS, плюс `pnpm eval --provider fixture --limit 5` отрабатывает.
-- [ ] **Шаг 5: коммит и push:** `feat(eval): add evaluation runner with metrics and reports`.
+- [x] **Шаг 4:** PASS, плюс `pnpm eval --provider fixture --limit 5` отрабатывает.
+- [x] **Шаг 5: коммит и push:** `feat(eval): add evaluation runner with metrics and reports`.
 
 ### Task 2.18 (👤): Выбор моделей, настройка промпта, приёмка фазы
 
