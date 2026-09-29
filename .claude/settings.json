@@ -1,0 +1,17 @@
+{
+  "enabledPlugins": {
+    "superpowers@claude-plugins-official": true
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ \"$CLAUDE_CODE_REMOTE\" = \"true\" ] && [ -x /opt/node24/bin/node ] && [ -n \"$CLAUDE_ENV_FILE\" ]; then echo 'export PATH=/opt/node24/bin:$PATH' >> \"$CLAUDE_ENV_FILE\"; fi"
+          }
+        ]
+      }
+    ]
+  }
+}
