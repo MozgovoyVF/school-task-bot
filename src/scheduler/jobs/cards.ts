@@ -65,10 +65,11 @@ type ProposalPayload = z.infer<typeof PayloadSchema>;
 
 /**
  * Whether `row` is flagged `noReaction` (Task 2.10's `/reanalyze` flag) — used on its own, independent of
- * `buildCardView`, because reactions (I2, fix round 1) run for every eligible proposal up front, before
- * this job decides whether/when to send its *card*, not just for the ones that get one. An unparsable
- * payload defaults to `false` (react anyway) rather than blocking the reaction on a card-rendering concern
- * that has nothing to do with whether the source message should get its 👀.
+ * `buildCardView`, because reacting (via {@link reactToSource}/{@link reactToAll}) happens right when a
+ * proposal is actually delivered — a card, a quiet-hours summary, or an overflow notification — not just
+ * for `create`-kind cards `buildCardView` renders. An unparsable payload defaults to `false` (react anyway)
+ * rather than blocking the reaction on a card-rendering concern that has nothing to do with whether the
+ * source message should get its 👀.
  */
 function parseNoReaction(row: ProposalRow): boolean {
   const parsed = PayloadSchema.safeParse(row.payload);
@@ -368,11 +369,11 @@ async function markNotifiedOnly(db: AppDeps['db'], ids: number[], now: Date): Pr
 /**
  * SPEC §9/§11.1: 👀 on the first source message of a group-chat proposal — gated only on the chat's own
  * `reactions_enabled`, the workspace's `reactions.onDetect` emoji being configured, and the proposal not
- * being flagged `noReaction` (Task 2.10's `/reanalyze` flag). Deliberately *not* gated on quiet hours (fix
- * round 1, I2): SPEC §13.5's quiet-hours suppression list is summary/`pre_due`/`overdue`/proposal cards —
- * reactions aren't on it, and `run` below calls this for every eligible proposal up front, independent of
- * whether that proposal's *card* is delayed by quiet hours or fails to send. Best-effort only: any
- * failure — `bad_request` or otherwise — is logged and swallowed, never blocking anything else in this run.
+ * being flagged `noReaction` (Task 2.10's `/reanalyze` flag) — never on quiet hours (SPEC §13.5's
+ * quiet-hours suppression list is summary/`pre_due`/`overdue`/proposal cards; reactions aren't on it). Only
+ * called once a proposal has actually been delivered (fix round 2 — see {@link reactToAll}'s doc comment
+ * for why "up front, before delivery" turned out wrong). Best-effort only: any failure — `bad_request` or
+ * otherwise — is logged and swallowed, never blocking anything else in this run.
  */
 async function reactToSource(
   deps: AppDeps,
@@ -396,25 +397,49 @@ async function reactToSource(
 }
 
 /**
+ * {@link reactToSource} for a whole group, called exactly once a group has actually been *delivered*
+ * (right after that group's own `markCardSent`/`markNotifiedOnly` — fix round 2: reacting up front, before
+ * delivery, meant every still-undelivered proposal got re-reacted on every single tick — up to 180×/hour
+ * each — for as long as it sat waiting on quiet hours, D44, or a stuck `bad_request` retry, which through
+ * the real Telegram API throttler (`src/app.ts`'s `apiThrottler`) could stall the whole ticker, including
+ * jobs quiet hours must never suppress, like `overdue`). A proposal created during quiet hours now gets its
+ * 👀 only once quiet hours end and its summary actually sends — later than "immediately", but SPEC only
+ * requires reactions not be *suppressed* by quiet hours, not that they're instant.
+ */
+async function reactToAll(
+  deps: AppDeps,
+  loaders: Loaders,
+  rows: readonly ProposalRow[],
+  onDetectEmoji: string | null,
+): Promise<void> {
+  for (const p of rows) {
+    await reactToSource(deps, loaders, p, parseNoReaction(p), onDetectEmoji);
+  }
+}
+
+/**
  * The card outbox (plan.md Task 2.12, SPEC §9/§11.1/§13.5, D10/D40): delivers every `shown`, still-
  * `pending`, not-yet-`notified_at` proposal to the Owner's DM — the only recipient (D40) — as individual
  * cards (`renderProposalCard`), capped at `MAX_CARDS_PER_BATCH` per `batch_id` group with one overflow
- * message for the rest, plus a best-effort 👀 reaction on each proposal's first source message
- * (independent of card delivery — see `reactToSource`, fix round 1 I2). `notified_at` is set only *after*
- * a successful send (at-least-once delivery, brief step 3): a crash between sending and this update means
- * the next tick sends that card again rather than silently dropping it.
+ * message for the rest, plus a best-effort 👀 reaction on each proposal's first source message, fired
+ * exactly once right after that proposal is actually delivered (`reactToSource`/`reactToAll`, fix round 2 —
+ * reacting up front for every still-undelivered proposal, every tick, was a perf/throttling problem; see
+ * {@link reactToAll}'s doc comment). `notified_at` is set only *after* a successful send (at-least-once
+ * delivery, brief step 3): a crash between sending and this update means the next tick sends that card
+ * again rather than silently dropping it.
  *
  * Two gates run first: no Owner at all, or an Owner who has a membership but has never opened a DM
  * (`users.dm_started_at IS NULL`, no `/start` yet) both alert superadmin (`ErrorReporter.alert`'s own
  * hourly throttle) and send nothing at all, not even reactions (there is no card outbox to speak of yet).
  *
- * Past those, every eligible proposal gets its reaction attempt regardless of anything else — quiet hours,
- * batch grouping, or whether its own card ever sends. Only *card* delivery is gated on quiet hours
- * (`isQuietAt(now, …)`, D10): while it is currently quiet in the Owner's zone, no card or summary is sent
- * this tick (they simply wait). Once past that, eligible proposals split into two groups by their own
- * `created_at` (not "now" — D10's "cards created during the quiet period"): any whose `created_at` itself
- * fell inside quiet hours become one grouped "found while you were away" summary (any count, no per-batch
- * cap, no individual cards — SPEC §13.5); the rest go through the normal per-batch card flow.
+ * Past those, *card* / *summary* delivery is gated on quiet hours (`isQuietAt(now, …)`, D10): while it is
+ * currently quiet in the Owner's zone, no card or summary is sent this tick (they simply wait) — and since
+ * a reaction now only fires alongside its proposal's own delivery, it waits too (SPEC only requires
+ * reactions not be *suppressed* by quiet hours, not that they're instant). Once past that, eligible
+ * proposals split into two groups by their own `created_at` (not "now" — D10's "cards created during the
+ * quiet period"): any whose `created_at` itself fell inside quiet hours become one grouped "found while you
+ * were away" summary (any count, no per-batch cap, no individual cards — SPEC §13.5); the rest go through
+ * the normal per-batch card flow.
  *
  * Send failures: `forbidden` (the Owner blocked the bot) flips `users.dm_blocked`, alerts superadmin
  * (throttled, fix round 1 M4) and stops the rest of this tick's sends. For the per-card loop specifically,
@@ -458,16 +483,6 @@ export const cardsJob: Job = {
 
     const loaders = makeLoaders(deps.db);
 
-    // Reactions run for every eligible proposal up front — before the quiet-hours gate below, and even for
-    // ones whose card will end up delayed or skipped — since SPEC gates 👀 only on the chat's own
-    // `reactions_enabled`, never on quiet hours or card-delivery outcome (fix round 1, I2). Re-attempted
-    // each tick until the proposal's card finally sends (there is no separate "already reacted" column to
-    // dedupe against); Telegram's reaction API is idempotent for the same emoji, so this is wasted calls at
-    // worst, never a duplicate user-visible effect.
-    for (const p of eligible) {
-      await reactToSource(deps, loaders, p, parseNoReaction(p), settings.reactions.onDetect);
-    }
-
     if (isQuietAt(now, zone, settings.quiet)) return;
 
     const quietGroup: ProposalRow[] = [];
@@ -508,6 +523,7 @@ export const cardsJob: Job = {
           quietGroup.map((p) => p.id),
           now,
         );
+        await reactToAll(deps, loaders, quietGroup, settings.reactions.onDetect);
       }
     }
 
@@ -544,6 +560,7 @@ export const cardsJob: Job = {
             break outer;
           }
           await markCardSent(deps.db, p.id, now, result.messageId);
+          await reactToSource(deps, loaders, p, parseNoReaction(p), settings.reactions.onDetect);
         }
 
         if (overflow.length > 0) {
@@ -561,6 +578,7 @@ export const cardsJob: Job = {
             overflow.map((p) => p.id),
             now,
           );
+          await reactToAll(deps, loaders, overflow, settings.reactions.onDetect);
         }
       }
     }

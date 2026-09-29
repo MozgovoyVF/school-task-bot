@@ -299,7 +299,7 @@ describe('cardsJob', () => {
     expect(after?.notifiedAt).not.toBeNull();
   });
 
-  it('reacts to a proposal created during quiet hours even though its card is delayed (I2)', async () => {
+  it('delays the 👀 reaction along with the card while quiet hours are active, then reacts once its summary actually sends (fix round 2)', async () => {
     const clock = fixedClock('2026-09-23T12:00:00Z'); // 15:00 MSK
     const { deps, messenger } = await makeDeps(clock);
     await makeOwner(deps.workspace.id, 42, 'Anna');
@@ -308,20 +308,43 @@ describe('cardsJob', () => {
     });
     const now = clock.now();
     const chat = await makeChat(deps.workspace.id, -1001111111116, now, true);
-    const msg = await makeMessage(chat.id, 901, now);
-    const p = await makeProposal({
+    const msg1 = await makeMessage(chat.id, 901, now);
+    const msg2 = await makeMessage(chat.id, 902, now);
+    const p1 = await makeProposal({
       workspaceId: deps.workspace.id,
       chatId: chat.id,
-      sourceMessageIds: [msg.id],
+      sourceMessageIds: [msg1.id],
       createdAt: now,
+    });
+    const p2 = await makeProposal({
+      workspaceId: deps.workspace.id,
+      chatId: chat.id,
+      sourceMessageIds: [msg2.id],
+      createdAt: new Date(now.getTime() + 1000),
     });
 
     await cardsJob.run(deps); // still 15:00 MSK — quiet hours
-
     expect(messenger.sent).toHaveLength(0); // card delayed
-    expect(messenger.reactions).toEqual([{ chatId: chat.tgChatId, messageId: 901, emoji: '👀' }]); // reaction fires anyway
-    const [after] = await proposalsByIds([p.id]);
-    expect(after?.notifiedAt).toBeNull();
+    expect(messenger.reactions).toHaveLength(0); // no re-reacting every tick while it waits (fix round 2)
+
+    await cardsJob.run(deps); // a second tick, still quiet hours — must not react again either
+    expect(messenger.sent).toHaveLength(0);
+    expect(messenger.reactions).toHaveLength(0);
+
+    clock.advance(3 * 60 * 60_000); // 18:00 MSK — past the 14:00-16:00 window
+    await cardsJob.run(deps);
+
+    expect(messenger.sent).toHaveLength(1); // the quiet-hours summary
+    // Exactly one reaction per proposal in the group — not more (no leftover per-tick accumulation).
+    expect(messenger.reactions).toHaveLength(2);
+    expect(messenger.reactions).toEqual(
+      expect.arrayContaining([
+        { chatId: chat.tgChatId, messageId: 901, emoji: '👀' },
+        { chatId: chat.tgChatId, messageId: 902, emoji: '👀' },
+      ]),
+    );
+    const after = await proposalsByIds([p1.id, p2.id]);
+    expect(after.every((row) => row.notifiedAt !== null)).toBe(true);
   });
 
   it('does not let one card rejected with bad_request block the rest of the tick (I1)', async () => {
