@@ -153,7 +153,7 @@ export async function createBotHarness(opts?: {
     name: DEFAULT_WORKSPACE_NAME,
     timezone: opts?.workspaceTimezone ?? 'Europe/Moscow',
   });
-  const deps: BotDeps = { config, db, clock, logger, errors, messenger, workspace };
+  const deps: BotDeps = { config, db, clock, logger, errors, messenger, workspace, taskHooks: [] };
   const calls: RecordedCall[] = [];
   const bot = createBot(deps, { botInfo: defaultBotInfo(), client: { fetch: createFakeFetch(calls) } });
 

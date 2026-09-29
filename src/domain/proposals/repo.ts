@@ -1,4 +1,6 @@
-import type { Tx } from '../../db/client.js';
+import { eq } from 'drizzle-orm';
+import { z } from 'zod';
+import type { DbOrTx, Tx } from '../../db/client.js';
 import { proposals } from '../../db/schema/index.js';
 import type { AssigneeResolution, Category } from '../../ai/pipeline/resolve.js';
 
@@ -102,4 +104,54 @@ export async function insertProposal(tx: Tx, p: NewProposal): Promise<ProposalRo
     .returning();
   if (!row) throw new Error('insertProposal: insert returned no row');
   return row;
+}
+
+export async function getProposalById(db: DbOrTx, id: number): Promise<ProposalRow | null> {
+  const [row] = await db.select().from(proposals).where(eq(proposals.id, id)).limit(1);
+  return row ?? null;
+}
+
+// CLAUDE.md §8: jsonb goes through zod. Mirrors `ProposalPayload` above field-for-field — kept here,
+// next to the interface it validates, so `src/domain/proposals/decide.ts` (plan.md Task 2.13) has one
+// canonical parser instead of hand-rolling its own (`src/scheduler/jobs/cards.ts`'s own local schema,
+// Task 2.12, predates this and is display-only — left as is rather than churned for this task).
+const AssigneeSchema = z.union([
+  z.object({ type: z.literal('user'), userId: z.number() }),
+  z.object({ type: z.literal('all') }),
+  z.object({ type: z.literal('text'), name: z.string() }),
+  z.object({ type: z.literal('none') }),
+]);
+
+const DueSchema = z.object({
+  dueAt: z.string().nullable(),
+  allDay: z.boolean(),
+  tz: z.string().nullable(),
+  inPast: z.boolean(),
+  invalid: z.boolean(),
+});
+
+export const ProposalPayloadSchema = z.object({
+  title: z.string().optional(),
+  description: z.string().nullable().optional(),
+  category: z.enum(['assignment', 'event', 'owner_intent', 'commitment', 'request_to_owner']).optional(),
+  assignee: AssigneeSchema.optional(),
+  due: DueSchema.nullable().optional(),
+  dueText: z.string().nullable().optional(),
+  priority: z.enum(['low', 'normal', 'high']).optional(),
+  reasoning: z.string(),
+  duplicateOf: z.object({ type: z.enum(['task', 'proposal']), id: z.number(), title: z.string() }).optional(),
+  changes: z
+    .object({ due: DueSchema.optional(), assignee: AssigneeSchema.optional(), title: z.string().optional() })
+    .optional(),
+  targetProposalId: z.number().optional(),
+  origin: z.enum(['ai', 'manual_group', 'manual_dm', 'forward']),
+  noReaction: z.boolean().optional(),
+  quote: z.string().nullable(),
+  quoteAuthorName: z.string().nullable(),
+});
+
+/** `safeParse` wrapper — `null` on anything that doesn't match `ProposalPayload`'s shape (never throws). */
+export function parseProposalPayload(payload: unknown): ProposalPayload | null {
+  const parsed = ProposalPayloadSchema.safeParse(payload);
+  return parsed.success ? parsed.data : null;
 }

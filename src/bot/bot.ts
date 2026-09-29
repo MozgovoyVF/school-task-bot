@@ -12,6 +12,7 @@ import type { Logger } from '../ops/logger.js';
 import type { ErrorReporter } from '../ops/errorReporter.js';
 import type { Messenger } from '../domain/messenger.js';
 import type { WorkspaceRow } from '../domain/workspaces/repo.js';
+import type { TaskHook } from '../domain/tasks/service.js';
 import type { BotContext } from './context.js';
 import { createErrorsMiddleware } from './middleware/errors.js';
 import { createContextMiddleware } from './middleware/context.js';
@@ -24,6 +25,7 @@ import { registerChatsHandlers } from './handlers/chats.js';
 import { registerPeopleHandlers } from './handlers/people.js';
 import { registerPrivacyHandlers } from './handlers/privacy.js';
 import { registerGroupHandlers } from './handlers/group.js';
+import { registerProposalCallbackHandlers } from './handlers/proposalCallbacks.js';
 import { registerTimezoneConversation } from './conversations/timezone.js';
 import { registerEditPersonConversation } from './conversations/editPerson.js';
 
@@ -38,7 +40,11 @@ import { registerEditPersonConversation } from './conversations/editPerson.js';
  * these fields (plan.md decision D34). `workspace` was added in Task 1.2 —
  * `createContextMiddleware` (`src/bot/middleware/context.ts`) needs it to
  * resolve a DM actor's membership (MVP has a single default workspace,
- * SPEC §5.2).
+ * SPEC §5.2). `taskHooks` was added in Task 2.13 — `src/bot/handlers/
+ * proposalCallbacks.ts`'s decision handlers need it for `createTaskService`
+ * (D34's original "no benefit" reasoning for not widening this interface no
+ * longer holds for this one field specifically; `ai` still has no handler
+ * that needs it, so it stays off `BotDeps`).
  */
 export interface BotDeps {
   config: Env;
@@ -48,6 +54,7 @@ export interface BotDeps {
   errors: ErrorReporter;
   messenger: Messenger;
   workspace: WorkspaceRow;
+  taskHooks: TaskHook[];
 }
 
 /**
@@ -110,6 +117,7 @@ export function createBot(
   // group before this command handler ever sees it.
   registerPrivacyHandlers(bot);
   registerGroupHandlers(bot, deps);
+  registerProposalCallbackHandlers(bot, deps);
 
   bot.catch((err) => {
     void deps.errors.report(err.error, { updateId: err.ctx.update.update_id });

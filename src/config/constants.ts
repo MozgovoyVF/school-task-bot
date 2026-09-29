@@ -20,6 +20,9 @@ export const PROMPT_MAX_OPEN_PROPOSALS = 20;
 export const DEDUP_SIMILARITY = 0.6;
 export const DEDUP_WINDOW_DAYS = 14;
 export const MAX_CARDS_PER_BATCH = 10;
+// Task title/name cap (plan.md Task 2.13, tasks.title's DB comment) — enforced by TaskService.create/update,
+// the domain boundary for task writes, mirroring QUOTE_MAX_CHARS's role for tasks.source_quote.
+export const TASK_TITLE_MAX_CHARS = 120;
 export const PENDING_CHAT_TIMEOUT_HOURS = 72;
 export const CLAIM_CODE_TTL_HOURS = 24;
 export const CONVERSATION_TIMEOUT_MS = 10 * 60_000;

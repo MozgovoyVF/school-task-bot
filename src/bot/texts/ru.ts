@@ -624,6 +624,54 @@ export const texts = {
     cancelTaskButton: '🗑 Отменить задачу',
   },
   /**
+   * Outcomes of a proposal decision (SPEC §11.2, Task 2.13,
+   * `src/domain/proposals/decide.ts`/`src/bot/handlers/proposalCallbacks.ts`):
+   * the card's own text once it is edited in place, plus the
+   * `answerCallbackQuery` alerts for a decision that didn't go through.
+   * `title` in every `*Card` function arrives already HTML-escaped by the
+   * caller (`src/bot/views/taskCreated.ts`), same convention as
+   * `texts.proposalCard` above.
+   */
+  proposalDecide: {
+    /** `DecisionResult.reason === 'already_decided'` — the double-accept race (SPEC/CLAUDE.md's atomicity). */
+    alreadyDecided: 'Уже обработано.',
+    /** `DecisionResult.reason === 'not_found'` — the proposal row itself is gone. */
+    notFound: 'Предложение не найдено.',
+    /** `DecisionResult.reason === 'target_gone'` — the task the proposal targets no longer exists. */
+    targetGone: 'Задача, к которой относится это предложение, больше не существует.',
+    /** The reject-reason submenu's own header line (SPEC §11.2: `[Не задача] [Дубль] [Уже сделано] [Другое]`). */
+    reasonMenuTitle: 'Причина?',
+    reasonNotTask: 'Не задача',
+    reasonDuplicate: 'Дубль',
+    reasonAlreadyDone: 'Уже сделано',
+    reasonOther: 'Другое',
+    /** "✅ Создать" succeeded (SPEC §11.2). */
+    createdCard(taskId: number, title: string): string {
+      return `✅ Создано: T${String(taskId)} «${title}»`;
+    },
+    /** "✅ Применить" succeeded on an `update`-kind proposal. */
+    appliedCard(taskId: number, title: string): string {
+      return `✅ Применено: T${String(taskId)} «${title}»`;
+    },
+    /** "✅ Закрыть задачу" succeeded on a `complete`-kind proposal. */
+    completedCard(taskId: number, title: string): string {
+      return `✅ Закрыто: T${String(taskId)} «${title}»`;
+    },
+    /** "🗑 Отменить задачу" succeeded on a `cancel`-kind proposal. */
+    cancelledCard(taskId: number, title: string): string {
+      return `🗑 Отменено: T${String(taskId)} «${title}»`;
+    },
+    /** "🔗 Дубль T12" succeeded. */
+    duplicateCard(taskId: number): string {
+      return `🔗 Отмечено как дубль T${String(taskId)}`;
+    },
+    /** A decline succeeded — `reasonLabel` is one of the four `reason*` labels above, or `null` for
+     * `update`/`complete`/`cancel`'s plain decline (no reason submenu for those). */
+    rejectedCard(reasonLabel: string | null): string {
+      return reasonLabel === null ? '❌ Отклонено' : `❌ Отклонено: ${reasonLabel}`;
+    },
+  },
+  /**
    * The card outbox (`src/scheduler/jobs/cards.ts`, plan.md Task 2.12): the
    * two summary messages it sends instead of a proposal card, plus the
    * quiet-hours batch's button label.

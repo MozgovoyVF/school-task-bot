@@ -934,7 +934,7 @@ export function applyModification(deps: AppDeps, a: { proposalId: number; actor:
 export interface ProposalEdits { title?: string; assignee?: AssigneeResolution; due?: { at: Date | null; allDay: boolean; tz: string | null }; priority?: 'low' | 'normal' | 'high'; description?: string | null }
 ```
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
   - Сервис задач:
     - `create` пишет событие `created`, `version=1`, `title` обрезается до 120 символов, `source_quote` — до 200;
     - `update` увеличивает `version`, пишет событие `updated` с `diff`;
@@ -948,12 +948,12 @@ export interface ProposalEdits { title?: string; assignee?: AssigneeResolution; 
     6. «🔗 Дубль T12» → proposal `rejected` (`duplicate`). По кнопке «Дописать в описание» текст добавлен в описание T12.
     7. `update` → «✅ Применить» → у T12 новый срок, событие `updated`. `complete` → T12 `done`. `cancel` → T12 `cancelled`. Если задачу удалили → `target_gone` и понятный текст.
     8. Реакция `onAccept` (если задана `✍`) ставится на исходное сообщение после accept.
-- [ ] **Шаг 2:** FAIL.
-- [ ] **Шаг 3: реализация.**
+- [x] **Шаг 2:** FAIL.
+- [x] **Шаг 3: реализация.**
   - Решение: `UPDATE proposals SET status=…, decided_by_user_id=…, decided_at=$now WHERE id=$1 AND status='pending' RETURNING *` — в той же транзакции, что и создание или изменение задачи.
   - Права проверяются `can(actor, 'proposal.decide')` по данным БД.
-- [ ] **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(proposals): accept, reject, duplicate and apply proposals idempotently`.
+- [x] **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(proposals): accept, reject, duplicate and apply proposals idempotently`.
 
 ### Task 2.14: Диалог «Изменить» и разбор даты из текста
 
