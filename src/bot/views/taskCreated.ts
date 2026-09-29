@@ -48,9 +48,10 @@ export function renderTaskCancelledCard(taskId: number, title: string): Decision
   return { text: texts.proposalDecide.cancelledCard(taskId, escapeHtml(title)), buttons: [] };
 }
 
-/** The "mark as duplicate" button (`dup`) succeeded. */
-export function renderDuplicateCard(taskId: number): DecisionCardView {
-  return { text: texts.proposalDecide.duplicateCard(taskId), buttons: [] };
+/** The "mark as duplicate" submenu's own button (`dpm` — mark only, or `dpa` — mark and append) succeeded.
+ * `appended` says which one was pressed, for the confirmation text. */
+export function renderDuplicateCard(taskId: number, appended: boolean): DecisionCardView {
+  return { text: texts.proposalDecide.duplicateCard(taskId, appended), buttons: [] };
 }
 
 /** A decline succeeded — `reason` is `null` for `update`/`complete`/`cancel`'s plain decline. */
@@ -79,6 +80,29 @@ export function renderReasonMenu(proposalId: number): DecisionCardView {
       [
         button(texts.proposalDecide.reasonAlreadyDone, 'done'),
         button(texts.proposalDecide.reasonOther, 'oth'),
+      ],
+    ],
+  };
+}
+
+/**
+ * The "mark as duplicate" button's own follow-up submenu (fix round 1, Important A): the initial click no longer
+ * decides anything by itself — it only offers "mark only" (`dpm`) vs. "mark and append the quote" (`dpa`),
+ * both encoding `taskId` as `callback_data`'s `arg` (`v1:p:dpm|dpa:<proposalId>:<taskId>`) so
+ * `src/domain/proposals/decide.ts`'s `markDuplicate` still gets it from the button press, not a second,
+ * separate step after the decision already landed.
+ */
+export function renderDuplicateMenu(proposalId: number, taskId: number): DecisionCardView {
+  const button = (text: string, action: 'dpm' | 'dpa'): Buttons[number][number] => ({
+    text,
+    data: encodeCallback({ entity: 'p', action, id: proposalId, arg: String(taskId) }),
+  });
+  return {
+    text: texts.proposalDecide.duplicateMenuTitle(taskId),
+    buttons: [
+      [
+        button(texts.proposalDecide.duplicateMarkOnlyButton, 'dpm'),
+        button(texts.proposalDecide.duplicateMarkAndAppendButton, 'dpa'),
       ],
     ],
   };

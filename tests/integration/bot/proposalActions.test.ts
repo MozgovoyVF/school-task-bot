@@ -12,14 +12,23 @@ import {
 } from '../../../src/domain/proposals/repo.js';
 import { acceptProposal } from '../../../src/domain/proposals/decide.js';
 import { updateSettings } from '../../../src/domain/workspaces/repo.js';
-import { chats, memberships, messages, proposals, tasks, taskEvents } from '../../../src/db/schema/index.js';
+import {
+  chats,
+  memberships,
+  messages,
+  proposals,
+  tasks,
+  taskEvents,
+  workspaces,
+} from '../../../src/db/schema/index.js';
 import type { TaskRow } from '../../../src/domain/tasks/repo.js';
 import { createDb } from '../../../src/db/client.js';
 import type { FakeMessenger } from '../../helpers/fakeMessenger.js';
 
 const OWNER = { id: 100, firstName: 'Anna' };
 const MEMBER = { id: 200, firstName: 'Boris' };
-const TEST_DATABASE_URL = 'postgres://stb:stb@localhost:5433/stb_test';
+// Matches `tests/helpers/db.ts`'s own `DEFAULT_TEST_DATABASE_URL` fallback pattern.
+const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL ?? 'postgres://stb:stb@localhost:5433/stb_test';
 
 function fake(harness: BotHarness): FakeMessenger {
   return harness.deps.messenger as FakeMessenger;
@@ -30,6 +39,14 @@ function lastEditTo(harness: BotHarness, chatId: number) {
   const last = edits[edits.length - 1];
   if (!last) throw new Error(`no edit sent to ${String(chatId)}`);
   return last;
+}
+
+/** The `text` of the most recent `answerCallbackQuery` call — the toast/alert shown to the presser,
+ * distinct from `lastEditTo`'s card edit. `undefined` for a bare `answerCallbackQuery()` with no text. */
+function lastAnswerText(harness: BotHarness): string | undefined {
+  const calls = harness.calls.filter((c) => c.method === 'answerCallbackQuery');
+  const last = calls[calls.length - 1];
+  return typeof last?.payload.text === 'string' ? last.payload.text : undefined;
 }
 
 async function makeOwner(harness: BotHarness, tgUser: { id: number; firstName: string }) {
@@ -54,10 +71,22 @@ async function makeMember(harness: BotHarness, tgUser: { id: number; firstName: 
   return userRow;
 }
 
-async function makeSupergroupChat(harness: BotHarness, tgChatId: number, title: string) {
+async function makeSupergroupChat(
+  harness: BotHarness,
+  tgChatId: number,
+  title: string,
+  overrides: { reactionsEnabled?: boolean } = {},
+) {
   const [row] = await harness.db
     .insert(chats)
-    .values({ tgChatId, workspaceId: harness.deps.workspace.id, title, type: 'supergroup', status: 'active' })
+    .values({
+      tgChatId,
+      workspaceId: harness.deps.workspace.id,
+      title,
+      type: 'supergroup',
+      status: 'active',
+      ...overrides,
+    })
     .returning();
   if (!row) throw new Error('expected the chat row to be inserted');
   return row;
@@ -180,6 +209,16 @@ describe('proposal decision callbacks (v1:p:*)', () => {
 
     const edit = lastEditTo(harness, OWNER.id);
     expect(edit.text).toBe(`✅ Создано: T${String(task?.id)} «Подготовить расписание на октябрь»`);
+
+    // A second press (e.g. a stale keyboard tapped twice) must not create a second task — the reply text
+    // is the "already handled" toast, not a second card edit.
+    await harness.send(callback(OWNER, data, botKeyboardMessage(OWNER)));
+    expect(lastAnswerText(harness)).toBe(texts.proposalDecide.alreadyDecided);
+    const tasksAfterSecondPress = await harness.db
+      .select()
+      .from(tasks)
+      .where(eq(tasks.workspaceId, harness.deps.workspace.id));
+    expect(tasksAfterSecondPress).toHaveLength(1);
   });
 
   it('two concurrent accepts on the same proposal create exactly one task; the loser gets already_decided', async () => {
@@ -229,6 +268,7 @@ describe('proposal decision callbacks (v1:p:*)', () => {
     const createdTasks = await harness.db.select().from(tasks);
     expect(createdTasks).toHaveLength(0);
     expect(fake(harness).edits).toHaveLength(0);
+    expect(lastAnswerText(harness)).toBe(texts.common.forbidden);
   });
 
   it('a former owner (now a member after ownership transfer) is forbidden', async () => {
@@ -248,6 +288,7 @@ describe('proposal decision callbacks (v1:p:*)', () => {
 
     const createdTasks = await harness.db.select().from(tasks);
     expect(createdTasks).toHaveLength(0);
+    expect(lastAnswerText(harness)).toBe(texts.common.forbidden);
   });
 
   it('"Не задача" opens the reason menu; "Уже сделано" rejects with that reason and edits the card', async () => {
@@ -268,7 +309,7 @@ describe('proposal decision callbacks (v1:p:*)', () => {
     expect(lastEditTo(harness, OWNER.id).text).toContain('Уже сделано');
   });
 
-  it('"Дубль T<id>" rejects as a duplicate and appends the quote to the existing task\'s description', async () => {
+  it('"Дубль T<id>" opens a mark-only/mark-and-append submenu instead of deciding directly', async () => {
     const harness = await createBotHarness();
     await makeOwner(harness, OWNER);
     const existingTask = await insertOpenTask(harness, { title: 'Существующая задача', description: null });
@@ -276,6 +317,51 @@ describe('proposal decision callbacks (v1:p:*)', () => {
     const data = encodeCallback({
       entity: 'p',
       action: 'dup',
+      id: proposal.id,
+      arg: String(existingTask.id),
+    });
+
+    await harness.send(callback(OWNER, data, botKeyboardMessage(OWNER)));
+
+    // Not decided yet — the initial button only opens the submenu.
+    const stillPending = await getProposalRow(harness, proposal.id);
+    expect(stillPending?.status).toBe('pending');
+    expect(lastEditTo(harness, OWNER.id).text).toBe(texts.proposalDecide.duplicateMenuTitle(existingTask.id));
+  });
+
+  it('"Только пометить" (dpm) rejects as a duplicate without touching the existing task\'s description', async () => {
+    const harness = await createBotHarness();
+    await makeOwner(harness, OWNER);
+    const existingTask = await insertOpenTask(harness, { title: 'Существующая задача', description: null });
+    const proposal = await insertCreateProposal(harness);
+    const data = encodeCallback({
+      entity: 'p',
+      action: 'dpm',
+      id: proposal.id,
+      arg: String(existingTask.id),
+    });
+
+    await harness.send(callback(OWNER, data, botKeyboardMessage(OWNER)));
+
+    const decided = await getProposalRow(harness, proposal.id);
+    expect(decided?.status).toBe('rejected');
+    expect(decided?.rejectReason).toBe('duplicate');
+
+    const [untouchedTask] = await harness.db.select().from(tasks).where(eq(tasks.id, existingTask.id));
+    expect(untouchedTask?.description).toBeNull();
+    expect(untouchedTask?.version).toBe(1);
+
+    expect(lastEditTo(harness, OWNER.id).text).toBe(`🔗 Отмечено как дубль T${String(existingTask.id)}`);
+  });
+
+  it('"Пометить и дописать" (dpa) rejects as a duplicate and appends the quote to the existing task\'s description', async () => {
+    const harness = await createBotHarness();
+    await makeOwner(harness, OWNER);
+    const existingTask = await insertOpenTask(harness, { title: 'Существующая задача', description: null });
+    const proposal = await insertCreateProposal(harness);
+    const data = encodeCallback({
+      entity: 'p',
+      action: 'dpa',
       id: proposal.id,
       arg: String(existingTask.id),
     });
@@ -290,7 +376,34 @@ describe('proposal decision callbacks (v1:p:*)', () => {
     expect(updatedTask?.description).toBe('Маша, подготовь расписание к пятнице');
     expect(updatedTask?.version).toBe(2);
 
-    expect(lastEditTo(harness, OWNER.id).text).toBe(`🔗 Отмечено как дубль T${String(existingTask.id)}`);
+    expect(lastEditTo(harness, OWNER.id).text).toBe(
+      `🔗 Отмечено как дубль T${String(existingTask.id)}, описание дополнено`,
+    );
+  });
+
+  it('"Пометить и дописать" (dpa) is rejected (target_gone) when taskId belongs to a different workspace', async () => {
+    const harness = await createBotHarness();
+    await makeOwner(harness, OWNER);
+    const [otherWorkspace] = await harness.db
+      .insert(workspaces)
+      .values({ name: 'Другая школа', timezone: 'Europe/Moscow' })
+      .returning();
+    if (!otherWorkspace) throw new Error('expected the second workspace row to be inserted');
+    const foreignTask = await insertOpenTask(harness, {
+      workspaceId: otherWorkspace.id,
+      title: 'Чужая задача',
+    });
+    const proposal = await insertCreateProposal(harness);
+    const data = encodeCallback({ entity: 'p', action: 'dpa', id: proposal.id, arg: String(foreignTask.id) });
+
+    await harness.send(callback(OWNER, data, botKeyboardMessage(OWNER)));
+
+    const stillPending = await getProposalRow(harness, proposal.id);
+    expect(stillPending?.status).toBe('pending');
+    expect(lastAnswerText(harness)).toBe(texts.proposalDecide.targetGone);
+
+    const [untouchedForeignTask] = await harness.db.select().from(tasks).where(eq(tasks.id, foreignTask.id));
+    expect(untouchedForeignTask?.description).toBeNull();
   });
 
   it('applyModification: "Применить" updates the task, "Закрыть задачу" completes it, "Отменить задачу" cancels it', async () => {
@@ -359,6 +472,7 @@ describe('proposal decision callbacks (v1:p:*)', () => {
 
     const row = await getProposalRow(harness, proposal.id);
     expect(row?.status).toBe('pending');
+    expect(lastAnswerText(harness)).toBe(texts.proposalDecide.targetGone);
   });
 
   it('reacts with reactions.onAccept on the source message once the proposal is accepted', async () => {
@@ -379,5 +493,25 @@ describe('proposal decision callbacks (v1:p:*)', () => {
     );
 
     expect(fake(harness).reactions).toContainEqual({ chatId: chat.tgChatId, messageId: 42, emoji: '✍' });
+  });
+
+  it('does not react when the chat has reactions disabled, even with reactions.onAccept set', async () => {
+    const harness = await createBotHarness();
+    await makeOwner(harness, OWNER);
+    await updateSettings(harness.db, harness.deps.workspace.id, { reactions: { onAccept: '✍' } });
+
+    const chat = await makeSupergroupChat(harness, -5002, 'Учителя', { reactionsEnabled: false });
+    const message = await makeSourceMessage(harness, chat.id, 43, 'Маша, подготовь расписание к пятнице');
+    const proposal = await insertCreateProposal(harness, { chatId: chat.id, sourceMessageIds: [message.id] });
+
+    await harness.send(
+      callback(
+        OWNER,
+        encodeCallback({ entity: 'p', action: 'acc', id: proposal.id }),
+        botKeyboardMessage(OWNER),
+      ),
+    );
+
+    expect(fake(harness).reactions).toHaveLength(0);
   });
 });

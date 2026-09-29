@@ -206,7 +206,7 @@ async function reactOnAccept(deps: DecideDeps, proposal: ProposalRow): Promise<v
     const settings = await getSettings(deps.db, deps.workspace.id);
     if (settings.reactions.onAccept === null) return;
     const chat = await getChatById(deps.db, proposal.chatId);
-    if (chat === null) return;
+    if (chat === null || !chat.reactionsEnabled) return;
     const [message] = await deps.db.select().from(messages).where(eq(messages.id, firstId)).limit(1);
     if (!message) return;
     await deps.messenger.react(chat.tgChatId, message.tgMessageId, settings.reactions.onAccept);
@@ -287,13 +287,15 @@ export async function rejectProposal(
 }
 
 /**
- * The "mark as duplicate" button (SPEC §11.1/§11.2): rejects the `create`-kind proposal with
- * `reject_reason='duplicate'` and, when `appendToDescription` is set (always `true` from the card's single
- * button — SPEC §11.1's own description of that one button's effect, not a second button), appends the
+ * The "mark as duplicate" submenu's two buttons (SPEC §11.1/§11.2 — "mark only" vs. "mark and append"):
+ * rejects the `create`-kind proposal with `reject_reason='duplicate'` and, only when the owner explicitly
+ * chose the "mark and append" button (`appendToDescription: true` — never implied by the initial "mark as
+ * duplicate" click alone, which only opens the submenu, `src/bot/handlers/proposalCallbacks.ts`), appends the
  * proposal's quote (or, lacking one, its title) onto `taskId`'s existing description. `taskId` comes from
- * the card's own `v1:p:dup:<id>:<taskId>` `callback_data` (the duplicate target shown on the card,
+ * the submenu's own `v1:p:dpm|dpa:<id>:<taskId>` `callback_data` (the duplicate target shown on the card,
  * `payload.duplicateOf.id` at render time) — independent of `proposals.target_task_id`, which stays `null`
- * for `create`-kind rows.
+ * for `create`-kind rows. `callback_data` is never trusted (CLAUDE.md §8): `taskId` is re-validated against
+ * `proposal.workspaceId` below, not just assumed to belong to the same workspace as the proposal.
  */
 export async function markDuplicate(
   deps: DecideDeps,
@@ -316,7 +318,7 @@ export async function markDuplicate(
     if (!claim.ok) return claim;
 
     const task = await getTaskById(tx, a.taskId);
-    if (!task) return { ok: false, reason: 'target_gone' };
+    if (!task || task.workspaceId !== claim.value.workspaceId) return { ok: false, reason: 'target_gone' };
     if (!a.appendToDescription) return { ok: true, value: task };
 
     const payload = parseProposalPayload(claim.value.payload);

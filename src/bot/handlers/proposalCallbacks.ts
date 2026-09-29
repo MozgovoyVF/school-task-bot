@@ -12,6 +12,7 @@ import { decodeCallback } from '../keyboards/callbackCodec.js';
 import { texts } from '../texts/ru.js';
 import {
   renderDuplicateCard,
+  renderDuplicateMenu,
   renderReasonMenu,
   renderRejectedCard,
   renderTaskAppliedCard,
@@ -25,8 +26,10 @@ import type { BotContext } from '../context.js';
 
 /** `callback_data` actions this handler owns (plan.md Task 2.13's `v1:p:*` decision buttons). `edt` (the
  * "edit" button) is a forward reference to Task 2.14's edit dialog — not handled here, falls through to
- * `next()` (inert until then, same pattern as `src/scheduler/jobs/cards.ts`'s `nbx` button). */
-const KNOWN_ACTIONS = new Set(['acc', 'rej', 'rjr', 'apl', 'dup']);
+ * `next()` (inert until then, same pattern as `src/scheduler/jobs/cards.ts`'s `nbx` button). `dup` only
+ * opens the mark-as-duplicate submenu; `dpm`/`dpa` (its two buttons) are the actual decision (fix round 1,
+ * Important A). */
+const KNOWN_ACTIONS = new Set(['acc', 'rej', 'rjr', 'apl', 'dup', 'dpm', 'dpa']);
 
 const REASON_BY_ARG: Record<string, RejectReason> = {
   nt: 'not_task',
@@ -34,6 +37,13 @@ const REASON_BY_ARG: Record<string, RejectReason> = {
   done: 'already_done',
   oth: 'other',
 };
+
+/** Parses the `taskId` carried in `callback_data`'s `arg` (`dup`/`dpm`/`dpa`) — `null` for anything that
+ * isn't a non-negative integer, since `callback_data` is never trusted (CLAUDE.md §8). */
+function parseTaskIdArg(arg: string | undefined): number | null {
+  const taskId = arg !== undefined ? Number(arg) : NaN;
+  return Number.isInteger(taskId) && taskId >= 0 ? taskId : null;
+}
 
 function failureText(reason: 'already_decided' | 'forbidden' | 'not_found' | 'target_gone'): string {
   switch (reason) {
@@ -61,7 +71,8 @@ async function editCard(deps: DecideDeps, ctx: BotContext, view: DecisionCardVie
  * (`acc`/`apl` — create/update/complete/cancel respectively), the decline button (`rej` — for a
  * `create`-kind proposal this opens the reason submenu instead of deciding directly; every other kind
  * declines immediately), the reason submenu's own buttons (`rjr`), and the "mark as duplicate" button
- * (`dup`). `proposal.decide` (Owner only) is checked once, immediately after decoding and before any branch —
+ * (`dup`, which — like `rej` — only opens its own submenu; `dpm`/`dpa` are that submenu's two buttons and
+ * the actual decision). `proposal.decide` (Owner only) is checked once, immediately after decoding and before any branch —
  * `callback_data` is never trusted (CLAUDE.md §8) — via `ctx.state.actor`, resolved fresh from the DB on
  * every update (`src/bot/middleware/context.ts`), so a forwarded card pressed by a Member, or a former
  * Owner who has since transferred ownership, both correctly fail here regardless of what the stale
@@ -118,23 +129,46 @@ export function registerProposalCallbackHandlers(bot: Bot<BotContext>, deps: Dec
     }
 
     if (decoded.action === 'dup') {
-      const taskId = decoded.arg !== undefined ? Number(decoded.arg) : NaN;
-      if (!Number.isInteger(taskId) || taskId < 0) {
+      // Only opens the mark-as-duplicate submenu (fix round 1, Important A) — same best-effort UI-routing
+      // read as `rej`'s own submenu below; the actual decision happens on `dpm`/`dpa`.
+      const taskId = parseTaskIdArg(decoded.arg);
+      if (taskId === null) {
         await ctx.answerCallbackQuery();
         return;
       }
+      const proposal = await getProposalById(deps.db, decoded.id);
+      if (!proposal) {
+        await ctx.answerCallbackQuery({ text: texts.proposalDecide.notFound });
+        return;
+      }
+      if (proposal.status !== 'pending') {
+        await ctx.answerCallbackQuery({ text: texts.proposalDecide.alreadyDecided });
+        return;
+      }
+      await ctx.answerCallbackQuery();
+      await editCard(deps, ctx, renderDuplicateMenu(decoded.id, taskId));
+      return;
+    }
+
+    if (decoded.action === 'dpm' || decoded.action === 'dpa') {
+      const taskId = parseTaskIdArg(decoded.arg);
+      if (taskId === null) {
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      const appendToDescription = decoded.action === 'dpa';
       const result = await markDuplicate(deps, {
         proposalId: decoded.id,
         taskId,
         actor: ctx.state.actor,
-        appendToDescription: true,
+        appendToDescription,
       });
       if (!result.ok) {
         await ctx.answerCallbackQuery({ text: failureText(result.reason) });
         return;
       }
       await ctx.answerCallbackQuery();
-      await editCard(deps, ctx, renderDuplicateCard(taskId));
+      await editCard(deps, ctx, renderDuplicateCard(taskId, appendToDescription));
       return;
     }
 

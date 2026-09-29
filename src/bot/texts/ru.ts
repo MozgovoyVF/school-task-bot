@@ -645,6 +645,13 @@ export const texts = {
     reasonDuplicate: 'Дубль',
     reasonAlreadyDone: 'Уже сделано',
     reasonOther: 'Другое',
+    /** The "🔗 Дубль T12" button's own follow-up submenu (fix round 1, Important A) — offers marking the
+     * proposal as a duplicate with or without appending its quote to the existing task's description. */
+    duplicateMenuTitle(taskId: number): string {
+      return `Дубль T${String(taskId)} — просто пометить, или дописать текст в описание?`;
+    },
+    duplicateMarkOnlyButton: '🔗 Только пометить',
+    duplicateMarkAndAppendButton: '📝 Пометить и дописать',
     /** "✅ Создать" succeeded (SPEC §11.2). */
     createdCard(taskId: number, title: string): string {
       return `✅ Создано: T${String(taskId)} «${title}»`;
@@ -661,9 +668,12 @@ export const texts = {
     cancelledCard(taskId: number, title: string): string {
       return `🗑 Отменено: T${String(taskId)} «${title}»`;
     },
-    /** "🔗 Дубль T12" succeeded. */
-    duplicateCard(taskId: number): string {
-      return `🔗 Отмечено как дубль T${String(taskId)}`;
+    /** The duplicate submenu's own button succeeded — `appended` says whether "mark and append" (`dpa`)
+     * was pressed, vs. plain "mark only" (`dpm`). */
+    duplicateCard(taskId: number, appended: boolean): string {
+      return appended
+        ? `🔗 Отмечено как дубль T${String(taskId)}, описание дополнено`
+        : `🔗 Отмечено как дубль T${String(taskId)}`;
     },
     /** A decline succeeded — `reasonLabel` is one of the four `reason*` labels above, or `null` for
      * `update`/`complete`/`cancel`'s plain decline (no reason submenu for those). */
