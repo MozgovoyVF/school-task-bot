@@ -2,6 +2,70 @@
 
 ## [Unreleased]
 
+Phase 2 (AI pipeline and proposals): message batching with daily cost budgeting, the
+pseudonymized OpenRouter extraction pipeline with structured outputs, reference/due-date
+resolution, visibility policy, duplicate detection, proposal cards with accept/apply/reject/
+duplicate/edit flows and reactions, task creation from accepted proposals, an owner-facing
+`/inbox`, a superadmin `/debug` and `/reanalyze`, proposal expiry, and a synthetic eval
+dataset + runner.
+
+### Added
+
+- `src/ai/schemas.ts` — `ExtractionResult`/`Action`/`Due` zod schemas (verbatim SPEC §9.5),
+  a wire schema for OpenRouter's structured-output constraints (nullable instead of optional),
+  and `parseExtraction` (normalize-then-validate).
+- `src/ai/pseudonymize.ts` — regex-based redaction (names, phones, amounts) applied to every
+  message before it reaches the LLM.
+- `prompts/extractor.v1.md` + `prompts/examples.school_ru.json`, `src/ai/prompts.ts`,
+  `src/ai/pipeline/buildInput.ts` — the extractor prompt (system/few-shot/user template split
+  by `<!-- DATA -->`, D27) and pseudonymized input assembly.
+- `src/ai/pipeline/{resolveDue,resolve}.ts` — SPEC §10 due-date resolution (luxon, DST-safe) and
+  SPEC §9.5/§9.6 reference/assignee resolution.
+- `src/ai/pipeline/policy.ts` — confidence-threshold visibility policy (SPEC §9.6, config-driven
+  per-category thresholds).
+- `src/ai/pipeline/dedup.ts` — trigram-similarity duplicate candidate search against open tasks.
+- `src/ai/pipeline/{batcher,budget,analyze}.ts`, `src/scheduler/jobs/analyze.ts` — message
+  batching, daily LLM cost budget with pause+alert on overrun (manual/`reanalyze` batches keep
+  working while paused, per SPEC.md:260), `FOR UPDATE SKIP LOCKED` batch claiming with backoff
+  and stale-batch recovery.
+- `src/ai/pipeline/processBatch.ts`, `src/domain/proposals/repo.ts` — extraction → resolution →
+  policy → dedup → transactional proposal insert, with outbox-style `notified_at`.
+- `src/scheduler/jobs/cards.ts`, `src/bot/views/proposalCard.ts` — proposal cards for the Owner
+  (create/update/complete/cancel), quiet-hours-aware delivery (summary/overflow grouping),
+  reactions fired once per proposal at actual delivery time.
+- `src/domain/proposals/decide.ts`, `src/bot/handlers/proposalCallbacks.ts`,
+  `src/domain/tasks/{repo,service,events}.ts` — accept/apply/reject/duplicate(mark-only or
+  mark-and-append)/edit decisions via atomic `UPDATE ... WHERE status='pending' RETURNING`
+  (race-safe under concurrent accepts), task creation from accepted proposals.
+- `src/bot/conversations/editProposal.ts`, `src/bot/views/editMenu.ts`,
+  `src/time/quickDue.ts`, `src/ai/pipeline/parseDate.ts` — Owner edit dialog (quick-pick due
+  dates, free-text date parsing via the LLM, assignee submenu) before accepting a proposal.
+- `src/bot/handlers/inbox.ts` (`/inbox`, Owner), `src/bot/views/debug.ts` (`/debug`,
+  `/reanalyze`, superadmin per SPEC §12.2), `src/domain/proposals/queries.ts`,
+  `src/domain/ai/stats.ts` — pipeline visibility and manual re-analysis tooling.
+- `src/scheduler/jobs/expireProposals.ts` — daily expiry of proposals pending 7+ days (D11).
+- `eval/` — synthetic Russian-language eval dataset (`eval/datasets/school_ru.v1.jsonl`, 153
+  cases) and `pnpm eval` CLI (`eval/run.ts`) computing recall/precision/date-accuracy metrics
+  against SPEC §20.2 targets, with a `$1` cost pre-flight gate and a `--provider fixture` offline
+  smoke-test mode.
+- `src/app.ts` now wires `analyzeJob`/`cardsJob`/`expireProposalsJob` into the production ticker
+  and constructs a real `AiProviders` (OpenRouter client + extraction provider) from env, so the
+  AI pipeline actually runs outside tests.
+
+### Known open points (flagged for the user, not blocking)
+
+- **D44** (`plan.md`): the business meaning of accepting/completing/cancelling a proposal that
+  targets another still-pending proposal (not yet a task) is undecided; the technical mechanism
+  (`payload.targetProposalId`) is in place.
+- Quiet-hours interaction between `weekdays`/`windows`/`dateRanges` was implemented as an
+  independent OR across all three (Task 2.12); SPEC leaves room for an AND/nested reading too.
+- Proposal reactions (👀) fire when a card is actually delivered to the Owner, not strictly "at
+  creation time" as SPEC §9 literally says — deliberate tradeoff to avoid firing reactions on
+  proposals still waiting out quiet hours.
+- Real-model eval (recall ≥0.90/precision ≥0.60/date-accuracy ≥0.85 against a chosen OpenRouter
+  model) has not been run — needs an OpenRouter account/key and the user's model choice (Task
+  2.18), and an optional prompt-iteration pass (Task 2.19) depending on the result.
+
 ## [0.2.0] — 2026-09-28
 
 Phase 1 (groups): workspace settings, claim-code owner transfer, group-chat lifecycle
