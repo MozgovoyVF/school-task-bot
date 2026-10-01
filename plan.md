@@ -426,7 +426,7 @@ describe('planTaskNotifications', () => {
   - `renderTaskList(r, { filter, page, zone, now }): { text; buttons }`.
   - Callback: `v1:l:<f>:<page>[:<arg>]`, где `f` ∈ `all|tod|ovd|nod|asg|cht|arc|tov`.
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
   - `rowMarker`:
     - просрочено → 🔴;
     - `in_progress` и не просрочено → 🔵;
@@ -443,8 +443,8 @@ describe('planTaskNotifications', () => {
     - member не может вызвать `/tasks` (`forbidden`);
     - нажатие на номер открывает карточку;
     - меню «По исполнителю ▾» и «По чату ▾» работает.
-- [ ] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(tasks): add task lists with filters and pagination`.
+- [x] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(tasks): add task lists with filters and pagination`.
 
 ### Task 3.8: Поиск и статистика
 

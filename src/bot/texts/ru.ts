@@ -1048,6 +1048,59 @@ export const texts = {
     },
   },
   /**
+   * `/tasks`/`/today`/`/overdue`/`/archive` (`src/bot/views/taskList.ts`/`src/bot/handlers/lists.ts`,
+   * plan.md Task 3.7, SPEC §12.3) — Owner only (D40, `task.viewAll`). `row`'s marker is `rowMarker`'s own
+   * `'🔴'|'🔵'|'🟡'|'⚪'` (D24); `title`/`assignee` arrive already HTML-escaped by the caller, same
+   * convention as `texts.taskCard`. `pageFooter`'s lowercase, no-period "стр N/M" is SPEC §12.3's own
+   * literal wording (distinct from `texts.inbox.pageFooter`'s "Стр. N/M" — each list screen keeps its own
+   * copy rather than sharing one, same stance `texts.taskCard`/`texts.reminders` already take on
+   * near-identical lines elsewhere in this file).
+   */
+  taskList: {
+    headerOpen: '📋 Открытые задачи',
+    headerToday: '🟡 Сегодня',
+    headerOverdue: '🔴 Просрочено',
+    headerNoDue: '⚪ Без срока',
+    /** `/today` (SPEC §12.2: "на сегодня + просроченные") — distinct from the filter row's own
+     * `headerOverdue`/`headerToday`, which are each a single bucket. */
+    headerTodayAndOverdue: '📅 Сегодня и просроченные',
+    headerArchive: '🗄 Архив',
+    headerAssignee(name: string): string {
+      return `👤 Исполнитель: ${name}`;
+    },
+    headerChat(title: string): string {
+      return `💬 Чат: ${title}`;
+    },
+    /** No tasks matched the current filter/page. */
+    empty: 'Нет задач по этому фильтру.',
+    /** One list row (SPEC §12.3): `marker T<id> <title> — <assignee> · <due>`. */
+    row(marker: string, taskId: number, title: string, assignee: string, due: string): string {
+      return `${marker} T${String(taskId)} ${title} — ${assignee} · ${due}`;
+    },
+    /** A row's own due column when the task has no due date at all (distinct from `texts.formatDue`'s
+     * identical wording — this is a list-row fragment, not a full due-date line). */
+    noDueLabel: 'без срока',
+    pageFooter(page: number, totalPages: number): string {
+      return `стр ${String(page)}/${String(totalPages)}`;
+    },
+    prevButton: '◀️',
+    nextButton: '▶️',
+    filterAllButton: '📋 Все открытые',
+    filterTodayButton: '🟡 Сегодня',
+    filterOverdueButton: '🔴 Просрочено',
+    filterNoDueButton: '⚪ Без срока',
+    filterAssigneeButton: '👤 По исполнителю ▾',
+    filterChatButton: '💬 По чату ▾',
+    assigneeMenuHeader: '👤 По какому исполнителю показать задачи?',
+    chatMenuHeader: '💬 По какому чату показать задачи?',
+    /** The "По чату ▾" picker has nothing to list (no chats attached to the workspace yet). */
+    chatMenuEmpty: 'У этого рабочего пространства пока нет чатов.',
+    /** A `chats.title`-less chat's own picker button/header label (same "без названия" fallback
+     * `texts.inbox.itemButton` already uses for an untitled chat). */
+    chatUntitled: 'без названия',
+    backButton: '↩️ Назад',
+  },
+  /**
    * The morning summary (`src/scheduler/jobs/summary.ts`/`src/bot/views/summary.ts`, plan.md Task 3.5,
    * SPEC §13.4) — Owner only (D40, no "Ждут вашей проверки" section, since the review flow is
    * Member-only and was removed). Section order: overdue, today, unprocessed proposals, no-due — an empty

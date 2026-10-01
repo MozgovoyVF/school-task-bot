@@ -8,9 +8,9 @@ import { can } from '../../domain/people/permissions.js';
  * command Phase 3 doesn't implement yet. Without a handler, `bot.command()` finds nothing to run and the
  * bot stays silent — found on dev acceptance testing of v0.3.0-rc.1 (`/tasks` did nothing). Each of these
  * gets its own real handler in Phase 3 (`src/bot/handlers/lists.ts` for `/tasks`/`/today`/`/overdue`/
- * `/archive` per plan.md Task 3.7, `search.ts`/`stats.ts` per Task 3.8, `settings.ts` per Task 3.11, and
- * Task 3.10's manual-creation handler for `/new`) — this file, and `STUB_COMMANDS` below, is meant to
- * shrink command-by-command as those land, not grow.
+ * `/archive`, landed in Task 3.7 — removed from `STUB_COMMANDS` below accordingly; `search.ts`/`stats.ts`
+ * per Task 3.8, `settings.ts` per Task 3.11, and Task 3.10's manual-creation handler for `/new`) — this
+ * file, and `STUB_COMMANDS` below, is meant to shrink command-by-command as those land, not grow.
  *
  * Every one of these is an `OWNER_COMMANDS`-only row (SPEC §12.2) — gated the same way
  * `registerInboxHandlers`'s `/inbox` gates `proposal.receive`: `can(ctx.state.actor, 'task.viewAll')`
@@ -27,7 +27,7 @@ import { can } from '../../domain/people/permissions.js';
  * `bot.on('message', ...)` matches every chat type and returns early (no `next()`) for a non-group one,
  * which would otherwise swallow the DM update before a handler registered after it ever ran.
  */
-const STUB_COMMANDS = ['tasks', 'today', 'overdue', 'new', 'archive', 'search', 'stats', 'settings'] as const;
+const STUB_COMMANDS = ['new', 'search', 'stats', 'settings'] as const;
 
 export function registerStubCommandHandlers(bot: Bot<BotContext>): void {
   for (const command of STUB_COMMANDS) {
