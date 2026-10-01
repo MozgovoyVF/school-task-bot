@@ -177,6 +177,11 @@ export const texts = {
   common: {
     /** Sent when a user without the required role invokes a restricted command or callback. */
     forbidden: 'У вас нет доступа к этой команде.',
+    /** DM-only reply for an `OWNER_COMMANDS` (`src/bot/commands.ts`) menu command Phase 3 hasn't
+     * implemented yet (`src/bot/handlers/stubs.ts`) — found silent on dev acceptance of v0.3.0-rc.1
+     * (`/tasks` had no handler at all). Kept generic rather than per-command wording: which feature it is
+     * doesn't change what the Owner needs to know ("not yet, soon"). */
+    comingSoon: 'Эта команда появится в одном из ближайших обновлений.',
   },
   /**
    * Assembles `src/time/format.ts`'s `formatDue` structure (or `null`, "no

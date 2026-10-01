@@ -28,6 +28,7 @@ import { registerPrivacyHandlers } from './handlers/privacy.js';
 import { registerGroupHandlers } from './handlers/group.js';
 import { registerProposalCallbackHandlers } from './handlers/proposalCallbacks.js';
 import { registerInboxHandlers } from './handlers/inbox.js';
+import { registerStubCommandHandlers } from './handlers/stubs.js';
 import { registerTimezoneConversation } from './conversations/timezone.js';
 import { registerEditPersonConversation } from './conversations/editPerson.js';
 import { registerEditProposalConversation } from './conversations/editProposal.js';
@@ -131,6 +132,10 @@ export function createBot(
   // and both fall through unknown actions via `next()` symmetrically), only its `/inbox` command half
   // does; registering the whole thing here, ahead of `registerGroupHandlers`, satisfies that.
   registerInboxHandlers(bot, deps);
+  // Same ordering constraint as `/privacy`/`/inbox` above — must run before `registerGroupHandlers`,
+  // whose `bot.on('message', ...)` would otherwise swallow these DM commands first (see that file's own
+  // doc comment, and `stubs.ts`'s).
+  registerStubCommandHandlers(bot);
   registerGroupHandlers(bot, deps);
   registerProposalCallbackHandlers(bot, deps);
 

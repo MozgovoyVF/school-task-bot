@@ -88,6 +88,12 @@ dataset + runner.
   `rejected`/`expired`/`superseded` (no task ever resulted), the dependent is closed too
   (`status='expired'`) so it stops looping; while the target is still `pending`, it keeps
   waiting, now logged once at `debug` instead of `warn` on every tick.
+- `/tasks`, `/today`, `/overdue`, `/new`, `/archive`, `/search`, `/stats` and `/settings` are
+  listed in the Owner's command menu (`src/bot/commands.ts`) but had no handler yet, so the bot
+  stayed silent (found during manual acceptance of `v0.3.0-rc.1` on dev). `src/bot/handlers/
+  stubs.ts` now replies with a short "coming in a future update" DM text
+  (`texts.common.comingSoon`) for each, until Phase 3 implements them for real; group-chat
+  behaviour is unchanged.
 
 ### Known open points (flagged for the user, not blocking)
 

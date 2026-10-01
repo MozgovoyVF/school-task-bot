@@ -1,0 +1,31 @@
+import type { Bot } from 'grammy';
+import type { BotContext } from '../context.js';
+import { texts } from '../texts/ru.js';
+
+/**
+ * DM-only "coming in a future update" replies for every `OWNER_COMMANDS` (`src/bot/commands.ts`) menu
+ * command Phase 3 doesn't implement yet. Without a handler, `bot.command()` finds nothing to run and the
+ * bot stays silent — found on dev acceptance testing of v0.3.0-rc.1 (`/tasks` did nothing). Each of these
+ * gets its own real handler in Phase 3 (`src/bot/handlers/lists.ts` for `/tasks`/`/today`/`/overdue`/
+ * `/archive` per plan.md Task 3.7, `search.ts`/`stats.ts` per Task 3.8, `settings.ts` per Task 3.11, and
+ * Task 3.10's manual-creation handler for `/new`) — this file, and `STUB_COMMANDS` below, is meant to
+ * shrink command-by-command as those land, not grow.
+ *
+ * Group-chat behaviour is untouched (CLAUDE.md: commands in groups must not start dialogs) — every handler
+ * below returns immediately outside a private chat, the same gate `registerInboxHandlers`'s `/inbox` and
+ * `registerDmHandlers`'s `/start`/`/help` use, so a group's own message-intake handling
+ * (`registerGroupHandlers`) is unaffected. Must be registered in `src/bot/bot.ts` *before*
+ * `registerGroupHandlers`, same as `/privacy`/`/inbox` — see that file's own comment for why: its
+ * `bot.on('message', ...)` matches every chat type and returns early (no `next()`) for a non-group one,
+ * which would otherwise swallow the DM update before a handler registered after it ever ran.
+ */
+const STUB_COMMANDS = ['tasks', 'today', 'overdue', 'new', 'archive', 'search', 'stats', 'settings'] as const;
+
+export function registerStubCommandHandlers(bot: Bot<BotContext>): void {
+  for (const command of STUB_COMMANDS) {
+    bot.command(command, async (ctx) => {
+      if (ctx.chat?.type !== 'private') return;
+      await ctx.reply(texts.common.comingSoon, { parse_mode: 'HTML' });
+    });
+  }
+}
