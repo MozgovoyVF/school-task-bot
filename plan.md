@@ -70,8 +70,8 @@
 | D3 | TypeScript | `~5.9.3`: SPEC §4 требует 5.x, typescript-eslint поддерживает `<6.1`. | принято |
 | D4 | Схема LLM | Локальная zod-схема — дословно из SPEC §9.5. Для провайдера строится отдельная wire-схема: `nullable` вместо `optional`, все поля `required`, `additionalProperties:false`. Если провайдер отвергает `pattern`, эти ограничения из wire-схемы убираются. Результат всегда проверяется локальной схемой. | принято |
 | D5 | Добавления к схеме SPEC §6 (только технические) | `messages.reply_to_quote text null` (SPEC §7.2 требует хранить цитату, но колонки нет) · `analysis_batches.next_attempt_at timestamptz null` (backoff) · `analysis_batches.chat_id` nullable плюс `analysis_batches.kind enum('auto','manual','reanalyze')`: ручные вызовы LLM тоже учитываются в стоимости и бюджете · `proposals.notified_at timestamptz null` (outbox карточек) · `proposals.chat_id` nullable (черновики из DM) · `chats.pending_since timestamptz null` (72 ч) · `tasks.assignee_all boolean default false` (исполнитель «Всем») · `tasks.created_by_user_id` nullable (обезличивание) · `claim_codes.previous_owner_action enum('demote','remove')` · таблица `app_state(key text pk, value jsonb, updated_at)`: heartbeat, отметки ежедневных job, счётчик подряд идущих ошибок LLM, отметки оповещений | принято |
-| D6 | `dedupe_key` уведомлений | `task:{id}:v{version}:{kind}:{recipient}:{fire_date}`: к формату SPEC §13.2 добавлена версия задачи. Без неё перенос срока в пределах того же дня упирается в уже отправленное напоминание. Для сводки: `summary:{workspace}:{recipient}:{date}`, для snooze: `snooze:{task}:{recipient}:{fireAtISO}`. | **решаем при подходе к Task 3.1** |
-| D7 | Планирование уведомлений | Уведомления с моментом отправки в прошлом не создаются. Создаётся только ближайший `overdue`, следующий job добавляет после отправки (цепочка), пока задача не закрыта. Для срока со временем первый `overdue` — ближайшее `overdueTime` строго после срока, возможно в тот же день (буквально по SPEC §13.2). Для all-day — со следующего дня. | **решаем при подходе к Task 3.1** |
+| D6 | `dedupe_key` уведомлений | `task:{id}:v{version}:{kind}:{recipient}:{fire_date}`: к формату SPEC §13.2 добавлена версия задачи. Без неё перенос срока в пределах того же дня упирается в уже отправленное напоминание. Для сводки: `summary:{workspace}:{recipient}:{date}`, для snooze: `snooze:{task}:{recipient}:{fireAtISO}`. | принято (пользователь, 2026-10-01) |
+| D7 | Планирование уведомлений | Уведомления с моментом отправки в прошлом не создаются. Создаётся только ближайший `overdue`, следующий job добавляет после отправки (цепочка), пока задача не закрыта. Для срока со временем первый `overdue` — ближайшее `overdueTime` строго после срока, возможно в тот же день (буквально по SPEC §13.2). Для all-day — со следующего дня. | принято (пользователь, 2026-10-01) |
 | D8 | `pre_due` для срока со временем | Условие «до срока > 24 ч» проверяется в момент планирования: при создании задачи и при каждом изменении срока. | принято |
 | D9 | Review | ~~Owner продолжает получать напоминания по задаче с `review_pending=true`.~~ Не применяется: режим проверки отменён (D40). | отменено D40 |
 | D10 | Тихие часы | Проверяются в поясе получателя. `weekdays` — ISO 1..7 (пн..вс). Окна могут переходить через полночь, `dateRanges` включительны. Подавленные `pre_due`, `overdue` и `summary` получают `status='cancelled'` и `last_error='quiet'`, цепочка `overdue` при этом продолжается. Карточки, созданные в тихий период, после его окончания приходят одним сообщением «За время тишины найдено N предложений». | принято |
@@ -209,7 +209,7 @@ export interface TaskHook { name: string; afterChange(tx: Tx, task: TaskRow | nu
   - `planTaskNotifications(a: { task: { id: number; version: number; dueAt: Date | null; dueAllDay: boolean; dueTz: string | null; status: string }; recipients: PlanRecipient[]; reminders: Settings['reminders']; now: Date }): PlannedNotification[]`;
   - `nextOverdueAfter(a: { task; recipient: PlanRecipient; reminders; after: Date }): PlannedNotification | null` — используется для цепочки в 3.3.
 
-- [ ] **Шаг 1: падающие тесты** (SPEC §13.2, D6–D8, D40)
+- [x] **Шаг 1: падающие тесты** (SPEC §13.2, D6–D8, D40)
 
 ```ts
 import { describe, it, expect } from 'vitest';
@@ -281,14 +281,14 @@ describe('planTaskNotifications', () => {
 });
 ```
 
-- [ ] **Шаг 2:** FAIL.
-- [ ] **Шаг 3: реализация** (только luxon).
+- [x] **Шаг 2:** FAIL.
+- [x] **Шаг 3: реализация** (только luxon).
   - Календарная дата all-day берётся в `task.dueTz` (при отсутствии — в поясе получателя), время напоминания — в поясе получателя.
   - Первый `overdue`:
     - срок со временем — самое раннее `overdueTime` в поясе получателя строго после `max(dueAt, now)`;
     - all-day — самое раннее `overdueTime` не раньше следующего дня после даты срока и строго после `now`.
-- [ ] **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(notifications): plan pre-due, due and overdue reminders`.
+- [x] **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(notifications): plan pre-due, due and overdue reminders`.
 
 ### Task 3.2: Пересчёт напоминаний при изменении задачи
 
