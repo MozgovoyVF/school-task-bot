@@ -5,12 +5,18 @@ import { notifications } from '../../db/schema/index.js';
 import { getUserById, markDmBlocked, type UserRow } from '../../domain/people/repo.js';
 import { getSettings } from '../../domain/workspaces/repo.js';
 import { getTaskById, type TaskRow } from '../../domain/tasks/repo.js';
-import { getTaskListItem, type TaskListItem } from '../../domain/tasks/queries.js';
+import {
+  getTaskListItem,
+  summarySections,
+  type SummarySections,
+  type TaskListItem,
+} from '../../domain/tasks/queries.js';
 import { nextOverdueAfter, type PlanRecipient } from '../../domain/notifications/plan.js';
 import { nextAttemptAt } from '../../ai/pipeline/batcher.js';
 import { userZone } from '../../time/zones.js';
 import { isQuietAt } from '../../time/quiet.js';
 import { renderOverdueDigest, renderReminder, type ReminderKind } from '../../bot/views/reminder.js';
+import { renderSummary } from '../../bot/views/summary.js';
 import { MessengerError, type Buttons, type MessengerErrorKind } from '../../domain/messenger.js';
 import type { Job } from '../ticker.js';
 import type { Settings } from '../../domain/settings/schema.js';
@@ -27,15 +33,30 @@ const SUPPRESSED_BY_QUIET = new Set<NotificationRow['kind']>(['pre_due', 'overdu
 
 const NOTIFY_BATCH_LIMIT = 50;
 
-/** One `scheduled` row, resolved against its still-current task/recipient and ready to be sent (or grouped
- * into an overdue digest) this tick. */
-interface ResolvedNotification {
+/** A task-bound `scheduled` row (`pre_due`/`due`/`overdue`/`snooze`), resolved against its still-current
+ * task/recipient and ready to be sent (or grouped into an overdue digest) this tick. */
+interface ResolvedTaskNotification {
+  kind: 'task';
   row: NotificationRow;
   taskRow: TaskRow;
   listItem: TaskListItem;
   recipient: UserRow;
   zone: string;
 }
+
+/** A `summary`-kind `scheduled` row, resolved with its own freshly-built `SummarySections` (Task 3.5) —
+ * has no task of its own, so it never joins {@link ResolvedTaskNotification}'s `overdue`-chain grouping. */
+interface ResolvedSummaryNotification {
+  kind: 'summary';
+  row: NotificationRow;
+  sections: SummarySections;
+  recipient: UserRow;
+  zone: string;
+}
+
+/** One `scheduled` row, resolved against its still-current recipient (and, for a task-bound kind, its
+ * still-current task) and ready to be sent this tick. */
+type ResolvedNotification = ResolvedTaskNotification | ResolvedSummaryNotification;
 
 type SendResult = { ok: true; messageId: number } | { ok: false; kind: MessengerErrorKind };
 
@@ -156,7 +177,7 @@ async function applySendResult(
     }
     for (const r of rows) {
       const { failed } = await recordSendFailure(tx, r.row, result.kind, now);
-      if (failed && r.row.kind === 'overdue') {
+      if (failed && r.kind === 'task' && r.row.kind === 'overdue') {
         await scheduleNextOverdueLink(
           tx,
           deps.workspace.id,
@@ -175,7 +196,7 @@ async function applySendResult(
       .update(notifications)
       .set({ status: 'sent', sentTgMessageId: result.messageId })
       .where(eq(notifications.id, r.row.id));
-    if (r.row.kind === 'overdue') {
+    if (r.kind === 'task' && r.row.kind === 'overdue') {
       await scheduleNextOverdueLink(
         tx,
         deps.workspace.id,
@@ -190,15 +211,16 @@ async function applySendResult(
 
 /**
  * Resolves one `scheduled` row against its (possibly now-stale) task and recipient: `null` once it has
- * nothing left to send for — the row is cancelled (or, for a quiet-suppressed `summary`, left for its own
- * branch below) and `null` is returned in every such case.
+ * nothing left to send for — the row is cancelled and `null` is returned.
  *
  * `summary` rows have no task (`taskId` is `null` — their dedupe key is `summary:{ws}:{user}:{date}`, SPEC
  * §13.1) and are resolved on their own branch, checked *before* the generic task lookup (review round 1,
  * I1 — checking the generic "no task" branch first was unconditionally cancelling every `summary` row,
  * quiet hours or not, instead of only suppressing it during quiet hours like D10 requires): quiet hours
- * cancel it with `last_error='quiet'`; otherwise it is left `scheduled` untouched — no code creates
- * `summary` rows yet, Task 3.5 renders and sends them at their own fire time.
+ * cancel it with `last_error='quiet'` (`src/scheduler/jobs/summary.ts`'s `ensureSummariesJob` — running
+ * right after this job in `src/app.ts`'s ticker — then schedules the next occurrence); otherwise (Task
+ * 3.5) its `SummarySections` are built fresh, right here, from the current state of the workspace's tasks
+ * and proposals — a summary is never pre-rendered ahead of its own fire time.
  */
 async function resolveNotification(
   tx: Tx,
@@ -215,8 +237,12 @@ async function resolveNotification(
   const zone = userZone(recipient, deps.workspace);
 
   if (row.kind === 'summary') {
-    if (isQuietAt(now, zone, settings.quiet)) await cancelNotification(tx, row.id, 'quiet');
-    return null;
+    if (isQuietAt(now, zone, settings.quiet)) {
+      await cancelNotification(tx, row.id, 'quiet');
+      return null;
+    }
+    const sections = await summarySections(tx, { workspaceId: deps.workspace.id, now, zone });
+    return { kind: 'summary', row, sections, recipient, zone };
   }
 
   const taskRow = row.taskId === null ? null : await getTaskById(tx, row.taskId);
@@ -246,7 +272,7 @@ async function resolveNotification(
     return null;
   }
 
-  return { row, taskRow, listItem, recipient, zone };
+  return { kind: 'task', row, taskRow, listItem, recipient, zone };
 }
 
 /** `row.kind` narrowed to {@link ReminderKind} — safe once `resolveNotification` has already returned
@@ -289,12 +315,12 @@ export const notifyJob: Job = {
       const settings = await getSettings(tx, deps.workspace.id);
 
       const individual: ResolvedNotification[] = [];
-      const overdueByRecipient = new Map<number, ResolvedNotification[]>();
+      const overdueByRecipient = new Map<number, ResolvedTaskNotification[]>();
 
       for (const row of due) {
         const resolved = await resolveNotification(tx, deps, settings, row, now);
         if (resolved === null) continue;
-        if (resolved.row.kind === 'overdue') {
+        if (resolved.kind === 'task' && resolved.row.kind === 'overdue') {
           const list = overdueByRecipient.get(resolved.recipient.id) ?? [];
           list.push(resolved);
           overdueByRecipient.set(resolved.recipient.id, list);
@@ -310,11 +336,12 @@ export const notifyJob: Job = {
 
       for (const r of individual) {
         if (blocked.has(r.recipient.id)) continue;
-        const { text, buttons } = renderReminder({
-          kind: reminderKind(r.row),
-          task: r.listItem,
-          viewerZone: r.zone,
-        });
+        // `summary` (Task 3.5) has no task of its own — rendered from its pre-built `SummarySections`
+        // instead of `renderReminder`'s task-card shape.
+        const { text, buttons } =
+          r.kind === 'summary'
+            ? renderSummary(r.sections, { date: now, zone: r.zone })
+            : renderReminder({ kind: reminderKind(r.row), task: r.listItem, viewerZone: r.zone });
         const result = await sendReminder(deps, r.recipient.tgUserId, text, buttons);
         if (!result.ok && result.kind === 'forbidden') blocked.add(r.recipient.id);
         await applySendResult(tx, deps, [r], r.recipient, settings, now, result);

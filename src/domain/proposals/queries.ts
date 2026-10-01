@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import type { AppDeps } from '../../deps.js';
-import type { Db } from '../../db/client.js';
+import type { Db, DbOrTx } from '../../db/client.js';
 import { analysisBatches, chats, messages, proposals, tasks } from '../../db/schema/index.js';
 import { getChatById } from '../chats/repo.js';
 import { parseProposalPayload, type ProposalRow } from './repo.js';
@@ -34,10 +34,13 @@ function itemTitle(row: ProposalRow, taskTitleById: ReadonlyMap<number, string>)
  * `/inbox`'s data (plan.md Task 2.15, SPEC §12.2's row, D40 owner-only): every still-`pending` proposal
  * of `workspaceId` — `shown` *and* `suppressed` alike, unlike `cardsJob`'s outbox, which only ever
  * delivers `shown` ones — oldest first, `args.pageSize` per `args.page` (1-indexed). `total` is the full
- * pending count (for the caller's page-count math), independent of `pageSize`/`page`.
+ * pending count (for the caller's page-count math), independent of `pageSize`/`page`. `db` accepts
+ * `DbOrTx` (not just `Db`) — `src/domain/tasks/queries.ts`'s `summarySections` (Task 3.5) calls this from
+ * inside `notifyJob`'s own transaction to get the morning summary's `inboxCount`, rather than duplicating
+ * this count query.
  */
 export async function listPendingProposals(
-  db: Db,
+  db: DbOrTx,
   workspaceId: number,
   args: { page: number; pageSize: number },
 ): Promise<PendingProposalsPage> {

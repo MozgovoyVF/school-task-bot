@@ -55,8 +55,10 @@ function dateAnchor(dt: DateTime, zone: string): DateTime {
   return DateTime.fromObject({ year: dt.year, month: dt.month, day: dt.day }, { zone });
 }
 
-/** Earliest `time`-of-day instant (in `zone`) strictly after `after`. */
-function earliestTimeStrictlyAfter(zone: string, time: string, after: Date): DateTime {
+/** Earliest `time`-of-day instant (in `zone`) strictly after `after` — exported for
+ * `src/scheduler/jobs/summary.ts` (Task 3.5), which reuses this same "next occurrence of an HH:mm time in a
+ * zone" math for `settings.summary.time` instead of reimplementing it. */
+export function earliestTimeStrictlyAfter(zone: string, time: string, after: Date): DateTime {
   let day = dateAnchor(DateTime.fromJSDate(after, { zone }), zone);
   let candidate = atTime(day, time);
   while (candidate.toMillis() <= after.getTime()) {

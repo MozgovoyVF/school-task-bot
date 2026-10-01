@@ -428,7 +428,7 @@ describe('notifyJob (SPEC §13.1, plan.md Task 3.3)', () => {
       expect(after?.lastError).toBe('quiet');
     });
 
-    it('a "summary" row outside quiet hours is left scheduled untouched (Task 3.5 sends it)', async () => {
+    it('a "summary" row outside quiet hours is sent (Task 3.5) and marked sent', async () => {
       const { ws, owner, clock } = await setupOwner();
       // No quiet hours configured — `setQuietAllDay` deliberately not called.
       const messenger = new FakeMessenger();
@@ -444,10 +444,11 @@ describe('notifyJob (SPEC §13.1, plan.md Task 3.3)', () => {
 
       await notifyJob.run(deps);
 
-      expect(messenger.sent).toHaveLength(0);
+      expect(messenger.sent).toHaveLength(1);
+      expect(messenger.sent[0]?.text).toContain('☀️ Доброе утро!');
       const [after] = await db.select().from(notifications).where(eq(notifications.id, n.id));
-      expect(after?.status).toBe('scheduled');
-      expect(after?.lastError).toBeNull();
+      expect(after?.status).toBe('sent');
+      expect(after?.sentTgMessageId).not.toBeNull();
     });
   });
 

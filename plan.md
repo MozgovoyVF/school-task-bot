@@ -368,7 +368,7 @@ describe('planTaskNotifications', () => {
   - `renderSummary(s, { date: Date; zone: string }): { text: string; buttons: Buttons }`;
   - `ensureSummariesJob: Job` — для owner держит одну scheduled-сводку на следующее `summary.time` в поясе получателя; ключ `summary:{ws}:{user}:{date}`.
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
   - View:
     - секции в порядке SPEC §13.4 без «Ждут вашей проверки» (D40), заголовок `☀️ Доброе утро! Сводка на пт, 25 сен`;
     - пустые секции не выводятся;
@@ -381,8 +381,8 @@ describe('planTaskNotifications', () => {
     2. `summary.enabled=false` → записи не создаются, уже созданные отменены.
     3. Смена `summary.time` через `/settings` → scheduled-сводка пересоздана.
     4. Тихий день (`dateRanges`) → сводка подавлена, на следующий день приходит.
-- [ ] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(summary): add daily morning summary`.
+- [x] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(summary): add daily morning summary`.
 
 ### Task 3.6: Карточка задачи и действия с ней
 

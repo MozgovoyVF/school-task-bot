@@ -956,6 +956,46 @@ export const texts = {
     taskGone: 'Задача не найдена или уже закрыта.',
   },
   /**
+   * The morning summary (`src/scheduler/jobs/summary.ts`/`src/bot/views/summary.ts`, plan.md Task 3.5,
+   * SPEC §13.4) — Owner only (D40, no "Ждут вашей проверки" section, since the review flow is
+   * Member-only and was removed). Section order: overdue, today, unprocessed proposals, no-due — an empty
+   * section is simply left out, and `allEmpty` replaces the whole body when every section is empty.
+   * `sectionMore`/no-due's own overflow line reuse the same "ещё N → /tasks" convention as
+   * `texts.reminders.overdueDigestMore`.
+   */
+  summary: {
+    /** `dateLabel` is `src/time/format.ts`'s `formatDateLabel` output, e.g. `пт, 25 сен`. */
+    header(dateLabel: string): string {
+      return `☀️ Доброе утро! Сводка на ${dateLabel}`;
+    },
+    overdueHeader(count: number): string {
+      return `🔴 Просрочено (${String(count)}):`;
+    },
+    todayHeader(count: number): string {
+      return `🟡 Сегодня (${String(count)}):`;
+    },
+    inboxLine(count: number): string {
+      return `📥 Неразобранные предложения: ${String(count)} → /inbox`;
+    },
+    /** `count` is the section's true total (`noDueTotal`), even when the body below only shows the top 5. */
+    noDueHeader(count: number): string {
+      return `⚪ Без срока (${String(count)}):`;
+    },
+    /** A no-due task never has a due date to show (that's the whole section), so its line is just the
+     * title, unlike `texts.reminders.overdueDigestLine`'s own `title — due` shape. */
+    noDueItemLine(taskId: number, title: string): string {
+      return `• T${String(taskId)} «${title}»`;
+    },
+    /** Any section's own overflow footer, once its item list had to be cut short — `src/bot/views/
+     * summary.ts`'s `renderSummary` budgets Telegram's 4096-char limit (CLAUDE.md) across every section. */
+    sectionMore(count: number): string {
+      return `… ещё ${String(count)} → /tasks`;
+    },
+    /** Every section empty (SPEC §13.4). */
+    allEmpty: 'Задач на сегодня нет 🎉',
+    allTasksButton: '📋 Все задачи',
+  },
+  /**
    * `/inbox` (SPEC §12.2 row, Owner only — D40, Task 2.15): every still-`pending` proposal (`shown` *and*
    * `suppressed` alike — this is deliberately the one place a `suppressed` proposal is ever surfaced to
    * the Owner, so a message the auto-pipeline hid below threshold is never permanently lost, CLAUDE.md's
