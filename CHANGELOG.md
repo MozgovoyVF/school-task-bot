@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-10-01
+
 Phase 2 (AI pipeline and proposals): message batching with daily cost budgeting, the
 pseudonymized OpenRouter extraction pipeline with structured outputs, reference/due-date
 resolution, visibility policy, duplicate detection, proposal cards with accept/apply/reject/
