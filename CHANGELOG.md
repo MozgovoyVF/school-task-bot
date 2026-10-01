@@ -90,10 +90,10 @@ dataset + runner.
   waiting, now logged once at `debug` instead of `warn` on every tick.
 - `/tasks`, `/today`, `/overdue`, `/new`, `/archive`, `/search`, `/stats` and `/settings` are
   listed in the Owner's command menu (`src/bot/commands.ts`) but had no handler yet, so the bot
-  stayed silent (found during manual acceptance of `v0.3.0-rc.1` on dev). `src/bot/handlers/
-stubs.ts` now replies with a short "coming in a future update" DM text
-  (`texts.common.comingSoon`) for each, until Phase 3 implements them for real; group-chat
-  behaviour is unchanged.
+  stayed silent (found during manual acceptance of `v0.3.0-rc.1` on dev). `src/bot/handlers/stubs.ts`
+  now replies with a short "coming in a future update" DM text (`texts.common.comingSoon`) for each,
+  gated to the Owner only (`can(actor, 'task.viewAll')`, review round 1, I1 — the first version
+  replied to anyone), until Phase 3 implements them for real; group-chat behaviour is unchanged.
 - The daily LLM budget alert (and `/admin`'s cost lines) rounded any USD amount under one cent to
   `"0.00"` via a flat `toFixed(2)` — visible with a tiny `LLM_DAILY_BUDGET_USD` (e.g. `0.0001`),
   which showed as "из 0.00 $" (found during manual acceptance of `v0.3.0-rc.1` on dev).

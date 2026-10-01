@@ -1,6 +1,7 @@
 import type { Bot } from 'grammy';
 import type { BotContext } from '../context.js';
 import { texts } from '../texts/ru.js';
+import { can } from '../../domain/people/permissions.js';
 
 /**
  * DM-only "coming in a future update" replies for every `OWNER_COMMANDS` (`src/bot/commands.ts`) menu
@@ -10,6 +11,13 @@ import { texts } from '../texts/ru.js';
  * `/archive` per plan.md Task 3.7, `search.ts`/`stats.ts` per Task 3.8, `settings.ts` per Task 3.11, and
  * Task 3.10's manual-creation handler for `/new`) — this file, and `STUB_COMMANDS` below, is meant to
  * shrink command-by-command as those land, not grow.
+ *
+ * Every one of these is an `OWNER_COMMANDS`-only row (SPEC §12.2) — gated the same way
+ * `registerInboxHandlers`'s `/inbox` gates `proposal.receive`: `can(ctx.state.actor, 'task.viewAll')`
+ * (review round 1, I1 — the initial version replied to anyone who typed the command, Owner or not,
+ * leaking "this is a real, if unfinished, feature" to a stranger/Member). `task.viewAll` is `isOwner`-only
+ * in `permissions.ts`, same as every other action these commands will eventually use once Phase 3 gives
+ * each its own real (and more specific) permission check — this stub only needs "Owner, not anyone else".
  *
  * Group-chat behaviour is untouched (CLAUDE.md: commands in groups must not start dialogs) — every handler
  * below returns immediately outside a private chat, the same gate `registerInboxHandlers`'s `/inbox` and
@@ -25,6 +33,10 @@ export function registerStubCommandHandlers(bot: Bot<BotContext>): void {
   for (const command of STUB_COMMANDS) {
     bot.command(command, async (ctx) => {
       if (ctx.chat?.type !== 'private') return;
+      if (!can(ctx.state.actor, 'task.viewAll')) {
+        await ctx.reply(texts.common.forbidden, { parse_mode: 'HTML' });
+        return;
+      }
       await ctx.reply(texts.common.comingSoon, { parse_mode: 'HTML' });
     });
   }
