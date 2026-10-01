@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { planTaskNotifications, type PlanRecipient } from '../../../src/domain/notifications/plan.js';
+import {
+  planTaskNotifications,
+  nextOverdueAfter,
+  type PlanRecipient,
+} from '../../../src/domain/notifications/plan.js';
 
 const reminders = {
   preDueTime: '10:00',
@@ -55,6 +59,16 @@ describe('planTaskNotifications', () => {
   it('skips pre_due when due is less than 24h away (D8)', () => {
     expect(plan(task(), '2026-09-25T00:00:00Z').map((x) => x[0])).toEqual(['due', 'overdue']);
   });
+  it('skips pre_due when due is <24h away even though the day-before candidate is still in the future (D8)', () => {
+    // due Fri 08:00 MSK, now Thu 08:30 MSK: due is 23.5h away. The "day before due date at preDueTime"
+    // candidate (Thu 10:00 MSK) is still in the future relative to `now`, so the plain "never in the past"
+    // filter alone would wrongly include it — D8 additionally requires `dueAt - now > 24h`.
+    const due0800 = new Date('2026-09-25T05:00:00Z');
+    expect(plan(task({ dueAt: due0800 }), '2026-09-24T05:30:00Z').map((x) => x[0])).toEqual([
+      'due',
+      'overdue',
+    ]);
+  });
   it('all-day due', () => {
     expect(
       plan(task({ dueAt: FRI_ALLDAY_MSK, dueAllDay: true }), '2026-09-23T09:00:00Z').map((x) => x[2]),
@@ -106,4 +120,57 @@ describe('planTaskNotifications', () => {
     });
     expect(r[0]).toEqual(['pre_due', 10, '2026-09-24T06:00:00.000Z', 'task:1:v3:pre_due:10:2026-09-24']);
   });
+});
+
+describe('nextOverdueAfter', () => {
+  it('returns null once the task has no due date or is closed', () => {
+    const after = new Date('2026-09-26T07:00:00Z');
+    expect(nextOverdueAfter({ task: task({ dueAt: null }), recipient: owner, reminders, after })).toBeNull();
+    expect(
+      nextOverdueAfter({ task: task({ status: 'done' }), recipient: owner, reminders, after }),
+    ).toBeNull();
+    expect(
+      nextOverdueAfter({ task: task({ status: 'cancelled' }), recipient: owner, reminders, after }),
+    ).toBeNull();
+  });
+
+  it('returns the next overdueTime after `after`, embedding the task version in the dedupe key (D6)', () => {
+    const n = nextOverdueAfter({
+      task: task({ version: 3 }),
+      recipient: owner,
+      reminders,
+      after: new Date('2026-09-26T07:00:00Z'),
+    });
+    expect(n).toEqual({
+      kind: 'overdue',
+      recipientUserId: 10,
+      fireAt: new Date('2026-09-27T07:00:00.000Z'),
+      dedupeKey: 'task:1:v3:overdue:10:2026-09-27',
+    });
+  });
+
+  it('handles DST in the recipient zone', () => {
+    const berlin: PlanRecipient = { userId: 10, zone: 'Europe/Berlin' };
+    const n = nextOverdueAfter({
+      task: task({ dueTz: 'Europe/Berlin' }),
+      recipient: berlin,
+      reminders,
+      after: new Date('2026-10-24T08:00:00Z'),
+    });
+    expect(n?.fireAt.toISOString()).toBe('2026-10-25T09:00:00.000Z');
+  });
+
+  it(
+    'is not aware of the real "now": a stale `after` in the deep past yields a fireAt also in the past — ' +
+      "callers must pass the last-sent overdue's own fireAt, never an arbitrary stale value",
+    () => {
+      const n = nextOverdueAfter({
+        task: task(),
+        recipient: owner,
+        reminders,
+        after: new Date('2020-01-01T06:00:00Z'),
+      });
+      expect(n?.fireAt.toISOString()).toBe('2020-01-01T07:00:00.000Z');
+    },
+  );
 });

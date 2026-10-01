@@ -40,6 +40,7 @@ export interface TaskForPlanning {
 }
 
 const CLOSED_STATUSES = new Set(['done', 'cancelled']);
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Sets `dt`'s clock-of-day to an `HH:mm` string (zod-validated by `RemindersSchema`). */
 function atTime(dt: DateTime, time: string): DateTime {
@@ -92,9 +93,12 @@ function toNotification(
 /**
  * Plans the full reminder set for one recipient. `pre_due`/`due` are dropped
  * once their instant is already in the past (D7 — "never schedules in the
- * past"; this is also what makes `pre_due` disappear once due is less than a
- * day away, D8). `overdue` is always in the future by construction, so it is
- * never filtered.
+ * past"). For a datetime due, `pre_due` additionally requires `dueAt - now`
+ * to be strictly more than 24h (D8, SPEC §13.2) — the "day before due date"
+ * candidate can otherwise still be in the future while due itself is under
+ * 24h away (e.g. a due time earlier in the day than `preDueTime`). All-day
+ * due has no such 24h rule (D8's row in plan.md scopes it to a due with a time, not all-day). `overdue` is
+ * always in the future by construction, so it is never filtered.
  */
 function planForRecipient(
   task: TaskForPlanning,
@@ -115,7 +119,8 @@ function planForRecipient(
   const result: PlannedNotification[] = [];
 
   const preDueAt = atTime(dueDateAnchor.minus({ days: 1 }), reminders.preDueTime);
-  if (preDueAt.toMillis() > now.getTime()) {
+  const preDueMoreThan24hOut = task.dueAllDay || dueAt.getTime() - now.getTime() > ONE_DAY_MS;
+  if (preDueMoreThan24hOut && preDueAt.toMillis() > now.getTime()) {
     result.push(toNotification(task, 'pre_due', recipient, preDueAt));
   }
 
