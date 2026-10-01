@@ -102,8 +102,10 @@ dataset + runner.
   `"0.00"` via a flat `toFixed(2)` — visible with a tiny `LLM_DAILY_BUDGET_USD` (e.g. `0.0001`),
   which showed as "из 0.00 $" (found during manual acceptance of `v0.3.0-rc.1` on dev).
   `formatUsd` (`src/bot/texts/ru.ts`) now shows up to 4 decimal places (trimmed of trailing
-  zeros) for amounts under one cent, two decimal places otherwise, and `<0.0001` (review round 1,
-  M7) for anything smaller still, instead of rounding it to a misleading `"0.0000"`.
+  zeros) for amounts under one cent, two decimal places otherwise, and «менее 0.0001» (review
+  round 1, M7; re-reviewed to drop a raw `<0.0001` — every call site sends `parse_mode: 'HTML'`,
+  and an unescaped `<` there made Telegram reject the whole message) for anything smaller still,
+  instead of rounding it to a misleading `"0.0000"`.
 
 ### Known open points (flagged for the user, not blocking)
 

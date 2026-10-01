@@ -58,13 +58,16 @@ const NO_DATA_LABEL = 'н/д';
  * with meaningless precision. `0` itself (a real zero, not a rounded-away one) still prints `0.00`, matching
  * every other amount's two-decimal shape. Below `0.0001` itself (review round 1, M7 — the original
  * 4-decimal rounding still printed a genuinely nonzero value like `1e-6` as a bare `"0.0000"`, the exact
- * class of bug this function exists to avoid), prints `<0.0001` instead of a misleadingly precise-looking
- * zero.
+ * class of bug this function exists to avoid), prints the Russian «менее 0.0001» instead of a misleadingly
+ * precise-looking zero — **not** `<0.0001` (re-review finding, Important): every call site sends with
+ * `parse_mode: 'HTML'`, and a raw `<` outside a tag makes Telegram reject the whole message ("can't parse
+ * entities"), silently losing `/admin`'s panel and leaving the budget alert marked sent but never
+ * delivered to the Owner.
  */
 export function formatUsd(amount: number): string {
   const abs = Math.abs(amount);
   if (abs === 0 || abs >= 0.01) return amount.toFixed(2);
-  if (abs < 0.0001) return '<0.0001';
+  if (abs < 0.0001) return 'менее 0.0001';
   return amount.toFixed(4).replace(/0+$/, '');
 }
 
