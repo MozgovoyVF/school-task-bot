@@ -3,7 +3,7 @@ import type { Db } from '../../db/client.js';
 import type { Logger } from '../../ops/logger.js';
 import { proposals } from '../../db/schema/index.js';
 import { getProposalById, parseProposalPayload, type ProposalRow } from './repo.js';
-import { getTaskByProposalId } from '../tasks/repo.js';
+import { getTaskById, getTaskByProposalId } from '../tasks/repo.js';
 
 /**
  * D44 (plan.md row, resolved for this fix): resolves every still-`pending` `update`/`complete`/`cancel`
@@ -13,17 +13,24 @@ import { getTaskByProposalId } from '../tasks/repo.js';
  * tick's eligible set, so a row this function re-targets is delivered as an ordinary card in the very same
  * tick, and a row it closes never reaches the outbox at all.
  *
- * Three outcomes per candidate, matching the three branches the fix brief asked for:
+ * Outcomes per candidate:
  *
  * - target `accepted`: a task now exists for it (`tasks.proposal_id`). This proposal is re-targeted onto
  *   that task (`target_task_id` set) so `cardsJob`'s normal update/complete/cancel card flow picks it up
  *   from here on — the dependency is resolved, nothing about this row is "D44" any more.
- * - target `rejected` / `expired` / `superseded` (anything terminal but not `accepted`): no task ever
- *   resulted from it, and none ever will. This proposal is closed too, `status='expired'` — reusing the
- *   status `expireProposalsJob` already uses for a proposal closed by the system rather than an explicit
- *   Owner decision (CLAUDE.md §4: no new enum value for something an existing one already covers) — so it
- *   stops being retried on every single tick (a loop logged forever is exactly the kind of thing D44's bug
- *   report flagged).
+ * - target `rejected` with `reject_reason='duplicate'` *and* its own `payload.duplicateOf` points at an
+ *   existing task (user decision, 2026-10-01): `markDuplicate` (`src/domain/proposals/decide.ts`) rejects
+ *   the target without ever creating a task from it, but SPEC §9.7.2's duplicate detection already set
+ *   `payload.duplicateOf` on it at creation time to the task it duplicates — so the dependent is re-targeted
+ *   onto *that* task, exactly like the `accepted` case, since a task genuinely already exists. Falls through
+ *   to the next bullet (expired) when `duplicateOf` is missing, points at another proposal rather than a
+ *   task (`duplicateOf.type !== 'task'`), or that task no longer exists.
+ * - target `rejected` (any other reason, or `duplicate` without a resolvable task) / `expired` /
+ *   `superseded`: no task ever resulted from it, and none ever will. This proposal is closed too,
+ *   `status='expired'` — reusing the status `expireProposalsJob` already uses for a proposal closed by the
+ *   system rather than an explicit Owner decision (CLAUDE.md §4: no new enum value for something an
+ *   existing one already covers) — so it stops being retried on every single tick (a loop logged forever is
+ *   exactly the kind of thing D44's bug report flagged).
  * - target still `pending`: nothing to do yet. Logged once per call at `debug` (not `warn`/`error` —
  *   this is an expected, possibly long wait, not a warning-worthy condition every tick).
  *
@@ -104,17 +111,45 @@ async function resolveOne(db: Db, row: ProposalRow, logger: Logger): Promise<voi
       );
       return;
     }
-    await db
-      .update(proposals)
-      .set({ targetTaskId: task.id })
-      .where(and(eq(proposals.id, row.id), eq(proposals.status, 'pending'), isNull(proposals.targetTaskId)));
+    await retarget(db, row.id, task.id);
     return;
   }
 
-  // rejected / superseded / expired: the target proposal never became a task and never will — close this
-  // dependent too instead of leaving it to loop forever.
+  if (target.status === 'rejected' && target.rejectReason === 'duplicate') {
+    // User decision, 2026-10-01: a target rejected as a duplicate never gets a task of its own, but
+    // `payload.duplicateOf` (set by dedup at creation time, SPEC §9.7.2) already names the existing task it
+    // duplicates — when that's resolvable, treat it exactly like `accepted` instead of expiring the
+    // dependent for no real reason (the task it needs does exist, just under a different proposal's id).
+    const targetPayload = parseProposalPayload(target.payload);
+    const duplicateOf = targetPayload?.duplicateOf;
+    if (duplicateOf?.type === 'task') {
+      const task = await getTaskById(db, duplicateOf.id);
+      if (task !== null && task.workspaceId === row.workspaceId) {
+        await retarget(db, row.id, task.id);
+        return;
+      }
+    }
+    // Falls through to the expire case below: no `duplicateOf`, it names another proposal rather than a
+    // task, or that task is gone/cross-workspace.
+  }
+
+  // rejected (non-duplicate, or duplicate with no resolvable task) / superseded / expired: the target
+  // proposal never became a task and never will — close this dependent too instead of leaving it to loop
+  // forever.
   await db
     .update(proposals)
     .set({ status: 'expired' })
     .where(and(eq(proposals.id, row.id), eq(proposals.status, 'pending')));
+}
+
+/** Shared write for both "resolved onto an existing task" outcomes (`accepted`, and `rejected` as a
+ * duplicate of one) — same conditional `UPDATE … WHERE status='pending' AND target_task_id IS NULL`
+ * idempotency as every other write in this module (see this file's own doc comment). */
+async function retarget(db: Db, proposalId: number, taskId: number): Promise<void> {
+  await db
+    .update(proposals)
+    .set({ targetTaskId: taskId })
+    .where(
+      and(eq(proposals.id, proposalId), eq(proposals.status, 'pending'), isNull(proposals.targetTaskId)),
+    );
 }

@@ -713,6 +713,49 @@ describe('cardsJob', () => {
     expect(after?.notifiedAt).toBeNull();
   });
 
+  it('D44: re-targets a dependent proposal onto the existing task once its target proposal is rejected as a duplicate of it (user decision, 2026-10-01)', async () => {
+    const clock = fixedClock('2026-09-23T09:00:00Z');
+    const { deps, messenger } = await makeDeps(clock);
+    await makeOwner(deps.workspace.id, 42, 'Anna');
+    const now = clock.now();
+
+    const task = await makeTask(deps.workspace.id, { title: 'Существующая задача' });
+    const target = await makeProposal({
+      workspaceId: deps.workspace.id,
+      kind: 'create',
+      createdAt: now,
+      payload: basePayload({ duplicateOf: { type: 'task', id: task.id, title: task.title } }),
+    });
+    await db
+      .update(proposals)
+      .set({ status: 'rejected', rejectReason: 'duplicate' })
+      .where(eq(proposals.id, target.id));
+
+    const dependent = await makeProposal({
+      workspaceId: deps.workspace.id,
+      kind: 'cancel',
+      category: null,
+      targetTaskId: null,
+      createdAt: now,
+      payload: {
+        reasoning: 'test',
+        origin: 'ai',
+        quote: null,
+        quoteAuthorName: null,
+        targetProposalId: target.id,
+      },
+    });
+
+    await cardsJob.run(deps);
+    await cardsJob.run(deps); // a later tick must not re-deliver the now-notified card
+
+    expect(messenger.sent).toHaveLength(1);
+    const [after] = await proposalsByIds([dependent.id]);
+    expect(after?.status).toBe('pending');
+    expect(after?.targetTaskId).toBe(task.id);
+    expect(after?.notifiedAt).not.toBeNull();
+  });
+
   it('D44: closes (expires) a dependent proposal once its target proposal has itself already expired', async () => {
     const clock = fixedClock('2026-09-23T09:00:00Z');
     const { deps, messenger } = await makeDeps(clock);

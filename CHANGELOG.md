@@ -84,10 +84,14 @@ dataset + runner.
   a warning every single tick. `cardsJob` now calls `resolveDependentProposals`
   (`src/domain/proposals/resolveDependents.ts`) at the top of every tick: once the target is
   `accepted`, the dependent is re-targeted onto the resulting task (`tasks.proposal_id`) and
-  delivered as an ordinary card the same tick; once the target is
-  `rejected`/`expired`/`superseded` (no task ever resulted), the dependent is closed too
-  (`status='expired'`) so it stops looping; while the target is still `pending`, it keeps
-  waiting, now logged once at `debug` instead of `warn` on every tick.
+  delivered as an ordinary card the same tick; when the target was instead `rejected` as a
+  duplicate of an existing task (`reject_reason='duplicate'`, user decision 2026-10-01, review
+  round 1 M1) and its own `payload.duplicateOf` resolves to that task, the dependent is
+  re-targeted onto it too, the same as `accepted`; once the target is `rejected` for any other
+  reason (or `duplicate` with no resolvable task) / `expired` / `superseded` (no task ever
+  resulted), the dependent is closed too (`status='expired'`) so it stops looping; while the
+  target is still `pending`, it keeps waiting, now logged once at `debug` instead of `warn` on
+  every tick.
 - `/tasks`, `/today`, `/overdue`, `/new`, `/archive`, `/search`, `/stats` and `/settings` are
   listed in the Owner's command menu (`src/bot/commands.ts`) but had no handler yet, so the bot
   stayed silent (found during manual acceptance of `v0.3.0-rc.1` on dev). `src/bot/handlers/stubs.ts`
