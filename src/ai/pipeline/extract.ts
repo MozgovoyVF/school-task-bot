@@ -59,6 +59,7 @@ export class LlmExtractionProvider implements ExtractionProvider {
   private readonly fallback: string | null;
   private readonly timeoutMs: number;
   private readonly jsonSchema: Record<string, unknown> | null;
+  private readonly compatJsonSchema: Record<string, unknown> | null | undefined;
 
   constructor(
     private readonly client: ChatCompletionClient,
@@ -67,12 +68,17 @@ export class LlmExtractionProvider implements ExtractionProvider {
       fallback: string | null;
       timeoutMs?: number;
       jsonSchema: Record<string, unknown> | null;
+      // Task 2.18 compat fix C: passed straight through to the client as
+      // `CompletionRequest.compatJsonSchema` on every request — see its doc
+      // comment (`src/ai/providers/types.ts`) for how it's used.
+      compatJsonSchema?: Record<string, unknown> | null;
     },
   ) {
     this.primary = opts.primary;
     this.fallback = opts.fallback;
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.jsonSchema = opts.jsonSchema;
+    this.compatJsonSchema = opts.compatJsonSchema;
   }
 
   async extract(
@@ -92,6 +98,7 @@ export class LlmExtractionProvider implements ExtractionProvider {
             model,
             messages,
             jsonSchema: this.jsonSchema,
+            compatJsonSchema: this.compatJsonSchema,
             timeoutMs: this.timeoutMs,
           });
         } catch (err) {

@@ -187,4 +187,25 @@ describe('LlmExtractionProvider.extract (plan.md Task 2.4)', () => {
     expect(res.result).toEqual({ actions: [] });
     expect(res.model).toBe('fixture/primary');
   });
+
+  // Task 2.18 compat fix C: `compatJsonSchema` is forwarded verbatim on
+  // every request, alongside `jsonSchema` — it's the client's job (not
+  // this orchestration layer's) to pick between them per model.
+  it('forwards compatJsonSchema to the client on every request', async () => {
+    const valid = loadFixture('valid_complete_t12');
+    const client = new FixtureClient([valid]);
+    const COMPAT_SCHEMA = { type: 'object', title: 'compat' };
+    const provider = new LlmExtractionProvider(client, {
+      primary: 'fixture/primary',
+      fallback: null,
+      timeoutMs: 1_000,
+      jsonSchema: JSON_SCHEMA,
+      compatJsonSchema: COMPAT_SCHEMA,
+    });
+
+    await provider.extract(INPUT);
+
+    expect(client.requests[0]?.jsonSchema).toEqual(JSON_SCHEMA);
+    expect(client.requests[0]?.compatJsonSchema).toEqual(COMPAT_SCHEMA);
+  });
 });

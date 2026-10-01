@@ -63,6 +63,7 @@ function createAction(over: Partial<CreateAction> = {}): CreateAction {
     assignee_name_text: null,
     due: NO_DUE,
     priority: 'normal',
+    target_ref: null,
     source_message_ids: ['M1'],
     confidence: 0.8,
     reasoning: 'test',

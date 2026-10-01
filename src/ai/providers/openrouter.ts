@@ -99,9 +99,13 @@ function buildRequestBody(
       },
     };
   }
+  // Task 2.18 compat fix C: the compat path (a model already remembered as
+  // rejecting the full strict schema) uses `compatJsonSchema` when the
+  // caller provided one, not `jsonSchema` itself — see `CompletionRequest`.
+  const compatSchema = req.compatJsonSchema ?? req.jsonSchema;
   return {
     ...base,
-    messages: injectSchemaIntoSystem(messages, req.jsonSchema),
+    messages: injectSchemaIntoSystem(messages, compatSchema),
     response_format: { type: 'json_object' },
   };
 }
@@ -132,12 +136,13 @@ const OpenRouterApiErrorBodySchema = z
 /**
  * A strict `json_schema` request rejected with a 400 whose upstream raw
  * error is `INVALID_ARGUMENT` (observed from Google AI Studio/Gemini: our
- * schema's `pattern`/`minLength`/`maxLength` keywords — stripped in
- * `extractionJsonSchema()`, see `src/ai/schemas.ts` — used to trigger this
- * before that fix; kept here as a safety net for any other provider-side
- * schema-keyword rejection that resurfaces it). Distinct from
- * `isResponseFormatBadRequest`, which only catches a provider saying it does
- * not support `response_format`/structured outputs at all.
+ * schema's `pattern`/`minLength`/`maxLength` keywords — present by default
+ * in `extractionJsonSchema()`, dropped only in the compat variant
+ * `extractionJsonSchemaCompat()` (`src/ai/schemas.ts`, Task 2.18 compat fix
+ * C) — trigger this). Once remembered, later requests for this model use
+ * `compatJsonSchema` (the stripped schema) if the caller supplied one.
+ * Distinct from `isResponseFormatBadRequest`, which only catches a provider
+ * saying it does not support `response_format`/structured outputs at all.
  */
 function isJsonSchemaInvalidArgument(err: unknown): boolean {
   if (!(err instanceof OpenAI.APIError) || err.status !== 400) return false;
@@ -204,8 +209,11 @@ function toCompletionResponse(
  *   - a model that rejects strict `json_schema` mode (400 mentioning
  *     `response_format`, or a 400 whose upstream raw error is
  *     `INVALID_ARGUMENT` — see `isJsonSchemaInvalidArgument`) goes straight
- *     to `json_object` mode with the schema spelled out in the system
- *     message for every later request (`nonStrictModels`);
+ *     to `json_object` mode with the compat schema (`req.compatJsonSchema`,
+ *     falling back to `req.jsonSchema`) spelled out in the system message
+ *     for every later request (`nonStrictModels`) — a model never remembered
+ *     this way keeps getting the full `req.jsonSchema` in strict mode
+ *     (Task 2.18 compat fix C);
  *   - a model whose endpoints don't support `temperature` (OpenRouter's "no
  *     endpoints found" 404, since `provider.require_parameters: true` is
  *     always set) drops `temperature` from every later request

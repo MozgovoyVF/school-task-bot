@@ -32,6 +32,16 @@ export const Action = z.discriminatedUnion('type', [
     assignee_name_text: z.string().max(60).nullable(),
     due: Due,
     priority: z.enum(['low', 'normal', 'high']),
+    // `target_ref` is not meaningful for a new task — there is nothing
+    // existing to point at. Declared here only so a model that attaches one
+    // anyway doesn't fail the discriminated union's shape; `parseExtraction`
+    // (via `normalizeWireInput`) always forces this to `null` before
+    // validation, regardless of what a provider sent (Task 2.18 compat fix
+    // C — a missed task is worse than a false alarm, CLAUDE.md).
+    target_ref: z
+      .string()
+      .regex(/^[TR]\d+$/)
+      .nullable(),
     ...Base,
   }),
   z.object({
@@ -77,6 +87,11 @@ const ActionWire = z.discriminatedUnion('type', [
     assignee_name_text: z.string().max(60).nullable(),
     due: Due,
     priority: z.enum(['low', 'normal', 'high']),
+    // See the local `Action` schema above for why `create` carries this.
+    target_ref: z
+      .string()
+      .regex(/^[TR]\d+$/)
+      .nullable(),
     ...Base,
   }),
   z.object({
@@ -121,11 +136,23 @@ function replaceOneOfWithAnyOf(node: unknown): unknown {
 // are not on that list. `zod.toJSONSchema()` emits all three throughout this
 // schema (every `.regex()`/string `.min()`/`.max()`), and sending them was
 // reproduced live (2026-09-30, `google/gemini-3.8-flash` via OpenRouter) as
-// a 400 `INVALID_ARGUMENT` straight from Google AI Studio. Dropping them
-// from the wire schema is safe: the local `ExtractionResult`/`Action` zod
-// schema above (not this one) is what actually validates a response via
-// `parseExtraction`, and it keeps every `.regex()`/`.min()`/`.max()`
-// constraint regardless of what the provider was asked to enforce.
+// a 400 `INVALID_ARGUMENT` straight from Google AI Studio.
+//
+// Task 2.18 compat fix C — stripping these unconditionally for every model
+// was itself a regression: a model that *does* honour strict `json_schema`
+// (e.g. `deepseek/deepseek-v4-flash`) then loses the `target_ref` pattern
+// constraint, is free to emit anything for it, and fails local validation
+// in `parseExtraction` instead (recall dropped from ~95% to 54–71% in a
+// real eval run, repair retry doesn't help since the model has no way to
+// know the pattern it's violating). `extractionJsonSchema()` now sends the
+// full schema by default; `extractionJsonSchemaCompat()` is the stripped
+// variant, used only for a model already remembered as rejecting the full
+// strict schema (`nonStrictModels` in `src/ai/providers/openrouter.ts`).
+// Either way this is purely a provider-side hint: the local
+// `ExtractionResult`/`Action` zod schema above (not either of these) is
+// what actually validates a response via `parseExtraction`, and it keeps
+// every `.regex()`/`.min()`/`.max()` constraint regardless of which wire
+// schema the provider was asked to enforce.
 const UNSUPPORTED_SCHEMA_KEYWORDS = new Set(['pattern', 'minLength', 'maxLength']);
 
 function stripUnsupportedKeywords(node: unknown): unknown {
@@ -141,9 +168,18 @@ function stripUnsupportedKeywords(node: unknown): unknown {
   return node;
 }
 
+/** Full strict wire schema (pattern/minLength/maxLength included) — the default. */
 export function extractionJsonSchema(): Record<string, unknown> {
-  const withAnyOf = replaceOneOfWithAnyOf(z.toJSONSchema(ExtractionWire));
-  return stripUnsupportedKeywords(withAnyOf) as Record<string, unknown>;
+  return replaceOneOfWithAnyOf(z.toJSONSchema(ExtractionWire)) as Record<string, unknown>;
+}
+
+/**
+ * Gemini-compatible wire schema, with `pattern`/`minLength`/`maxLength`
+ * stripped. Only for a model already remembered as rejecting the full
+ * schema from `extractionJsonSchema()` — see the comment above.
+ */
+export function extractionJsonSchemaCompat(): Record<string, unknown> {
+  return stripUnsupportedKeywords(extractionJsonSchema()) as Record<string, unknown>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -164,21 +200,49 @@ const UPDATE_CHANGES_NULLABLE_KEYS = ['due', 'assignee_ref', 'title'] as const;
  * schema instead expects the key to be absent (`.optional()`). Strips such
  * keys before the strict local validation runs.
  */
+function normalizeUpdateChanges(action: Record<string, unknown>): Record<string, unknown> {
+  if (!isRecord(action.changes)) {
+    return action;
+  }
+  const changes = { ...action.changes };
+  for (const key of UPDATE_CHANGES_NULLABLE_KEYS) {
+    if (changes[key] === null) {
+      delete changes[key];
+    }
+  }
+  return { ...action, changes };
+}
+
+/**
+ * `target_ref` is not meaningful on a `create` action (SPEC: a new task has
+ * nothing existing to point at). Task 2.18 compat fix C: a model can still
+ * attach an invalid, empty, or otherwise irrelevant value to it — e.g. under
+ * the `json_object` compat path, where nothing enforces the wire shape at
+ * all — so this always forces the field to `null` rather than validating
+ * it, regardless of what was sent. `update`/`complete`/`cancel` actions are
+ * untouched: their `target_ref` is meaningful (it names the task being
+ * acted on), so an invalid one there must still fail that action — inventing
+ * a target would be worse than dropping it.
+ */
+function normalizeCreateTargetRef(action: Record<string, unknown>): Record<string, unknown> {
+  return { ...action, target_ref: null };
+}
+
 function normalizeWireInput(raw: unknown): unknown {
   if (!isRecord(raw) || !isUnknownArray(raw.actions)) {
     return raw;
   }
   const actions = raw.actions.map((action) => {
-    if (!isRecord(action) || action.type !== 'update' || !isRecord(action.changes)) {
+    if (!isRecord(action)) {
       return action;
     }
-    const changes = { ...action.changes };
-    for (const key of UPDATE_CHANGES_NULLABLE_KEYS) {
-      if (changes[key] === null) {
-        delete changes[key];
-      }
+    if (action.type === 'create') {
+      return normalizeCreateTargetRef(action);
     }
-    return { ...action, changes };
+    if (action.type === 'update') {
+      return normalizeUpdateChanges(action);
+    }
+    return action;
   });
   return { ...raw, actions };
 }

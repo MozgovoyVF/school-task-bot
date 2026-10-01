@@ -327,6 +327,8 @@ function toFixtureAction(exp: ExpectedAction, newMessageRefs: string[], caseId: 
         assignee_name_text: null,
         due: exp.due !== undefined ? toDueT(exp.due) : { due_local: null, time_hint: 'none', due_text: null },
         priority: 'normal',
+        // Not meaningful for `create` (Task 2.18 compat fix C) — always null.
+        target_ref: null,
         ...common,
       };
     case 'update':

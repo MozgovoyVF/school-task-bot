@@ -174,6 +174,43 @@ describe('createOpenRouterClient (plan.md Task 2.4)', () => {
     expect(recorded[2]?.body.response_format).toEqual({ type: 'json_object' });
   });
 
+  // Task 2.18 compat fix C: `extractionJsonSchema()` is now sent by default
+  // (strict mode, keeps `pattern`/`minLength`/`maxLength`, matching
+  // `JSON_SCHEMA` on `BASE_REQUEST`); once a model is remembered as
+  // non-strict, later requests use `compatJsonSchema` instead, not the
+  // strict schema embedded as text.
+  it('uses compatJsonSchema (not jsonSchema) once a model is remembered as non-strict', async () => {
+    const COMPAT_SCHEMA = { type: 'object', properties: { actions: { type: 'array' } }, title: 'compat' };
+    let call = 0;
+    const { fetch: fetchStub, recorded } = stubFetch(() => {
+      call += 1;
+      if (call === 1) {
+        return jsonResponse(400, {
+          error: { message: 'Provider does not support response_format', type: 'invalid_request_error' },
+        });
+      }
+      return jsonResponse(
+        200,
+        chatCompletion({ usage: { prompt_tokens: 10, completion_tokens: 5, cost: 0.0001 } }),
+      );
+    });
+    const client = createOpenRouterClient({ apiKey: 'k', referer: 'r', title: 't', fetch: fetchStub });
+
+    await client.complete({ ...BASE_REQUEST, compatJsonSchema: COMPAT_SCHEMA });
+
+    expect(recorded).toHaveLength(2);
+    const secondMessages = recorded[1]?.body.messages as Array<{ role: string; content: string }> | undefined;
+    expect(secondMessages?.[0]?.content).toContain(JSON.stringify(COMPAT_SCHEMA));
+    expect(secondMessages?.[0]?.content).not.toContain(JSON.stringify(JSON_SCHEMA));
+
+    // A later call for the same (now-remembered) model also uses the compat
+    // schema, in a single request straight away.
+    await client.complete({ ...BASE_REQUEST, compatJsonSchema: COMPAT_SCHEMA });
+    expect(recorded).toHaveLength(3);
+    const thirdMessages = recorded[2]?.body.messages as Array<{ role: string; content: string }> | undefined;
+    expect(thirdMessages?.[0]?.content).toContain(JSON.stringify(COMPAT_SCHEMA));
+  });
+
   it('never retries at the SDK level on a 500 (maxRetries: 0, review round I2) — one fetch call, error propagates', async () => {
     const { fetch: fetchStub, recorded } = stubFetch(() =>
       jsonResponse(500, { error: { message: 'upstream error', type: 'server_error' } }),
