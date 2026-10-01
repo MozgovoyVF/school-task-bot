@@ -523,7 +523,8 @@ async function runCaseSafe(evalCase: EvalCase, pipeline: PipelineInput, ctx: Run
     const row = await runCase(evalCase, pipeline, ctx);
     return { row, errorText: null, failedModels: [] };
   } catch (err) {
-    const errorText = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    const baseText = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    const errorText = err instanceof ExtractionError ? `${baseText} [${err.attempts.join(' | ')}]` : baseText;
     const failedModels =
       err instanceof ExtractionError ? [...new Set(err.attempts.map(modelFromAttempt))] : [ctx.modelLabel];
     console.error(`eval case "${evalCase.id}" failed: ${errorText}`);
