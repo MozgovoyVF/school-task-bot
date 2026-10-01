@@ -5,6 +5,7 @@ import { startApp } from '../../../src/app.js';
 import { loadEnv } from '../../../src/config/env.js';
 import { fixedClock } from '../../helpers/clock.js';
 import { FakeMessenger } from '../../helpers/fakeMessenger.js';
+import { getTestDb, truncateAll } from '../../helpers/db.js';
 
 const DEFAULT_TEST_DATABASE_URL = 'postgres://stb:stb@localhost:5433/stb_test';
 
@@ -93,6 +94,17 @@ describe('startApp', () => {
   }, 15_000);
 
   it('builds a real AiProviders when OPENROUTER_API_KEY and LLM_MODEL_PRIMARY are both set (review round C1)', async () => {
+    // Fix round 2, I-B: this test exercises the REAL (non-stubbed) OpenRouter
+    // client construction path, and `startApp` runs one scheduler tick before
+    // returning. `stb_test` is shared with every other integration test file,
+    // and this file otherwise never clears it — so a queued batch left behind
+    // by an earlier-run file could be claimed and processed by that tick,
+    // firing a genuine HTTP POST to openrouter.ai with this test's fake API
+    // key. Truncating first guarantees nothing is claimable, without stubbing
+    // `fetch` (which would defeat the point of this test: proving the real
+    // client gets constructed).
+    await truncateAll(getTestDb());
+
     const env = loadEnv({
       TELEGRAM_BOT_TOKEN: 'test-token:ABC',
       DATABASE_URL: process.env.TEST_DATABASE_URL ?? DEFAULT_TEST_DATABASE_URL,

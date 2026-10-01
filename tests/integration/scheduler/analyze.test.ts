@@ -567,6 +567,78 @@ describe('analyzeJob', () => {
     expect(batchAfterResume?.attempts).toBe(1);
   });
 
+  it('while the daily budget is exceeded, still claims and processes manual/reanalyze batches but leaves auto batches untouched (SPEC.md:260, review round M2)', async () => {
+    const clock = fixedClock('2026-09-23T09:00:00Z');
+    const now = clock.now();
+    const emptyScriptAi: AiProviders = {
+      extraction: extractorFrom([]),
+      decision: null,
+      client: UNUSED_CLIENT,
+      models: { primary: 'fixture/primary', fallback: null },
+    };
+    const deps = await makeDeps(clock, emptyScriptAi);
+    await makeMember(deps.workspace.id, 40, 'Anna', 'owner');
+
+    const autoChat = await makeActiveChat(deps.workspace.id, -401, now);
+    const autoAuthor = await makeMember(deps.workspace.id, 42, 'AutoAuthor');
+    const autoMsg = await insertMessage(
+      autoChat.id,
+      1,
+      autoAuthor.id,
+      new Date(now.getTime() - 200_000),
+      'поручение авто',
+    );
+    const [autoBatch] = await db
+      .insert(analysisBatches)
+      .values({ chatId: autoChat.id, status: 'queued', kind: 'auto', createdAt: now })
+      .returning();
+    if (!autoBatch) throw new Error('failed to insert test batch');
+    await db.update(messages).set({ batchId: autoBatch.id }).where(eq(messages.id, autoMsg.id));
+
+    const manualChat = await makeActiveChat(deps.workspace.id, -402, now);
+    const manualAuthor = await makeMember(deps.workspace.id, 43, 'ManualAuthor');
+    const manualMsg = await insertMessage(
+      manualChat.id,
+      1,
+      manualAuthor.id,
+      new Date(now.getTime() - 200_000),
+      'поручение ручное',
+    );
+    const [manualBatch] = await db
+      .insert(analysisBatches)
+      .values({ chatId: manualChat.id, status: 'queued', kind: 'reanalyze', createdAt: now })
+      .returning();
+    if (!manualBatch) throw new Error('failed to insert test batch');
+    await db.update(messages).set({ batchId: manualBatch.id }).where(eq(messages.id, manualMsg.id));
+
+    // Already spent the full daily budget today (Europe/Moscow), before this tick runs.
+    await db.insert(analysisBatches).values({
+      chatId: null,
+      status: 'done',
+      kind: 'auto',
+      costUsd: '1',
+      createdAt: now,
+      finishedAt: now,
+    });
+
+    await analyzeJob.run(deps);
+
+    const [autoAfter] = await db.select().from(analysisBatches).where(eq(analysisBatches.id, autoBatch.id));
+    // Budget-paused: `claimNextBatch`'s `kinds` filter must never select this `auto` batch.
+    expect(autoAfter?.status).toBe('queued');
+    expect(autoAfter?.attempts).toBe(0);
+
+    const [manualAfter] = await db
+      .select()
+      .from(analysisBatches)
+      .where(eq(analysisBatches.id, manualBatch.id));
+    // `extractorFrom([])` rejects with "script exhausted" as soon as it is actually invoked — attempts
+    // moving off 0 is the signal the `reanalyze` batch *was* claimed and processed despite the pause.
+    expect(manualAfter?.attempts).toBe(1);
+    expect(manualAfter?.status).toBe('queued'); // requeued with backoff, not stuck `running`
+    expect(manualAfter?.nextAttemptAt).not.toBeNull();
+  });
+
   it('retries a batch whose processBatch transaction fails partway through, leaving it queued with attempts incremented and messages pending (review round 1, M3)', async () => {
     const clock = fixedClock('2026-09-23T09:00:00Z');
     const now = clock.now();
