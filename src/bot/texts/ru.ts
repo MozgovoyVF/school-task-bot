@@ -48,6 +48,29 @@ function pluralizeChas(count: number): string {
 /** `/admin`'s precision line and other "nothing decided yet" ratios (SPEC §11.2's "н/д" — zero denominator). */
 const NO_DATA_LABEL = 'н/д';
 
+/**
+ * A USD amount for display (SPEC §9.2's budget alert, `/admin`'s cost lines): two decimal places for
+ * anything a whole cent or larger, same as a plain `toFixed(2)` always gave — but a flat `toFixed(2)` also
+ * silently rounds a genuinely nonzero small value (e.g. `LLM_DAILY_BUDGET_USD=0.0001`) down to `"0.00"`,
+ * which is exactly the dev-acceptance bug this fixes (`texts.errors.budgetPaused` showing «из 0.00 $» for a
+ * real, nonzero budget). Below one cent, shows up to 4 decimal places instead, trimmed of trailing zeros
+ * (`0.0001` stays `0.0001`, `0.0050` becomes `0.005`) so the value stays visibly nonzero without padding it
+ * with meaningless precision. `0` itself (a real zero, not a rounded-away one) still prints `0.00`, matching
+ * every other amount's two-decimal shape. Below `0.0001` itself (review round 1, M7 — the original
+ * 4-decimal rounding still printed a genuinely nonzero value like `1e-6` as a bare `"0.0000"`, the exact
+ * class of bug this function exists to avoid), prints the Russian «менее 0.0001» instead of a misleadingly
+ * precise-looking zero — **not** `<0.0001` (re-review finding, Important): every call site sends with
+ * `parse_mode: 'HTML'`, and a raw `<` outside a tag makes Telegram reject the whole message ("can't parse
+ * entities"), silently losing `/admin`'s panel and leaving the budget alert marked sent but never
+ * delivered to the Owner.
+ */
+export function formatUsd(amount: number): string {
+  const abs = Math.abs(amount);
+  if (abs === 0 || abs >= 0.01) return amount.toFixed(2);
+  if (abs < 0.0001) return 'менее 0.0001';
+  return amount.toFixed(4).replace(/0+$/, '');
+}
+
 /** "1ч 02мин 03с" — a short, fixed-order duration for `/admin`'s uptime line. */
 function formatUptime(totalSeconds: number): string {
   const seconds = Math.max(0, Math.round(totalSeconds));
@@ -169,7 +192,7 @@ export const texts = {
     budgetPaused(spentUsd: number, budgetUsd: number): string {
       return [
         '⚠️ Дневной бюджет на анализ сообщений исчерпан',
-        `Потрачено ${spentUsd.toFixed(2)} $ из ${budgetUsd.toFixed(2)} $.`,
+        `Потрачено ${formatUsd(spentUsd)} $ из ${formatUsd(budgetUsd)} $.`,
         'Автоматический анализ приостановлен до завтра — новые сообщения сохраняются и будут разобраны, когда бюджет обновится. Ручные команды продолжают работать.',
       ].join('\n');
     },
@@ -177,6 +200,11 @@ export const texts = {
   common: {
     /** Sent when a user without the required role invokes a restricted command or callback. */
     forbidden: 'У вас нет доступа к этой команде.',
+    /** DM-only reply for an `OWNER_COMMANDS` (`src/bot/commands.ts`) menu command Phase 3 hasn't
+     * implemented yet (`src/bot/handlers/stubs.ts`) — found silent on dev acceptance of v0.3.0-rc.1
+     * (`/tasks` had no handler at all). Kept generic rather than per-command wording: which feature it is
+     * doesn't change what the Owner needs to know ("not yet, soon"). */
+    comingSoon: 'Эта команда появится в одном из ближайших обновлений.',
   },
   /**
    * Assembles `src/time/format.ts`'s `formatDue` structure (or `null`, "no
@@ -356,7 +384,7 @@ export const texts = {
         `Аптайм: ${formatUptime(uptimeSec)}`,
         '',
         '🤖 ИИ-анализ',
-        `Стоимость сегодня: ${ai.costToday.toFixed(2)} $ · за месяц: ${ai.costMonth.toFixed(2)} $`,
+        `Стоимость сегодня: ${formatUsd(ai.costToday)} $ · за месяц: ${formatUsd(ai.costMonth)} $`,
         `За 7 дней: показано ${String(ai.last7.shown)}, скрыто ${String(ai.last7.suppressed)}, ` +
           `принято ${String(ai.last7.accepted)}, отклонено ${String(ai.last7.rejected)}`,
         `Точность (принято / принято+отклонено): ${precisionLabel}`,

@@ -78,12 +78,37 @@ dataset + runner.
     scores each case independently instead of aborting the run on the first failure (surfacing
     per-case errors and a per-model error summary in the report), and now always asks for
     confirmation (or requires `--yes`) before any real `--provider openrouter` API call.
+- **D44** resolved (found during manual acceptance of `v0.3.0-rc.1` on dev): an
+  `update`/`complete`/`cancel` proposal whose `payload.targetProposalId` pointed at another
+  proposal that was later decided used to stay `pending` forever — never getting a card, logging
+  a warning every single tick. `cardsJob` now calls `resolveDependentProposals`
+  (`src/domain/proposals/resolveDependents.ts`) at the top of every tick: once the target is
+  `accepted`, the dependent is re-targeted onto the resulting task (`tasks.proposal_id`) and
+  delivered as an ordinary card the same tick; when the target was instead `rejected` as a
+  duplicate of an existing task (`reject_reason='duplicate'`, user decision 2026-10-01, review
+  round 1 M1) and its own `payload.duplicateOf` resolves to that task, the dependent is
+  re-targeted onto it too, the same as `accepted`; once the target is `rejected` for any other
+  reason (or `duplicate` with no resolvable task) / `expired` / `superseded` (no task ever
+  resulted), the dependent is closed too (`status='expired'`) so it stops looping; while the
+  target is still `pending`, it keeps waiting, now logged once at `debug` instead of `warn` on
+  every tick.
+- `/tasks`, `/today`, `/overdue`, `/new`, `/archive`, `/search`, `/stats` and `/settings` are
+  listed in the Owner's command menu (`src/bot/commands.ts`) but had no handler yet, so the bot
+  stayed silent (found during manual acceptance of `v0.3.0-rc.1` on dev). `src/bot/handlers/stubs.ts`
+  now replies with a short "coming in a future update" DM text (`texts.common.comingSoon`) for each,
+  gated to the Owner only (`can(actor, 'task.viewAll')`, review round 1, I1 — the first version
+  replied to anyone), until Phase 3 implements them for real; group-chat behaviour is unchanged.
+- The daily LLM budget alert (and `/admin`'s cost lines) rounded any USD amount under one cent to
+  `"0.00"` via a flat `toFixed(2)` — visible with a tiny `LLM_DAILY_BUDGET_USD` (e.g. `0.0001`),
+  which showed as "из 0.00 $" (found during manual acceptance of `v0.3.0-rc.1` on dev).
+  `formatUsd` (`src/bot/texts/ru.ts`) now shows up to 4 decimal places (trimmed of trailing
+  zeros) for amounts under one cent, two decimal places otherwise, and «менее 0.0001» (review
+  round 1, M7; re-reviewed to drop a raw `<0.0001` — every call site sends `parse_mode: 'HTML'`,
+  and an unescaped `<` there made Telegram reject the whole message) for anything smaller still,
+  instead of rounding it to a misleading `"0.0000"`.
 
 ### Known open points (flagged for the user, not blocking)
 
-- **D44** (`plan.md`): the business meaning of accepting/completing/cancelling a proposal that
-  targets another still-pending proposal (not yet a task) is undecided; the technical mechanism
-  (`payload.targetProposalId`) is in place.
 - Quiet-hours interaction between `weekdays`/`windows`/`dateRanges` was implemented as an
   independent OR across all three (Task 2.12); SPEC leaves room for an AND/nested reading too.
 - Proposal reactions (👀) fire when a card is actually delivered to the Owner, not strictly "at
