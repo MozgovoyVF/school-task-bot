@@ -669,6 +669,7 @@ describe('cardsJob', () => {
     });
 
     await cardsJob.run(deps);
+    await cardsJob.run(deps); // review round 1, M5: a later tick must not re-deliver the now-notified card
 
     expect(messenger.sent).toHaveLength(1);
     const [after] = await proposalsByIds([dependent.id]);

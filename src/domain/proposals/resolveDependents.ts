@@ -71,7 +71,11 @@ async function resolveOne(db: Db, row: ProposalRow, logger: Logger): Promise<voi
   if (!payload || payload.targetProposalId === undefined) return;
 
   const target = await getProposalById(db, payload.targetProposalId);
-  if (target === null) {
+  // review round 1, M2: a `targetProposalId` pointing at a proposal from a *different* workspace is
+  // treated the same as "not found" — it should never happen (`processBatch` only ever writes a same-
+  // workspace id), but this id comes from an LLM-authored payload, not a validated foreign key, so it gets
+  // the same defensive check `callback_data` ids get elsewhere in this codebase (CLAUDE.md §8).
+  if (target === null || target.workspaceId !== row.workspaceId) {
     logger.error(
       { proposalId: row.id, targetProposalId: payload.targetProposalId },
       'resolveDependentProposals: target proposal not found (D44)',
@@ -89,9 +93,11 @@ async function resolveOne(db: Db, row: ProposalRow, logger: Logger): Promise<voi
 
   if (target.status === 'accepted') {
     const task = await getTaskByProposalId(db, target.id);
-    if (task === null) {
-      // Genuinely unexpected: acceptProposal creates the task in the same transaction as the status
-      // flip, so an accepted proposal with no task is an internal-consistency bug, not a normal D44 wait.
+    // Genuinely unexpected: acceptProposal creates the task in the same transaction as the status flip
+    // and in the same workspace as the proposal it came from, so a missing task — or one somehow in a
+    // different workspace (review round 1, M2, same defensive check as the target proposal lookup above)
+    // — is an internal-consistency bug, not a normal D44 wait.
+    if (task === null || task.workspaceId !== row.workspaceId) {
       logger.error(
         { proposalId: row.id, targetProposalId: target.id },
         'resolveDependentProposals: target proposal accepted but its task was not found (D44)',
