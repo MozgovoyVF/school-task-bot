@@ -14,6 +14,16 @@ export async function getTaskById(db: DbOrTx, id: number): Promise<TaskRow | nul
   return row ?? null;
 }
 
+/** The task created from a given `proposals.id` (`tasks.proposal_id`, set once by `TaskService.create` and
+ * never changed after) — `null` when no task was ever created from it (not yet accepted, or not a
+ * `create`-kind proposal at all). Added for D44 (`src/domain/proposals/resolveDependents.ts`): resolving a
+ * dependent `update`/`complete`/`cancel` proposal's `payload.targetProposalId` once that target proposal
+ * has been accepted needs the resulting task's id, and this is the only column that links the two. */
+export async function getTaskByProposalId(db: DbOrTx, proposalId: number): Promise<TaskRow | null> {
+  const [row] = await db.select().from(tasks).where(eq(tasks.proposalId, proposalId)).limit(1);
+  return row ?? null;
+}
+
 /** Always called inside the caller's transaction (`TaskService.create`) — never a plain `Db` — so the
  * insert commits atomically with the `task_events` row and any `taskHooks` call for the same change. */
 export async function insertTask(tx: Tx, values: NewTaskRow): Promise<TaskRow> {

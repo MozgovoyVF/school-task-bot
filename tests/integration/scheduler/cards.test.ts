@@ -101,7 +101,13 @@ function basePayload(overrides: Partial<ProposalPayload> = {}): ProposalPayload 
 
 async function makeTask(
   workspaceId: number,
-  overrides: Partial<{ title: string; dueAt: Date | null; dueAllDay: boolean; dueTz: string | null }> = {},
+  overrides: Partial<{
+    title: string;
+    dueAt: Date | null;
+    dueAllDay: boolean;
+    dueTz: string | null;
+    proposalId: number | null;
+  }> = {},
 ) {
   const [row] = await db
     .insert(tasks)
@@ -112,6 +118,7 @@ async function makeTask(
       dueAt: overrides.dueAt ?? null,
       dueAllDay: overrides.dueAllDay ?? false,
       dueTz: overrides.dueTz ?? null,
+      proposalId: overrides.proposalId ?? null,
     })
     .returning();
   if (!row) throw new Error('failed to insert test task');
@@ -548,10 +555,10 @@ describe('cardsJob', () => {
     );
   });
 
-  it('skips (does not silently drop) a proposal action targeting another pending proposal instead of a task (D44)', async () => {
+  it('logs an error and leaves the proposal pending (retried, not dropped) when its D44 target proposal id does not exist', async () => {
     const clock = fixedClock('2026-09-23T09:00:00Z');
     const logger = createLogger({ level: 'silent' });
-    const warnSpy = vi.spyOn(logger, 'warn');
+    const errorSpy = vi.spyOn(logger, 'error');
     const { deps, messenger } = await makeDeps(clock, new FakeMessenger(), logger);
     await makeOwner(deps.workspace.id, 42, 'Anna');
     const now = clock.now();
@@ -567,7 +574,7 @@ describe('cardsJob', () => {
         origin: 'ai',
         quote: null,
         quoteAuthorName: null,
-        targetProposalId: 999,
+        targetProposalId: 999, // truncateAll's restart identity guarantees no proposal ever gets this id
         changes: { title: 'Другое название' },
       },
     });
@@ -577,8 +584,164 @@ describe('cardsJob', () => {
 
     expect(messenger.sent).toHaveLength(0);
     const [after] = await proposalsByIds([p.id]);
+    expect(after?.status).toBe('pending');
     expect(after?.notifiedAt).toBeNull();
-    expect(warnSpy).toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalled();
+  });
+
+  it('D44: keeps skipping (debug, not warn) a dependent proposal whose target proposal is still pending, retrying safely across ticks', async () => {
+    const clock = fixedClock('2026-09-23T09:00:00Z');
+    const logger = createLogger({ level: 'silent' });
+    const warnSpy = vi.spyOn(logger, 'warn');
+    const errorSpy = vi.spyOn(logger, 'error');
+    const debugSpy = vi.spyOn(logger, 'debug');
+    const { deps, messenger } = await makeDeps(clock, new FakeMessenger(), logger);
+    await makeOwner(deps.workspace.id, 42, 'Anna');
+    const now = clock.now();
+
+    // Suppressed so the target's own create-kind card (an unrelated proposal in its own right) never
+    // reaches the outbox and confuses this test's `messenger.sent` assertion — only the dependent's D44
+    // behaviour is under test here.
+    const target = await makeProposal({
+      workspaceId: deps.workspace.id,
+      kind: 'create',
+      createdAt: now,
+      policyDecision: 'suppressed',
+    });
+    const dependent = await makeProposal({
+      workspaceId: deps.workspace.id,
+      kind: 'update',
+      category: null,
+      targetTaskId: null,
+      createdAt: now,
+      payload: {
+        reasoning: 'test',
+        origin: 'ai',
+        quote: null,
+        quoteAuthorName: null,
+        targetProposalId: target.id,
+        changes: { title: 'Другое название' },
+      },
+    });
+
+    await cardsJob.run(deps);
+    await cardsJob.run(deps); // a later tick retries it — still pending, not dropped, not a loud warning
+
+    expect(messenger.sent).toHaveLength(0);
+    const [afterTarget] = await proposalsByIds([target.id]);
+    const [afterDependent] = await proposalsByIds([dependent.id]);
+    expect(afterTarget?.status).toBe('pending');
+    expect(afterDependent?.status).toBe('pending');
+    expect(afterDependent?.targetTaskId).toBeNull();
+    expect(afterDependent?.notifiedAt).toBeNull();
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(debugSpy).toHaveBeenCalled();
+  });
+
+  it('D44: re-targets a dependent update proposal onto the resulting task once its target proposal is accepted, and delivers it as an ordinary card the same tick', async () => {
+    const clock = fixedClock('2026-09-23T09:00:00Z');
+    const { deps, messenger } = await makeDeps(clock);
+    await makeOwner(deps.workspace.id, 42, 'Anna');
+    const now = clock.now();
+
+    const target = await makeProposal({ workspaceId: deps.workspace.id, kind: 'create', createdAt: now });
+    await db.update(proposals).set({ status: 'accepted' }).where(eq(proposals.id, target.id));
+    const task = await makeTask(deps.workspace.id, {
+      title: 'Подготовить расписание',
+      proposalId: target.id,
+    });
+
+    const dependent = await makeProposal({
+      workspaceId: deps.workspace.id,
+      kind: 'update',
+      category: null,
+      targetTaskId: null,
+      createdAt: now,
+      payload: {
+        reasoning: 'test',
+        origin: 'ai',
+        quote: null,
+        quoteAuthorName: null,
+        targetProposalId: target.id,
+        changes: { title: 'Новое название' },
+      },
+    });
+
+    await cardsJob.run(deps);
+
+    expect(messenger.sent).toHaveLength(1);
+    const [after] = await proposalsByIds([dependent.id]);
+    expect(after?.targetTaskId).toBe(task.id);
+    expect(after?.notifiedAt).not.toBeNull();
+  });
+
+  it('D44: closes (expires) a dependent proposal, without ever sending a card, once its target proposal is rejected', async () => {
+    const clock = fixedClock('2026-09-23T09:00:00Z');
+    const { deps, messenger } = await makeDeps(clock);
+    await makeOwner(deps.workspace.id, 42, 'Anna');
+    const now = clock.now();
+
+    const target = await makeProposal({ workspaceId: deps.workspace.id, kind: 'create', createdAt: now });
+    await db
+      .update(proposals)
+      .set({ status: 'rejected', rejectReason: 'duplicate' })
+      .where(eq(proposals.id, target.id));
+
+    const dependent = await makeProposal({
+      workspaceId: deps.workspace.id,
+      kind: 'cancel',
+      category: null,
+      targetTaskId: null,
+      createdAt: now,
+      payload: {
+        reasoning: 'test',
+        origin: 'ai',
+        quote: null,
+        quoteAuthorName: null,
+        targetProposalId: target.id,
+      },
+    });
+
+    await cardsJob.run(deps);
+
+    expect(messenger.sent).toHaveLength(0);
+    const [after] = await proposalsByIds([dependent.id]);
+    expect(after?.status).toBe('expired');
+    expect(after?.targetTaskId).toBeNull();
+    expect(after?.notifiedAt).toBeNull();
+  });
+
+  it('D44: closes (expires) a dependent proposal once its target proposal has itself already expired', async () => {
+    const clock = fixedClock('2026-09-23T09:00:00Z');
+    const { deps, messenger } = await makeDeps(clock);
+    await makeOwner(deps.workspace.id, 42, 'Anna');
+    const now = clock.now();
+
+    const target = await makeProposal({ workspaceId: deps.workspace.id, kind: 'create', createdAt: now });
+    await db.update(proposals).set({ status: 'expired' }).where(eq(proposals.id, target.id));
+
+    const dependent = await makeProposal({
+      workspaceId: deps.workspace.id,
+      kind: 'update',
+      category: null,
+      targetTaskId: null,
+      createdAt: now,
+      payload: {
+        reasoning: 'test',
+        origin: 'ai',
+        quote: null,
+        quoteAuthorName: null,
+        targetProposalId: target.id,
+        changes: { title: 'Другое название' },
+      },
+    });
+
+    await cardsJob.run(deps);
+
+    expect(messenger.sent).toHaveLength(0);
+    const [after] = await proposalsByIds([dependent.id]);
+    expect(after?.status).toBe('expired');
   });
 
   it('never sends suppressed proposals', async () => {

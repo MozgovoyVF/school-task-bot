@@ -78,12 +78,19 @@ dataset + runner.
     scores each case independently instead of aborting the run on the first failure (surfacing
     per-case errors and a per-model error summary in the report), and now always asks for
     confirmation (or requires `--yes`) before any real `--provider openrouter` API call.
+- **D44** resolved (found during manual acceptance of `v0.3.0-rc.1` on dev): an
+  `update`/`complete`/`cancel` proposal whose `payload.targetProposalId` pointed at another
+  proposal that was later decided used to stay `pending` forever — never getting a card, logging
+  a warning every single tick. `cardsJob` now calls `resolveDependentProposals`
+  (`src/domain/proposals/resolveDependents.ts`) at the top of every tick: once the target is
+  `accepted`, the dependent is re-targeted onto the resulting task (`tasks.proposal_id`) and
+  delivered as an ordinary card the same tick; once the target is
+  `rejected`/`expired`/`superseded` (no task ever resulted), the dependent is closed too
+  (`status='expired'`) so it stops looping; while the target is still `pending`, it keeps
+  waiting, now logged once at `debug` instead of `warn` on every tick.
 
 ### Known open points (flagged for the user, not blocking)
 
-- **D44** (`plan.md`): the business meaning of accepting/completing/cancelling a proposal that
-  targets another still-pending proposal (not yet a task) is undecided; the technical mechanism
-  (`payload.targetProposalId`) is in place.
 - Quiet-hours interaction between `weekdays`/`windows`/`dateRanges` was implemented as an
   independent OR across all three (Task 2.12); SPEC leaves room for an AND/nested reading too.
 - Proposal reactions (👀) fire when a card is actually delivered to the Owner, not strictly "at

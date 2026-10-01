@@ -17,6 +17,7 @@ import {
 } from '../../bot/views/proposalCard.js';
 import { encodeCallback } from '../../bot/keyboards/callbackCodec.js';
 import { texts } from '../../bot/texts/ru.js';
+import { resolveDependentProposals } from '../../domain/proposals/resolveDependents.js';
 import { MessengerError, type Buttons, type MessengerErrorKind } from '../../domain/messenger.js';
 import type { Job } from '../ticker.js';
 import type { Category } from '../../ai/pipeline/resolve.js';
@@ -165,11 +166,12 @@ interface BuildCtx {
  * for `renderProposalCard`. Returns `null` — logging why (CLAUDE.md §8: id-only, never message text) —
  * for anything this job cannot safely render: an unparsable payload, or an `update`/`complete`/`cancel`
  * proposal whose target is itself still a pending proposal rather than a task (`payload.targetProposalId`,
- * D44 — an explicitly open business-rule question, not something to guess at here — logged at `warn`, not
- * `error`: it is an expected, recurring state until D44 is decided, not a bug) or whose target task no
+ * D44 — `cardsJob.run` already called `resolveDependentProposals` this same tick, so reaching this branch
+ * means that target is genuinely still `pending`, not merely stale; logged at `debug`, not `warn`/`error` —
+ * an expected, possibly long wait, not a warning-worthy condition on every tick) or whose target task no
  * longer exists (genuinely unexpected — logged at `error`). `null` proposals are simply skipped this tick —
- * `notified_at` stays empty, so a future tick retries them once (for D44) the business rule lands, matching
- * CLAUDE.md's "a missed task is worse than a false positive" for every other proposal in the same run.
+ * `notified_at` stays empty, so a future tick retries them once their target resolves, matching CLAUDE.md's
+ * "a missed task is worse than a false positive" for every other proposal in the same run.
  */
 async function buildCardView(ctx: BuildCtx, row: ProposalRow): Promise<ProposalCardView | null> {
   const parsed = PayloadSchema.safeParse(row.payload);
@@ -222,10 +224,14 @@ async function buildCardView(ctx: BuildCtx, row: ProposalRow): Promise<ProposalC
   // update / complete / cancel all target an existing task. `targetTaskId === null` normally means D44
   // (the action's real target is `payload.targetProposalId`, a still-pending proposal — checked explicitly
   // rather than inferred from `targetTaskId` alone, so a genuinely malformed row with neither id logs as
-  // the distinct, actually-unexpected case below instead of being silently mislabeled as D44).
+  // the distinct, actually-unexpected case below instead of being silently mislabeled as D44). By the time
+  // this runs, `resolveDependentProposals` has already re-targeted an accepted target's dependent (this
+  // branch would no longer apply to it) and closed a rejected/expired one (it would no longer be `pending`,
+  // so it wouldn't even be in this tick's `eligible` set) — so reaching here means the target is genuinely
+  // still pending, logged at `debug` accordingly.
   if (row.targetTaskId === null) {
     if (payload.targetProposalId !== undefined) {
-      ctx.logger.warn(
+      ctx.logger.debug(
         { proposalId: row.id, kind: row.kind },
         'cardsJob: proposal targets a pending proposal, not a task (D44) — skipping this tick',
       );
@@ -500,6 +506,11 @@ export const cardsJob: Job = {
 
     const settings = await getSettings(deps.db, deps.workspace.id);
     const zone = userZone(owner.user, deps.workspace);
+
+    // D44: re-target (or close) every dependent update/complete/cancel proposal before computing this
+    // tick's eligible set, so a row this resolves onto a task is delivered as an ordinary card in the same
+    // tick, and a row it closes is never selected below at all.
+    await resolveDependentProposals(deps.db, { workspaceId: deps.workspace.id, logger: deps.logger });
 
     const eligible = await deps.db
       .select()
