@@ -21,6 +21,15 @@ function pluralizeRaz(count: number): string {
   return 'раз';
 }
 
+/** "1 предложение" / "2 предложения" / "5 предложений" — used by `texts.cards`' outbox summary messages. */
+function pluralizePredlozhenie(count: number): string {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) return 'предложение';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'предложения';
+  return 'предложений';
+}
+
 function formatContext(context: Record<string, unknown>): string {
   const entries = Object.entries(context);
   if (entries.length === 0) return '—';
@@ -35,6 +44,9 @@ function pluralizeChas(count: number): string {
   if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'часа';
   return 'часов';
 }
+
+/** `/admin`'s precision line and other "nothing decided yet" ratios (SPEC §11.2's "н/д" — zero denominator). */
+const NO_DATA_LABEL = 'н/д';
 
 /** "1ч 02мин 03с" — a short, fixed-order duration for `/admin`'s uptime line. */
 function formatUptime(totalSeconds: number): string {
@@ -88,6 +100,28 @@ const ZONE_CITY_LABELS: Record<(typeof RU_ZONES)[number], string> = {
   'Asia/Kamchatka': 'Камчатка',
 };
 
+/**
+ * Short weekday/month names for `formatDue` below and `src/time/format.ts`'s
+ * `formatDue` (D17): own arrays rather than `Intl`/ICU, no trailing dot.
+ * Indexed 0-based (`RU_WEEKDAYS_SHORT[luxon's dt.weekday - 1]`, Monday
+ * first; `RU_MONTHS_SHORT[dt.month - 1]`, January first).
+ */
+export const RU_WEEKDAYS_SHORT = ['пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс'] as const;
+export const RU_MONTHS_SHORT = [
+  'янв',
+  'фев',
+  'мар',
+  'апр',
+  'мая',
+  'июн',
+  'июл',
+  'авг',
+  'сен',
+  'окт',
+  'ноя',
+  'дек',
+] as const;
+
 export const texts = {
   errors: {
     /**
@@ -118,10 +152,45 @@ export const texts = {
     },
     /** A short, apologetic reply to the user whose action triggered an error the bot has already reported. */
     userFacing: 'Что-то пошло не так. Мы уже разбираемся, попробуйте, пожалуйста, ещё раз чуть позже.',
+    /** SPEC §8: sent to superadmin once an `analysis_batches` row gives up after its 5th failed attempt. */
+    batchFailed(batchId: number, message: string): string {
+      return [
+        '⚠️ Анализ сообщений не удался',
+        `Пачка: <code>${String(batchId)}</code>`,
+        `После 5 попыток анализ остановлен. Сообщения остаются в очереди, повторить можно через /reanalyze.`,
+        `Ошибка: <code>${escapeHtml(message)}</code>`,
+      ].join('\n');
+    },
+    /** SPEC §8/§9.2: sent to superadmin after 5 consecutive LLM-call failures across different batches. */
+    llmConsecutiveFailures(count: number): string {
+      return `⚠️ ${String(count)} ошибок LLM подряд. Проверьте доступность OpenRouter и ключ API.`;
+    },
+    /** SPEC §9.2: sent to superadmin and Owner once, per calendar day, when the daily LLM budget is exhausted. */
+    budgetPaused(spentUsd: number, budgetUsd: number): string {
+      return [
+        '⚠️ Дневной бюджет на анализ сообщений исчерпан',
+        `Потрачено ${spentUsd.toFixed(2)} $ из ${budgetUsd.toFixed(2)} $.`,
+        'Автоматический анализ приостановлен до завтра — новые сообщения сохраняются и будут разобраны, когда бюджет обновится. Ручные команды продолжают работать.',
+      ].join('\n');
+    },
   },
   common: {
     /** Sent when a user without the required role invokes a restricted command or callback. */
     forbidden: 'У вас нет доступа к этой команде.',
+  },
+  /**
+   * Assembles `src/time/format.ts`'s `formatDue` structure (or `null`, "no
+   * due date") into the final one-line display string (SPEC §10.9, D29),
+   * e.g. `пт, 25 сен, 18:00 (МСК+2)`, or — for an all-day due date, which
+   * never gets a time or a zone label (D29) — just `пт, 25 сен`. `due.date`/
+   * `due.time` are already built from `RU_WEEKDAYS_SHORT`/`RU_MONTHS_SHORT`
+   * above; `due.zone`, when set, is formatted here via `formatZoneLabel`.
+   */
+  formatDue(due: { date: string; time: string | null; zone: ZoneLabel | null } | null): string {
+    if (due === null) return 'без срока';
+    const time = due.time === null ? '' : `, ${due.time}`;
+    const zone = due.zone === null ? '' : ` (${formatZoneLabel(due.zone)})`;
+    return `${due.date}${time}${zone}`;
   },
   start: {
     /**
@@ -263,12 +332,34 @@ export const texts = {
     },
   },
   admin: {
-    /** `/admin` panel for a superadmin: build version and elapsed process uptime. */
-    panel(gitSha: string, uptimeSec: number): string {
+    /**
+     * `/admin` panel for a superadmin: build version, elapsed process uptime, and (Task 2.15) a short
+     * AI-pipeline summary — today's/this month's LLM spend, the last 7 days' shown/suppressed/accepted/
+     * rejected proposal counts, and `accepted/(accepted+rejected)` precision (`NO_DATA_LABEL` when that
+     * denominator is zero — SPEC §11.2's own "н/д" case, not a bug).
+     */
+    panel(
+      gitSha: string,
+      uptimeSec: number,
+      ai: {
+        costToday: number;
+        costMonth: number;
+        last7: { shown: number; suppressed: number; accepted: number; rejected: number };
+        precision: number | null;
+      },
+    ): string {
+      const precisionLabel =
+        ai.precision === null ? NO_DATA_LABEL : `${String(Math.round(ai.precision * 100))}%`;
       return [
         '🛠 Панель администратора',
         `Версия: <code>${escapeHtml(gitSha)}</code>`,
         `Аптайм: ${formatUptime(uptimeSec)}`,
+        '',
+        '🤖 ИИ-анализ',
+        `Стоимость сегодня: ${ai.costToday.toFixed(2)} $ · за месяц: ${ai.costMonth.toFixed(2)} $`,
+        `За 7 дней: показано ${String(ai.last7.shown)}, скрыто ${String(ai.last7.suppressed)}, ` +
+          `принято ${String(ai.last7.accepted)}, отклонено ${String(ai.last7.rejected)}`,
+        `Точность (принято / принято+отклонено): ${precisionLabel}`,
       ].join('\n');
     },
     /** Button on the `/admin` panel that issues a claim code (Task 1.5, `src/bot/handlers/transfer.ts`). */
@@ -287,6 +378,74 @@ export const texts = {
       'Отключите privacy mode у @BotFather (Bot Settings → Group Privacy → Turn off) и ' +
         '<b>заново добавьте бота в группы</b>, где он уже состоит — иначе для уже добавленных чатов ничего не изменится.',
     ].join('\n'),
+  },
+  /**
+   * `/debug [chat]` (SPEC §12.2 row, Task 2.15): superadmin-only diagnostics for the last 10
+   * `analysis_batches`, optionally filtered to one chat. `src/bot/views/debug.ts` assembles each batch's
+   * block from these line-builders, mirroring `texts.proposalCard`'s split (views build structure, `ru.ts`
+   * owns wording); every dynamic string here is escaped by the caller before it arrives (same convention).
+   */
+  debug: {
+    header: '🔍 Диагностика анализа',
+    /** No batches at all yet (or none for the given chat). */
+    empty: 'Пока нет ни одного batch.',
+    /** One batch's heading line — `chatLabel` is already `escapeHtml`'d, or `null` for a batch with no chat (a manual/DM call, D5). */
+    batchHeader(id: number, whenLabel: string, chatLabel: string | null): string {
+      const chat = chatLabel === null ? 'без чата' : chatLabel;
+      return `<b>#${String(id)}</b> · ${whenLabel} · ${chat}`;
+    },
+    countsLine(messageCount: number, statusLabel: string): string {
+      return `Сообщений: ${String(messageCount)} · Статус: ${statusLabel}`;
+    },
+    /** `reasonsLabel` is `"below_low: 2, commitment_without_due_below_high: 1"`-style, or `''` when nothing was suppressed. */
+    decisionLine(shown: number, suppressed: number, reasonsLabel: string): string {
+      const reasons = reasonsLabel === '' ? '' : ` (${reasonsLabel})`;
+      return `Показано: ${String(shown)} · Скрыто: ${String(suppressed)}${reasons}`;
+    },
+    /** `modelLabel` is already `escapeHtml`'d, or `null` when the batch never reached the extractor (e.g. prefilter-skipped). */
+    costLine(modelLabel: string | null, costUsd: number): string {
+      return `Модель: ${modelLabel ?? '—'} · Стоимость: ${costUsd.toFixed(4)} $`;
+    },
+    /** Only shown for a `failed` batch — `errorLabel` is already `escapeHtml`'d. */
+    errorLine(errorLabel: string): string {
+      return `Ошибка: <code>${errorLabel}</code>`;
+    },
+    statusQueued: 'в очереди',
+    statusRunning: 'выполняется',
+    statusDone: 'готово',
+    statusFailed: 'ошибка',
+    /** `/debug`'s optional `<chatId>` argument didn't parse as a positive integer. */
+    invalidChatArg: 'Не удалось распознать id чата. Использование: /debug [id чата].',
+  },
+  /**
+   * `/reanalyze <chat> [N]` (SPEC §12.2 row, Task 2.15): superadmin-only — re-queues a chat's failed
+   * batches (no `N`) or builds a fresh `kind='reanalyze'` batch over its last `N` text messages (SPEC §8:
+   * "Сообщения по-прежнему `pending` и доступны для `/reanalyze`"). Both paths only ever *enqueue* work —
+   * the actual LLM call still runs on the ticker's own schedule (`analyzeJob`), so these confirm "queued",
+   * not "done".
+   */
+  reanalyze: {
+    usage: 'Использование: /reanalyze <id чата> [число последних сообщений].',
+    invalidArgs:
+      'Не удалось распознать команду. Использование: /reanalyze <id чата> [число последних сообщений].',
+    chatNotFound: 'Чат не найден.',
+    /** `lastN` path found no text messages in this chat to reanalyze at all. */
+    noMessages: 'В этом чате нет сообщений с текстом для повторного анализа.',
+    /** No `N` given: `batchCount` failed batches had their messages' `batch_id` cleared. */
+    requeued(batchCount: number, messageCount: number): string {
+      if (batchCount === 0) return 'Неудачных batch для этого чата не найдено — нечего возвращать в очередь.';
+      return (
+        `Возвращено в очередь: batch — ${String(batchCount)}, сообщений — ${String(messageCount)}. ` +
+        'Будут повторно проанализированы в общем порядке.'
+      );
+    },
+    /** `N` given: a fresh `kind='reanalyze'` batch was queued over the chat's last `messageCount` text messages. */
+    created(messageCount: number): string {
+      return (
+        `Создан batch на переанализ: сообщений — ${String(messageCount)}. ` +
+        'Дубликаты будут помечены автоматически, реакции на исходные сообщения не ставятся.'
+      );
+    },
   },
   transfer: {
     /** Prompt shown above `/transfer`'s two-button choice. */
@@ -461,6 +620,284 @@ export const texts = {
         'Это не юридическая консультация, а техническое описание. Вопросы — к руководителю школы.',
       ].join('\n');
     },
+  },
+  /**
+   * Proposal cards sent to the Owner's DM (SPEC §11.1, Task 2.11,
+   * `src/bot/views/proposalCard.ts`'s `renderProposalCard`). Every parameter
+   * that carries user/DB text (titles, quotes, names) arrives here **already
+   * HTML-escaped** by the caller (`bot/views/escape.ts`'s `escapeHtml`) —
+   * these functions only assemble the Russian wording and punctuation around
+   * it, they never escape themselves (mirrors `texts.people.cardZoneLine`'s
+   * "already HTML-safe" convention above, just pushed one layer further so
+   * escaping stays a `views/` concern rather than a `texts/` one).
+   */
+  proposalCard: {
+    /** `create`-kind header for an AI-found proposal — `percent` is `Math.round(confidence * 100)`. */
+    headerAi(percent: number): string {
+      return `🆕 Задача · уверенность ${String(percent)}%`;
+    },
+    /** `create`-kind header for a manually entered proposal (`v.manual`). */
+    headerManual: '🆕 Задача · вручную',
+    titleLine(title: string): string {
+      return `📌 ${title}`;
+    },
+    metaLine(assignee: string, due: string, priority: string): string {
+      return `👤 ${assignee} · 📅 ${due} · ⚡ ${priority}`;
+    },
+    priorityLow: 'низкий',
+    priorityNormal: 'обычный',
+    priorityHigh: 'высокий',
+    /** `assigneeKind === 'all'`. */
+    assigneeAll: 'Всем',
+    /** `assigneeKind === 'none'`, or a null `assigneeName` for any other kind. */
+    assigneeNone: 'Не назначен',
+    /** SPEC §10.8: a resolved due date that has already passed. */
+    pastDueWarning: '⚠️ срок в прошлом — проверьте',
+    /** SPEC §9.3: a possible duplicate of an existing open task, shown above the quote. */
+    duplicateHint(taskId: number, title: string): string {
+      return `🔁 Похоже на дубль T${String(taskId)} «${title}»`;
+    },
+    /**
+     * The source quote line. `author`/`chatTitle` are appended only when
+     * present — `— <author>, «<chatTitle>»`, `— <author>` alone, or
+     * `— «<chatTitle>»` alone when the author isn't known.
+     */
+    quoteLine(quote: string, author: string | null, chatTitle: string | null): string {
+      let suffix = '';
+      if (author !== null) {
+        suffix = ` — ${author}`;
+        if (chatTitle !== null) suffix += `, «${chatTitle}»`;
+      } else if (chatTitle !== null) {
+        suffix = ` — «${chatTitle}»`;
+      }
+      return `💬 «${quote}»${suffix}`;
+    },
+    /** `url` is `bot/views/links.ts`'s `messageLink` output — omitted entirely (SPEC §11.1) when it's `null` (an ordinary, non-super group). */
+    linkLine(url: string): string {
+      return `🔗 <a href="${url}">Открыть сообщение</a>`;
+    },
+    acceptButton: '✅ Создать',
+    editButton: '✏️ Изменить',
+    rejectButton: '❌ Не задача',
+    /** Extra button row for a possible duplicate (SPEC §11.1). */
+    duplicateButton(taskId: number): string {
+      return `🔗 Дубль T${String(taskId)}`;
+    },
+    updateFieldDue: 'Перенос срока',
+    updateFieldAssignee: 'Смена исполнителя',
+    updateFieldTitle: 'Изменение названия',
+    /** `target.field === null` — a change the three specific labels above don't cover. */
+    updateFieldGeneric: 'Изменение',
+    /** `update`-kind's single summary line; `before`/`after` are omitted together when either is `null`. */
+    updateLine(
+      label: string,
+      taskId: number,
+      title: string,
+      before: string | null,
+      after: string | null,
+    ): string {
+      const change = before === null || after === null ? '' : ` · было ${before} → стало ${after}`;
+      return `🔄 ${label}: T${String(taskId)} «${title}»${change}`;
+    },
+    applyButton: '✅ Применить',
+    ignoreButton: '❌ Игнорировать',
+    /** `complete`-kind's single summary line; the `— «quote» (author)` evidence is omitted when `quote` is `null`. */
+    completeLine(taskId: number, title: string, quote: string | null, author: string | null): string {
+      const evidence = quote === null ? '' : ` — «${quote}»${author === null ? '' : ` (${author})`}`;
+      return `✅ Похоже, выполнено: T${String(taskId)} «${title}»${evidence}`;
+    },
+    closeTaskButton: '✅ Закрыть задачу',
+    /** Shared "decline this suggestion" button label for `update`/`complete`/`cancel` cards (`create`'s own is `rejectButton` above). */
+    noButton: '❌ Нет',
+    /** `cancel`-kind's single summary line — same shape as `completeLine` (SPEC §11.1: "аналогично"). */
+    cancelLine(taskId: number, title: string, quote: string | null, author: string | null): string {
+      const evidence = quote === null ? '' : ` — «${quote}»${author === null ? '' : ` (${author})`}`;
+      return `🗑 Похоже, отменено: T${String(taskId)} «${title}»${evidence}`;
+    },
+    cancelTaskButton: '🗑 Отменить задачу',
+  },
+  /**
+   * Outcomes of a proposal decision (SPEC §11.2, Task 2.13,
+   * `src/domain/proposals/decide.ts`/`src/bot/handlers/proposalCallbacks.ts`):
+   * the card's own text once it is edited in place, plus the
+   * `answerCallbackQuery` alerts for a decision that didn't go through.
+   * `title` in every `*Card` function arrives already HTML-escaped by the
+   * caller (`src/bot/views/taskCreated.ts`), same convention as
+   * `texts.proposalCard` above.
+   */
+  proposalDecide: {
+    /** `DecisionResult.reason === 'already_decided'` — the double-accept race (SPEC/CLAUDE.md's atomicity). */
+    alreadyDecided: 'Уже обработано.',
+    /** `DecisionResult.reason === 'not_found'` — the proposal row itself is gone. */
+    notFound: 'Предложение не найдено.',
+    /** `DecisionResult.reason === 'target_gone'` — the task the proposal targets no longer exists. */
+    targetGone: 'Задача, к которой относится это предложение, больше не существует.',
+    /** The reject-reason submenu's own header line (SPEC §11.2: `[Не задача] [Дубль] [Уже сделано] [Другое]`). */
+    reasonMenuTitle: 'Причина?',
+    reasonNotTask: 'Не задача',
+    reasonDuplicate: 'Дубль',
+    reasonAlreadyDone: 'Уже сделано',
+    reasonOther: 'Другое',
+    /** The "🔗 Дубль T12" button's own follow-up submenu (fix round 1, Important A) — offers marking the
+     * proposal as a duplicate with or without appending its quote to the existing task's description. */
+    duplicateMenuTitle(taskId: number): string {
+      return `Дубль T${String(taskId)} — просто пометить, или дописать текст в описание?`;
+    },
+    duplicateMarkOnlyButton: '🔗 Только пометить',
+    duplicateMarkAndAppendButton: '📝 Пометить и дописать',
+    /** "✅ Создать" succeeded (SPEC §11.2). */
+    createdCard(taskId: number, title: string): string {
+      return `✅ Создано: T${String(taskId)} «${title}»`;
+    },
+    /** "✅ Применить" succeeded on an `update`-kind proposal. */
+    appliedCard(taskId: number, title: string): string {
+      return `✅ Применено: T${String(taskId)} «${title}»`;
+    },
+    /** "✅ Закрыть задачу" succeeded on a `complete`-kind proposal. */
+    completedCard(taskId: number, title: string): string {
+      return `✅ Закрыто: T${String(taskId)} «${title}»`;
+    },
+    /** "🗑 Отменить задачу" succeeded on a `cancel`-kind proposal. */
+    cancelledCard(taskId: number, title: string): string {
+      return `🗑 Отменено: T${String(taskId)} «${title}»`;
+    },
+    /** The duplicate submenu's own button succeeded — `appended` says whether "mark and append" (`dpa`)
+     * was pressed, vs. plain "mark only" (`dpm`). */
+    duplicateCard(taskId: number, appended: boolean): string {
+      return appended
+        ? `🔗 Отмечено как дубль T${String(taskId)}, описание дополнено`
+        : `🔗 Отмечено как дубль T${String(taskId)}`;
+    },
+    /** A decline succeeded — `reasonLabel` is one of the four `reason*` labels above, or `null` for
+     * `update`/`complete`/`cancel`'s plain decline (no reason submenu for those). */
+    rejectedCard(reasonLabel: string | null): string {
+      return reasonLabel === null ? '❌ Отклонено' : `❌ Отклонено: ${reasonLabel}`;
+    },
+  },
+  /**
+   * The "✏️ Изменить" edit dialog (`src/bot/conversations/editProposal.ts`,
+   * plan.md Task 2.14, D23) — only ever entered for a `create`-kind
+   * proposal (it ends in `acceptProposal`, which only accepts that kind).
+   * `menuHeader`/`descriptionLine` are assembled around `texts.proposalCard`'s
+   * own `titleLine`/`metaLine` (same card look as the original proposal
+   * card) — every parameter carrying user/DB text arrives here already
+   * HTML-escaped by the caller (`src/bot/views/editMenu.ts`), same
+   * convention as `texts.proposalCard` above. `titlePrompt`/`descriptionPrompt`,
+   * by contrast, are called directly from the conversation with a raw,
+   * unescaped current value (mirrors `texts.people.namePrompt`'s own
+   * convention) and escape it themselves.
+   */
+  editProposal: {
+    /** Shown instead of entering the dialog for any proposal `kind` other than `create` — the dialog's
+     * only exit, "Сохранить и создать", always calls `acceptProposal`, which only accepts that kind. */
+    notSupported: 'Изменение доступно только для новых задач.',
+    menuHeader: '✏️ Изменение задачи',
+    /** The "Описание" field's own "nothing set" placeholder — both the menu preview (`descriptionLine`) and the field prompt's current value (`src/bot/conversations/editProposal.ts`) use this. */
+    noDescription: 'без описания',
+    descriptionLine(description: string | null): string {
+      return `📝 ${description === null ? 'без описания' : description}`;
+    },
+    fieldTitleButton: 'Название',
+    fieldAssigneeButton: 'Исполнитель',
+    fieldDueButton: 'Срок',
+    fieldPriorityButton: 'Приоритет',
+    fieldDescriptionButton: 'Описание',
+    saveButton: '✅ Сохранить и создать',
+    backButton: '↩️ Назад',
+    /** Shown instead of a new value when an update that expects a button press arrives as something else. */
+    pickButtonHint: 'Пожалуйста, воспользуйтесь кнопками.',
+    /** The dialog's own "↩️ Назад" — leaves without saving. */
+    cancelled: 'Изменения отменены.',
+    /** Shown when an update other than a text message arrives while a field's new value is expected. */
+    textHint: 'Пожалуйста, отправьте текстовое сообщение.',
+    /** The "Название" field's own prompt — `current` is the proposal's own (unescaped) title. */
+    titlePrompt(current: string): string {
+      return `Текущее название: <b>${escapeHtml(current)}</b>\nВведите новое название.`;
+    },
+    /** The "Описание" field's own prompt — `current` is already a display string ("без описания" or the
+     * proposal's own unescaped description). */
+    descriptionPrompt(current: string): string {
+      return (
+        `Текущее описание: <b>${escapeHtml(current)}</b>\n` +
+        'Введите новое описание или отправьте «-», чтобы убрать его.'
+      );
+    },
+    assigneeMenuTitle: 'Кому назначить?',
+    /** Assigns to the Owner themselves — this dialog is Owner-only (D40), so "Я" always means the Owner. */
+    assigneeSelfButton: 'Я',
+    priorityMenuTitle: 'Приоритет?',
+    dueMenuTitle: 'Срок?',
+    dueTodayButton: 'Сегодня',
+    dueTomorrowButton: 'Завтра',
+    dueFriButton: 'Пт',
+    dueNextMonButton: 'След. пн',
+    dueNoneButton: 'Без срока',
+    dueEnterButton: 'Ввести…',
+    dueTextPrompt: 'Введите дату и время свободным текстом, например «15.10 14:00» или «в четверг в 11».',
+    /** `label` is `texts.formatDue`'s own output for the parsed date. */
+    duePreview(label: string): string {
+      return `${label} — верно?`;
+    },
+    dateNotParsed: 'Не удалось разобрать дату. Попробуйте ещё раз, например «15.10 14:00».',
+    yesButton: 'Да',
+    noButton: 'Нет',
+  },
+  /**
+   * The card outbox (`src/scheduler/jobs/cards.ts`, plan.md Task 2.12): the
+   * two summary messages it sends instead of a proposal card, plus the
+   * quiet-hours batch's button label.
+   */
+  cards: {
+    /** Sent once per batch group once it has more than `MAX_CARDS_PER_BATCH` shown proposals — `count` is however many were left over. */
+    moreProposals(count: number): string {
+      return `Ещё ${String(count)} ${pluralizePredlozhenie(count)}: /inbox`;
+    },
+    /** SPEC §13.5/D10: everything found while the Owner was in quiet hours arrives as one message once they end, instead of individual cards. */
+    quietBatch(count: number): string {
+      return `🌙 За время тишины найдено ${String(count)} ${pluralizePredlozhenie(count)}`;
+    },
+    /** The quiet-hours batch message's only button — opens `/inbox` (Task 2.15's future callback handling). */
+    openInboxButton: '📥 Разобрать',
+    /** Superadmin alert (throttled hourly by `ErrorReporter.alert`): the workspace has no Owner yet, so the outbox has nowhere to deliver cards. */
+    noOwner: '⚠️ У рабочего пространства нет руководителя — карточки предложений некому отправлять.',
+    /** Superadmin alert (throttled hourly): the Owner has a membership but has never opened a DM with the bot (no `/start` yet), so cards pile up undelivered. */
+    ownerNotStarted:
+      '⚠️ Руководитель ещё не запускал бота в личных сообщениях (/start) — карточки предложений не доставляются.',
+    /** Superadmin alert (throttled hourly): a card send just came back `forbidden` — the Owner blocked the bot in Telegram, so cards pile up undelivered until they unblock it. */
+    ownerBlocked: '⚠️ Руководитель заблокировал бота в Telegram — карточки предложений не доставляются.',
+  },
+  /**
+   * `/inbox` (SPEC §12.2 row, Owner only — D40, Task 2.15): every still-`pending` proposal (`shown` *and*
+   * `suppressed` alike — this is deliberately the one place a `suppressed` proposal is ever surfaced to
+   * the Owner, so a message the auto-pipeline hid below threshold is never permanently lost, CLAUDE.md's
+   * "a missed task is worse than a false positive"), `PAGE_SIZE` per page. Tapping a list button resends
+   * that proposal's card as a fresh DM message (`src/scheduler/jobs/cards.ts`'s `renderProposalCardForResend`) —
+   * this list itself never carries the accept/reject buttons, only the resend/pagination ones.
+   */
+  inbox: {
+    header: '📥 Входящие предложения',
+    /** No `pending` proposals at all right now. */
+    empty: 'Нет неразобранных предложений.',
+    pageFooter(page: number, totalPages: number): string {
+      return `Стр. ${String(page)}/${String(totalPages)}`;
+    },
+    /** One list row's button label — `title`/`chatTitle` are plain (unescaped: Telegram button text isn't HTML-parsed, CLAUDE.md's `escapeHtml` rule is for `parse_mode: 'HTML'` message bodies only). */
+    itemButton(icon: string, title: string, chatTitle: string | null): string {
+      const safeTitle = title === '' ? 'без названия' : title;
+      return chatTitle === null ? `${icon} ${safeTitle}` : `${icon} ${safeTitle} — ${chatTitle}`;
+    },
+    kindCreateIcon: '🆕',
+    kindUpdateIcon: '✏️',
+    kindCompleteIcon: '✅',
+    kindCancelIcon: '❌',
+    prevButton: '« Назад',
+    nextButton: 'Вперёд »',
+    /** `answerCallbackQuery` toast once the tapped proposal's card has been resent. */
+    resent: 'Карточка отправлена заново.',
+    /** The tapped proposal could no longer be rendered as a card (SPEC §11.1's D44 gap, or its target task/chat is gone) — same "skip, don't crash" stance as `cardsJob`'s own `buildCardView`. */
+    cardUnavailable: 'Не удалось собрать карточку для этого предложения.',
+    /** The tapped proposal is no longer `pending` (decided or expired between opening `/inbox` and tapping it). */
+    noLongerPending: 'Это предложение уже не в очереди — обновите список.',
   },
   /**
    * Labels prefixed to a media message's caption when normalizing incoming

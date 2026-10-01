@@ -1,0 +1,6 @@
+{
+  "content": "{\"actions\":[{\"type\":\"complete\",\"target_ref\":\"T12\",\"source_message_ids\":[\"M3\"],\"confidence\":0.95,\"reasoning\":\"assignee reports the task is done\"}]}",
+  "usage": { "inputTokens": 480, "outputTokens": 40, "costUsd": 0.00052 },
+  "model": "fixture/primary",
+  "raw": { "id": "fixture-valid-complete-t12", "object": "chat.completion" }
+}

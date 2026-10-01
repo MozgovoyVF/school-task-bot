@@ -21,10 +21,17 @@ import type { Clock } from './time/clock.js';
 import { createTicker } from './scheduler/ticker.js';
 import { pendingChatsJob } from './scheduler/jobs/pendingChats.js';
 import { retentionJob } from './scheduler/jobs/retention.js';
+import { analyzeJob } from './scheduler/jobs/analyze.js';
+import { cardsJob } from './scheduler/jobs/cards.js';
+import { expireProposalsJob } from './scheduler/jobs/expireProposals.js';
 import { buildHttpServer } from './http/server.js';
 import { checkPrivacyMode } from './bot/startupChecks.js';
 import { syncCommands } from './bot/commands.js';
 import type { AppDeps } from './deps.js';
+import { createOpenRouterClient } from './ai/providers/openrouter.js';
+import { LlmExtractionProvider } from './ai/pipeline/extract.js';
+import { extractionJsonSchema } from './ai/schemas.js';
+import type { AiProviders } from './ai/providers/types.js';
 
 /** Update types the production long-polling runner asks Telegram for (brief Step 3). */
 const RUNNER_ALLOWED_UPDATES = [
@@ -111,13 +118,43 @@ export async function startApp(env: Env, overrides?: StartAppOverrides): Promise
     superadminIds: env.SUPERADMIN_TG_IDS,
   });
 
-  // `ai` is always `null` in phase 0 — no `src/ai/**` code exists yet (see
-  // `src/deps.ts`'s `AiProviders` placeholder / plan.md decision D32). This
-  // condition mirrors the check phase 2 will use to actually decide whether
-  // to build the real `AiProviders`, so the warning already fires correctly
-  // once that wiring lands.
-  if (!env.OPENROUTER_API_KEY || !env.LLM_MODEL_PRIMARY) {
+  // SPEC §9.2/§4: AI analysis is only enabled once both `OPENROUTER_API_KEY`
+  // and `LLM_MODEL_PRIMARY` are configured — `analyzeJob`/`parseDateText`
+  // both no-op on `deps.ai === null`. No `DecisionProvider` implementation
+  // exists yet (that is a future task), so `decision` stays `null`
+  // regardless — `AI_PREFILTER !== 'off'` with no provider to honor it is
+  // flagged with a startup warning below instead of silently ignored
+  // (CLAUDE.md: a silent no-op contradicts the recall-first bias).
+  let ai: AiProviders | null = null;
+  if (env.OPENROUTER_API_KEY && env.LLM_MODEL_PRIMARY) {
+    const client = createOpenRouterClient({
+      apiKey: env.OPENROUTER_API_KEY,
+      referer: 'https://github.com/MozgovoyVF/school-task-bot',
+      title: 'school-task-bot',
+      logger,
+    });
+    ai = {
+      extraction: new LlmExtractionProvider(client, {
+        primary: env.LLM_MODEL_PRIMARY,
+        fallback: env.LLM_MODEL_FALLBACK ?? null,
+        jsonSchema: extractionJsonSchema(),
+      }),
+      decision: null,
+      client,
+      models: { primary: env.LLM_MODEL_PRIMARY, fallback: env.LLM_MODEL_FALLBACK ?? null },
+    };
+  } else {
     logger.warn('AI analysis disabled: OPENROUTER_API_KEY or LLM_MODEL_PRIMARY is not set');
+  }
+  // `ai.decision`/the disabled-AI `null` case above are both `null`
+  // today — no `DecisionProvider` implementation exists yet — so this
+  // fires whenever prefiltering is configured at all, not only once one
+  // ships.
+  if (env.AI_PREFILTER !== 'off') {
+    logger.warn(
+      { prefilter: env.AI_PREFILTER },
+      'AI_PREFILTER is configured but no DecisionProvider implementation exists yet — prefiltering is not applied',
+    );
   }
 
   const deps: AppDeps = {
@@ -128,7 +165,7 @@ export async function startApp(env: Env, overrides?: StartAppOverrides): Promise
     errors,
     messenger,
     workspace,
-    ai: null,
+    ai,
     taskHooks: [],
   };
 
@@ -141,13 +178,24 @@ export async function startApp(env: Env, overrides?: StartAppOverrides): Promise
   await checkPrivacyMode(deps, bot.botInfo);
   await syncCommands({ db, workspace, superadminIds: env.SUPERADMIN_TG_IDS }, bot.api);
 
-  const ticker = createTicker(deps, [pendingChatsJob, retentionJob]);
+  // `analyzeJob`/`cardsJob` (Task 2.9/2.10/2.12) and `expireProposalsJob` (Task 2.15, D11) are registered
+  // here; `analyzeJob` itself still no-ops whenever `deps.ai` is `null` (no `OPENROUTER_API_KEY`/
+  // `LLM_MODEL_PRIMARY` configured, per the `ai`/`deps.ai` construction above).
+  const ticker = createTicker(deps, [
+    pendingChatsJob,
+    analyzeJob,
+    cardsJob,
+    expireProposalsJob,
+    retentionJob,
+  ]);
   // One synchronous tick before we start serving traffic, so `/healthz`
   // doesn't 503 on a cold start waiting for the first interval tick.
   // `start()` then keeps the heartbeat refreshed going forward; the extra
   // immediate tick it fires is harmless (every job here is idempotent —
-  // `pendingChatsJob`'s CAS claims and `retentionJob`'s `dailyJob` wrapper
-  // both no-op on a repeat call).
+  // `pendingChatsJob`'s CAS claims, `analyzeJob`'s `FOR UPDATE SKIP LOCKED`
+  // batch claim, `cardsJob`'s `notified_at` outbox guard, and
+  // `retentionJob`/`expireProposalsJob`'s shared `dailyJob` wrapper all
+  // no-op on a repeat call).
   await ticker.tickOnce();
   ticker.start();
 

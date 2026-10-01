@@ -1,0 +1,6 @@
+{
+  "content": "{\"actions\":[{\"type\":\"update\",\"target_ref\":\"T99\",\"changes\":{\"due\":null,\"assignee_ref\":\"P7\",\"title\":null},\"source_message_ids\":[\"M9\"],\"confidence\":0.72,\"reasoning\":\"references refs absent from the input: P7, M9, T99\"}]}",
+  "usage": { "inputTokens": 490, "outputTokens": 55, "costUsd": 0.00061 },
+  "model": "fixture/primary",
+  "raw": { "id": "fixture-hallucinated-refs", "object": "chat.completion" }
+}

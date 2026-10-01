@@ -23,7 +23,14 @@ describe('/admin', () => {
 
     await harness.send(dmText(SUPERADMIN, '/admin'));
 
-    expect(harness.replies(SUPERADMIN.id)).toEqual([texts.admin.panel('test-sha', 90)]);
+    expect(harness.replies(SUPERADMIN.id)).toEqual([
+      texts.admin.panel('test-sha', 90, {
+        costToday: 0,
+        costMonth: 0,
+        last7: { shown: 0, suppressed: 0, accepted: 0, rejected: 0 },
+        precision: null,
+      }),
+    ]);
   });
 
   it('has no effect at all in a group, even for a superadmin (final Phase 1 review’s C1 fix)', async () => {
