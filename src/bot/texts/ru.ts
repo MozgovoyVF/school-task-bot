@@ -48,6 +48,26 @@ function pluralizeChas(count: number): string {
 /** `/admin`'s precision line and other "nothing decided yet" ratios (SPEC §11.2's "н/д" — zero denominator). */
 const NO_DATA_LABEL = 'н/д';
 
+/**
+ * A USD amount for display (SPEC §9.2's budget alert, `/admin`'s cost lines): two decimal places for
+ * anything a whole cent or larger, same as a plain `toFixed(2)` always gave — but a flat `toFixed(2)` also
+ * silently rounds a genuinely nonzero small value (e.g. `LLM_DAILY_BUDGET_USD=0.0001`) down to `"0.00"`,
+ * which is exactly the dev-acceptance bug this fixes (`texts.errors.budgetPaused` showing «из 0.00 $» for a
+ * real, nonzero budget). Below one cent, shows up to 4 decimal places instead, trimmed of trailing zeros
+ * (`0.0001` stays `0.0001`, `0.0050` becomes `0.005`) so the value stays visibly nonzero without padding it
+ * with meaningless precision. `0` itself (a real zero, not a rounded-away one) still prints `0.00`, matching
+ * every other amount's two-decimal shape.
+ */
+function formatUsd(amount: number): string {
+  const abs = Math.abs(amount);
+  if (abs === 0 || abs >= 0.01) return amount.toFixed(2);
+  const fourDecimals = amount.toFixed(4);
+  const trimmed = fourDecimals.replace(/0+$/, '');
+  // `trimmed` ends bare (`"0."`) only when all 4 decimals were zero — a value too small to show even at
+  // this precision (e.g. 1e-6); fall back to the untrimmed 4-decimal form rather than a bare trailing dot.
+  return trimmed.endsWith('.') ? fourDecimals : trimmed;
+}
+
 /** "1ч 02мин 03с" — a short, fixed-order duration for `/admin`'s uptime line. */
 function formatUptime(totalSeconds: number): string {
   const seconds = Math.max(0, Math.round(totalSeconds));
@@ -169,7 +189,7 @@ export const texts = {
     budgetPaused(spentUsd: number, budgetUsd: number): string {
       return [
         '⚠️ Дневной бюджет на анализ сообщений исчерпан',
-        `Потрачено ${spentUsd.toFixed(2)} $ из ${budgetUsd.toFixed(2)} $.`,
+        `Потрачено ${formatUsd(spentUsd)} $ из ${formatUsd(budgetUsd)} $.`,
         'Автоматический анализ приостановлен до завтра — новые сообщения сохраняются и будут разобраны, когда бюджет обновится. Ручные команды продолжают работать.',
       ].join('\n');
     },
@@ -361,7 +381,7 @@ export const texts = {
         `Аптайм: ${formatUptime(uptimeSec)}`,
         '',
         '🤖 ИИ-анализ',
-        `Стоимость сегодня: ${ai.costToday.toFixed(2)} $ · за месяц: ${ai.costMonth.toFixed(2)} $`,
+        `Стоимость сегодня: ${formatUsd(ai.costToday)} $ · за месяц: ${formatUsd(ai.costMonth)} $`,
         `За 7 дней: показано ${String(ai.last7.shown)}, скрыто ${String(ai.last7.suppressed)}, ` +
           `принято ${String(ai.last7.accepted)}, отклонено ${String(ai.last7.rejected)}`,
         `Точность (принято / принято+отклонено): ${precisionLabel}`,

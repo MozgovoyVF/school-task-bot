@@ -91,9 +91,14 @@ dataset + runner.
 - `/tasks`, `/today`, `/overdue`, `/new`, `/archive`, `/search`, `/stats` and `/settings` are
   listed in the Owner's command menu (`src/bot/commands.ts`) but had no handler yet, so the bot
   stayed silent (found during manual acceptance of `v0.3.0-rc.1` on dev). `src/bot/handlers/
-  stubs.ts` now replies with a short "coming in a future update" DM text
+stubs.ts` now replies with a short "coming in a future update" DM text
   (`texts.common.comingSoon`) for each, until Phase 3 implements them for real; group-chat
   behaviour is unchanged.
+- The daily LLM budget alert (and `/admin`'s cost lines) rounded any USD amount under one cent to
+  `"0.00"` via a flat `toFixed(2)` — visible with a tiny `LLM_DAILY_BUDGET_USD` (e.g. `0.0001`),
+  which showed as "из 0.00 $" (found during manual acceptance of `v0.3.0-rc.1` on dev).
+  `formatUsd` (`src/bot/texts/ru.ts`) now shows up to 4 decimal places (trimmed of trailing
+  zeros) for amounts under one cent, two decimal places otherwise.
 
 ### Known open points (flagged for the user, not blocking)
 
