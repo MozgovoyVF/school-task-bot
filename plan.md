@@ -299,14 +299,14 @@ describe('planTaskNotifications', () => {
   - `resolveRecipients(tx, task: TaskRow, settings: Settings): Promise<PlanRecipient[]>` — только owner (D40), если `dm_started_at` не пусто и `dm_blocked=false`; иначе пустой список. Пояс: `users.timezone`, иначе пояс workspace;
   - `remindersHook: TaskHook` — отменяет все `scheduled` уведомления задачи (включая snooze: «любое изменение → отмена всех», SPEC §13.2), затем вставляет план `ON CONFLICT (dedupe_key) DO NOTHING`.
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
   1. Создание задачи со сроком и исполнителем-сотрудником → строки `notifications` только для owner (D40).
   2. Owner не начал DM или заблокировал бота → уведомлений нет.
   3. Изменение срока → старые строки `cancelled`, новые `scheduled` с `v2` в ключе.
   4. Перенос срока в пределах того же дня после уже отправленного `due` → новая строка создаётся без конфликта (D6).
   5. `done` или `cancelled` → все `scheduled` отменены.
-- [ ] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(notifications): reschedule reminders on every task change`.
+- [x] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(notifications): reschedule reminders on every task change`.
 
 ### Task 3.3: Job рассылки уведомлений
 

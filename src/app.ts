@@ -28,6 +28,7 @@ import { buildHttpServer } from './http/server.js';
 import { checkPrivacyMode } from './bot/startupChecks.js';
 import { syncCommands } from './bot/commands.js';
 import type { AppDeps } from './deps.js';
+import { remindersHook } from './domain/notifications/schedule.js';
 import { createOpenRouterClient } from './ai/providers/openrouter.js';
 import { LlmExtractionProvider } from './ai/pipeline/extract.js';
 import { extractionJsonSchema, extractionJsonSchemaCompat } from './ai/schemas.js';
@@ -167,7 +168,7 @@ export async function startApp(env: Env, overrides?: StartAppOverrides): Promise
     messenger,
     workspace,
     ai,
-    taskHooks: [],
+    taskHooks: [remindersHook],
   };
 
   const bot = createBot(deps, { botInfo: overrides?.botInfo, client: overrides?.client });
