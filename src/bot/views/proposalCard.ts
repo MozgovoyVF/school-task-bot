@@ -28,9 +28,14 @@ export interface ProposalCardView {
   target: {
     taskId: number;
     title: string;
-    before: string | null;
-    after: string | null;
-    field: 'due' | 'assignee' | 'title' | null;
+    /**
+     * `update`-kind: one entry per field `payload.changes` actually carries
+     * (due/assignee/title — any non-empty subset, review round I1: Accept
+     * applies every one of them, so the card must show every one of them,
+     * not just the first). Always `[]` for `complete`/`cancel`, which don't
+     * render a before/after line at all.
+     */
+    changes: Array<{ field: 'due' | 'assignee' | 'title'; before: string | null; after: string | null }>;
   } | null;
 }
 
@@ -97,22 +102,27 @@ function renderCreateBody(v: ProposalCardView, viewerZone: string): string[] {
   return lines;
 }
 
-/** `update`-kind body: one summary line (SPEC §11.1's "field changed" line), plus a past-due warning if the new due date is itself in the past. */
+/** `update`-kind body: one summary line per changed field (SPEC §11.1's "field changed" line — review round I1: every field Accept will apply must be shown, not just the first), plus a past-due warning if the new due date is itself in the past. */
 function renderUpdateBody(v: ProposalCardView): string[] {
   const target = v.target;
   if (target === null) throw new Error('renderProposalCard: kind "update" requires a target');
 
-  const before = target.before === null ? null : escapeHtml(target.before);
-  const after = target.after === null ? null : escapeHtml(target.after);
-  const line = texts.proposalCard.updateLine(
-    updateFieldLabel(target.field),
-    target.taskId,
-    escapeHtml(target.title),
-    before,
-    after,
-  );
+  // Defensive fallback for a (should-not-happen) update proposal with no
+  // changes at all — keeps showing a generic line rather than an empty card.
+  const changes = target.changes.length > 0 ? target.changes : [{ field: null, before: null, after: null }];
+  const lines = changes.map((change) => {
+    const before = change.before === null ? null : escapeHtml(change.before);
+    const after = change.after === null ? null : escapeHtml(change.after);
+    return texts.proposalCard.updateLine(
+      updateFieldLabel(change.field),
+      target.taskId,
+      escapeHtml(target.title),
+      before,
+      after,
+    );
+  });
 
-  return v.dueInPast ? [line, texts.proposalCard.pastDueWarning] : [line];
+  return v.dueInPast ? [...lines, texts.proposalCard.pastDueWarning] : lines;
 }
 
 /** `complete`-kind body: one summary line (SPEC §11.1's "looks done" line). */

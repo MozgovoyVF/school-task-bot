@@ -415,6 +415,9 @@ async function maybeAlertBudgetPaused(deps: AppDeps, now: Date, spent: number): 
   await setState(deps.db, stateKey, { notifiedAt: now.toISOString() }, now);
 }
 
+/** `analysis_batches.kind` values claimed while the daily budget is exceeded — SPEC.md:260 (manual commands keep working), only auto-created batches pause (review round, M2). */
+const MANUAL_BATCH_KINDS = ['manual', 'reanalyze'] as const;
+
 /**
  * SPEC §8/§9.2, plan.md Task 2.9: the ticker job that turns pending group
  * messages into `analysis_batches` and runs them through the LLM
@@ -428,7 +431,12 @@ async function maybeAlertBudgetPaused(deps: AppDeps, now: Date, spent: number): 
  * runs *after* `enqueueBatches`, so messages keep getting grouped into
  * batches even while paused (SPEC §9.2: messages pile up rather than being
  * dropped) — they are simply never claimed until spend resets on the next
- * calendar day (in the workspace's timezone).
+ * calendar day (in the workspace's timezone). Once paused, only manual
+ * batches (`kind='manual'`/`'reanalyze'`) are still claimed and processed —
+ * SPEC.md:260 promises manual commands keep working even while auto-analysis
+ * is paused (review round, M2); their cost still counts toward the budget
+ * via the same `accumulateUsage`/`markFailedOrRetry` bookkeeping every other
+ * batch goes through.
  */
 export const analyzeJob: Job = {
   name: 'analyze',
@@ -440,9 +448,9 @@ export const analyzeJob: Job = {
     await enqueueBatches(deps.db, { now });
 
     const spent = await spentTodayUsd(deps.db, { now, tz: deps.workspace.timezone });
-    if (spent >= deps.config.LLM_DAILY_BUDGET_USD) {
+    const budgetPaused = spent >= deps.config.LLM_DAILY_BUDGET_USD;
+    if (budgetPaused) {
       await maybeAlertBudgetPaused(deps, now, spent);
-      return;
     }
 
     for (let i = 0; i < MAX_BATCHES_PER_TICK; i++) {
@@ -451,7 +459,10 @@ export const analyzeJob: Job = {
       // reusing one timestamp across all of them would let backoff/latency
       // bookkeeping drift from wall-clock reality on a long tick.
       const batchNow = deps.clock.now();
-      const batch = await claimNextBatch(deps.db, { now: batchNow });
+      const batch = await claimNextBatch(deps.db, {
+        now: batchNow,
+        kinds: budgetPaused ? MANUAL_BATCH_KINDS : undefined,
+      });
       if (!batch) break;
       await runOneBatch(deps, batch, batchNow);
     }

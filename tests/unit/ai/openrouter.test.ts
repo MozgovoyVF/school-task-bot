@@ -173,4 +173,17 @@ describe('createOpenRouterClient (plan.md Task 2.4)', () => {
     expect(recorded).toHaveLength(3);
     expect(recorded[2]?.body.response_format).toEqual({ type: 'json_object' });
   });
+
+  it('never retries at the SDK level on a 500 (maxRetries: 0, review round I2) — one fetch call, error propagates', async () => {
+    const { fetch: fetchStub, recorded } = stubFetch(() =>
+      jsonResponse(500, { error: { message: 'upstream error', type: 'server_error' } }),
+    );
+    const client = createOpenRouterClient({ apiKey: 'k', referer: 'r', title: 't', fetch: fetchStub });
+
+    await expect(client.complete(BASE_REQUEST)).rejects.toThrow();
+    // The OpenAI SDK's own `maxRetries` defaults to 2 (i.e. 3 fetch calls for
+    // a retryable 500) — `extract.ts` already owns primary->fallback retry
+    // logic on top, so the SDK's own retries must be disabled.
+    expect(recorded).toHaveLength(1);
+  });
 });

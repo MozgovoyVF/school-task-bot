@@ -155,6 +155,12 @@ export function createOpenRouterClient(opts: {
     baseURL: OPENROUTER_BASE_URL,
     defaultHeaders: { 'HTTP-Referer': opts.referer, 'X-Title': opts.title },
     fetch: opts.fetch,
+    // The SDK defaults to 2 retries on top of `extract.ts`'s own
+    // retry-then-fallback logic (SPEC-mandated primary -> fallback on
+    // timeout) — without this, the SDK's own retries triple every request's
+    // effective timeout, and a full outage can stall a tick for several
+    // minutes (review round, I2).
+    maxRetries: 0,
   });
   const nonStrictModels = new Set<string>();
 

@@ -80,9 +80,7 @@ describe('proposal card (SPEC §11.1)', () => {
         target: {
           taskId: 12,
           title: 'Подготовить расписание',
-          before: 'пт, 25 сен',
-          after: 'пн, 28 сен',
-          field: 'due',
+          changes: [{ field: 'due', before: 'пт, 25 сен', after: 'пн, 28 сен' }],
         },
       },
       'Europe/Moscow',
@@ -98,7 +96,7 @@ describe('proposal card (SPEC §11.1)', () => {
         kind: 'complete',
         quote: 'сделала',
         quoteAuthor: 'Мария',
-        target: { taskId: 12, title: 'Подготовить расписание', before: null, after: null, field: null },
+        target: { taskId: 12, title: 'Подготовить расписание', changes: [] },
       },
       'Europe/Moscow',
     );
@@ -111,11 +109,33 @@ describe('proposal card (SPEC §11.1)', () => {
         kind: 'cancel',
         quote: 'уже не нужно',
         quoteAuthor: 'Мария',
-        target: { taskId: 12, title: 'Подготовить расписание', before: null, after: null, field: null },
+        target: { taskId: 12, title: 'Подготовить расписание', changes: [] },
       },
       'Europe/Moscow',
     );
     expect(cancel.buttons.flat().map((b) => b.text)).toEqual(['🗑 Отменить задачу', '❌ Нет']);
+  });
+
+  it('renders one line per changed field on an update card, not just the first (review round I1)', () => {
+    const upd = renderProposalCard(
+      {
+        ...base,
+        kind: 'update',
+        target: {
+          taskId: 12,
+          title: 'Подготовить расписание',
+          changes: [
+            { field: 'due', before: 'пт, 25 сен', after: 'пн, 28 сен' },
+            { field: 'assignee', before: 'Мария', after: 'Анна' },
+          ],
+        },
+      },
+      'Europe/Moscow',
+    );
+    expect(upd.text).toBe(
+      '🔄 Перенос срока: T12 «Подготовить расписание» · было пт, 25 сен → стало пн, 28 сен\n' +
+        '🔄 Смена исполнителя: T12 «Подготовить расписание» · было Мария → стало Анна',
+    );
   });
 
   it('omits the quote/link lines when there is no source message', () => {

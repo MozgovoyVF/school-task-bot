@@ -133,14 +133,20 @@ function resolveAssigneeRef(
  * A hallucinated `assignee_ref` (SPEC §9.5's guard against model
  * hallucinations) is not fatal — unlike an unknown message/target ref it does not drop the
  * action, since CLAUDE.md ranks a missed task above a false positive. It
- * only falls back to the default-assignee rule, and is worth a diagnostic:
- * this module is a pure pipeline step with no injected `Logger` (see
- * `ResolveContext`), so `console.warn` is used directly; the message carries
- * only a ref code and an action index, never message text or a name.
+ * only falls back to the default-assignee rule (`create`) or is skipped
+ * (`update`, see {@link resolveUpdateAssigneeChange}), and is worth a
+ * diagnostic: this module is a pure pipeline step with no injected `Logger`
+ * (see `ResolveContext`), so `console.warn` is used directly. CLAUDE.md's
+ * "no names/usernames at info+" rule applies here too: `create`'s
+ * `assignee_ref` is regex-constrained (`src/ai/schemas.ts`) so it can never
+ * carry a real name, but `update.changes.assignee_ref` is a bare
+ * `z.string()` and the model can put a real name there — so the raw ref is
+ * never logged, only the action index and the ref's length (review round,
+ * M1).
  */
 function warnUnknownAssigneeRef(actionIndex: number, ref: string): void {
   console.warn(
-    `resolveActions: unknown assignee ref "${ref}" at action index ${actionIndex}, falling back to the default assignee rule`,
+    `resolveActions: unresolved assignee ref at action index ${actionIndex}, length ${String(ref.length)}`,
   );
 }
 

@@ -172,8 +172,17 @@ async function enqueueOneChat(
  * can create several batches with the exact same timestamp; `id` breaks
  * that tie deterministically instead of leaving Postgres to pick an
  * arbitrary row order. Returns `null` when nothing is claimable right now.
+ *
+ * `args.kinds`, when given, restricts the claim to those `batch_kind`
+ * values — used by `analyzeJob` (SPEC.md:260, review round M2) to keep
+ * claiming manual batches (`/reanalyze`'s `kind='reanalyze'`,
+ * `parseDateText`'s `kind='manual'`) while the daily budget is paused,
+ * without also claiming `kind='auto'` ones.
  */
-export async function claimNextBatch(db: Db, args: { now: Date }): Promise<BatchRow | null> {
+export async function claimNextBatch(
+  db: Db,
+  args: { now: Date; kinds?: readonly BatchRow['kind'][] },
+): Promise<BatchRow | null> {
   return db.transaction(async (tx) => {
     const candidates = await tx
       .select()
@@ -182,6 +191,7 @@ export async function claimNextBatch(db: Db, args: { now: Date }): Promise<Batch
         and(
           eq(analysisBatches.status, 'queued'),
           or(isNull(analysisBatches.nextAttemptAt), lte(analysisBatches.nextAttemptAt, args.now)),
+          args.kinds ? inArray(analysisBatches.kind, args.kinds) : undefined,
         ),
       )
       .orderBy(asc(analysisBatches.createdAt), asc(analysisBatches.id))

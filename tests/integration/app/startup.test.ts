@@ -76,6 +76,11 @@ describe('startApp', () => {
       const response = await app.http.inject({ method: 'GET', url: '/healthz' });
       expect(response.statusCode).toBe(200);
       expect(response.json()).toEqual({ status: 'ok' });
+
+      // review round C1: without both OPENROUTER_API_KEY and
+      // LLM_MODEL_PRIMARY, `deps.ai` must stay `null` (AI analysis
+      // disabled) — this is the already-correct path.
+      expect(app.deps.ai).toBeNull();
     } finally {
       const startedAt = Date.now();
       await app.stop();
@@ -84,6 +89,37 @@ describe('startApp', () => {
       // A second stop() call is a no-op: it must resolve without error and without
       // trying to close already-closed resources again.
       await expect(app.stop()).resolves.toBeUndefined();
+    }
+  }, 15_000);
+
+  it('builds a real AiProviders when OPENROUTER_API_KEY and LLM_MODEL_PRIMARY are both set (review round C1)', async () => {
+    const env = loadEnv({
+      TELEGRAM_BOT_TOKEN: 'test-token:ABC',
+      DATABASE_URL: process.env.TEST_DATABASE_URL ?? DEFAULT_TEST_DATABASE_URL,
+      SUPERADMIN_TG_IDS: '900000001',
+      GIT_SHA: 'test-sha',
+      OPENROUTER_API_KEY: 'sk-test',
+      LLM_MODEL_PRIMARY: 'openrouter/model-x',
+      LLM_MODEL_FALLBACK: 'openrouter/model-y',
+    });
+    const messenger = new FakeMessenger();
+    const app = await startApp(env, {
+      messenger,
+      polling: false,
+      clock: fixedClock('2026-09-23T12:00:00Z'),
+      botInfo: testBotInfo(),
+      client: { fetch: fakeFetch() },
+    });
+
+    try {
+      // Construction only — `analyzeJob`'s one synchronous `tickOnce()` tick
+      // (startApp) finds no queued batches in this fresh test DB, so no real
+      // OpenRouter/network call is ever made here.
+      expect(app.deps.ai).not.toBeNull();
+      expect(app.deps.ai?.models).toEqual({ primary: 'openrouter/model-x', fallback: 'openrouter/model-y' });
+      expect(app.deps.ai?.decision).toBeNull();
+    } finally {
+      await app.stop();
     }
   }, 15_000);
 });

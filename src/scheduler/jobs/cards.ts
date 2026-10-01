@@ -247,25 +247,31 @@ async function buildCardView(ctx: BuildCtx, row: ProposalRow): Promise<ProposalC
   }
 
   if (row.kind === 'update') {
+    // review round I1: one entry per field `payload.changes` actually carries — `applyModification`
+    // (`src/domain/proposals/decide.ts`'s `buildUpdatePatch`) applies every one of them, so the card must
+    // show every one of them, not just the first (a before/elseif chain silently hid every change after
+    // the first).
     const changes = payload.changes ?? {};
-    let field: 'due' | 'assignee' | 'title' | null = null;
-    let before: string | null = null;
-    let after: string | null = null;
+    const fieldChanges: NonNullable<ProposalCardView['target']>['changes'] = [];
     if (changes.due !== undefined) {
-      field = 'due';
-      before = dueText(
-        task.dueAt !== null ? { at: task.dueAt, allDay: task.dueAllDay, tz: task.dueTz } : null,
-        ctx.ownerZone,
-      );
-      after = dueText(payloadDueToView(changes.due), ctx.ownerZone);
-    } else if (changes.assignee !== undefined) {
-      field = 'assignee';
-      before = assigneeText(assigneeView(currentTaskAssignee(task), ctx.displayNameByUserId));
-      after = assigneeText(assigneeView(changes.assignee, ctx.displayNameByUserId));
-    } else if (changes.title !== undefined) {
-      field = 'title';
-      before = task.title;
-      after = changes.title;
+      fieldChanges.push({
+        field: 'due',
+        before: dueText(
+          task.dueAt !== null ? { at: task.dueAt, allDay: task.dueAllDay, tz: task.dueTz } : null,
+          ctx.ownerZone,
+        ),
+        after: dueText(payloadDueToView(changes.due), ctx.ownerZone),
+      });
+    }
+    if (changes.assignee !== undefined) {
+      fieldChanges.push({
+        field: 'assignee',
+        before: assigneeText(assigneeView(currentTaskAssignee(task), ctx.displayNameByUserId)),
+        after: assigneeText(assigneeView(changes.assignee, ctx.displayNameByUserId)),
+      });
+    }
+    if (changes.title !== undefined) {
+      fieldChanges.push({ field: 'title', before: task.title, after: changes.title });
     }
     const view: ProposalCardView = {
       id: row.id,
@@ -284,7 +290,7 @@ async function buildCardView(ctx: BuildCtx, row: ProposalRow): Promise<ProposalC
       link,
       dueInPast: false,
       duplicateOf: null,
-      target: { taskId: task.id, title: task.title, before, after, field },
+      target: { taskId: task.id, title: task.title, changes: fieldChanges },
     };
     return view;
   }
@@ -306,7 +312,7 @@ async function buildCardView(ctx: BuildCtx, row: ProposalRow): Promise<ProposalC
     link,
     dueInPast: false,
     duplicateOf: null,
-    target: { taskId: task.id, title: task.title, before: null, after: null, field: null },
+    target: { taskId: task.id, title: task.title, changes: [] },
   };
   return view;
 }

@@ -496,6 +496,58 @@ describe('cardsJob', () => {
     ]);
   });
 
+  it('shows every changed field on an update card, not just the first — Accept applies all of them (review round I1)', async () => {
+    const clock = fixedClock('2026-09-23T09:00:00Z');
+    const { deps, messenger } = await makeDeps(clock);
+    await makeOwner(deps.workspace.id, 42, 'Anna');
+    const maria = await upsertTelegramUser(db, { id: 43, first_name: 'Maria' });
+    await db
+      .insert(memberships)
+      .values({ workspaceId: deps.workspace.id, userId: maria.id, role: 'member', displayName: 'Maria' });
+    const now = clock.now();
+
+    const task = await makeTask(deps.workspace.id, {
+      title: 'Подготовить расписание',
+      dueAt: new Date('2026-09-25T20:59:00Z'), // 23:59 МСК, пт 25 сен
+      dueAllDay: true,
+      dueTz: 'Europe/Moscow',
+    });
+    await makeProposal({
+      workspaceId: deps.workspace.id,
+      kind: 'update',
+      category: null,
+      targetTaskId: task.id,
+      createdAt: now,
+      payload: {
+        reasoning: 'test',
+        origin: 'ai',
+        quote: null,
+        quoteAuthorName: null,
+        changes: {
+          due: {
+            dueAt: '2026-09-28T20:59:00Z', // 23:59 МСК, пн 28 сен
+            allDay: true,
+            tz: 'Europe/Moscow',
+            inPast: false,
+            invalid: false,
+          },
+          assignee: { type: 'user', userId: maria.id },
+        },
+      },
+    });
+
+    await cardsJob.run(deps);
+
+    expect(messenger.sent).toHaveLength(1);
+    const text = messenger.sent[0]?.text ?? '';
+    expect(text).toContain(
+      `Перенос срока: T${String(task.id)} «Подготовить расписание» · было пт, 25 сен → стало пн, 28 сен`,
+    );
+    expect(text).toContain(
+      `Смена исполнителя: T${String(task.id)} «Подготовить расписание» · было Не назначен → стало Maria`,
+    );
+  });
+
   it('skips (does not silently drop) a proposal action targeting another pending proposal instead of a task (D44)', async () => {
     const clock = fixedClock('2026-09-23T09:00:00Z');
     const logger = createLogger({ level: 'silent' });
