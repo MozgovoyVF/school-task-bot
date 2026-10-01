@@ -174,6 +174,43 @@ describe('createOpenRouterClient (plan.md Task 2.4)', () => {
     expect(recorded[2]?.body.response_format).toEqual({ type: 'json_object' });
   });
 
+  // Task 2.18 compat fix C: `extractionJsonSchema()` is now sent by default
+  // (strict mode, keeps `pattern`/`minLength`/`maxLength`, matching
+  // `JSON_SCHEMA` on `BASE_REQUEST`); once a model is remembered as
+  // non-strict, later requests use `compatJsonSchema` instead, not the
+  // strict schema embedded as text.
+  it('uses compatJsonSchema (not jsonSchema) once a model is remembered as non-strict', async () => {
+    const COMPAT_SCHEMA = { type: 'object', properties: { actions: { type: 'array' } }, title: 'compat' };
+    let call = 0;
+    const { fetch: fetchStub, recorded } = stubFetch(() => {
+      call += 1;
+      if (call === 1) {
+        return jsonResponse(400, {
+          error: { message: 'Provider does not support response_format', type: 'invalid_request_error' },
+        });
+      }
+      return jsonResponse(
+        200,
+        chatCompletion({ usage: { prompt_tokens: 10, completion_tokens: 5, cost: 0.0001 } }),
+      );
+    });
+    const client = createOpenRouterClient({ apiKey: 'k', referer: 'r', title: 't', fetch: fetchStub });
+
+    await client.complete({ ...BASE_REQUEST, compatJsonSchema: COMPAT_SCHEMA });
+
+    expect(recorded).toHaveLength(2);
+    const secondMessages = recorded[1]?.body.messages as Array<{ role: string; content: string }> | undefined;
+    expect(secondMessages?.[0]?.content).toContain(JSON.stringify(COMPAT_SCHEMA));
+    expect(secondMessages?.[0]?.content).not.toContain(JSON.stringify(JSON_SCHEMA));
+
+    // A later call for the same (now-remembered) model also uses the compat
+    // schema, in a single request straight away.
+    await client.complete({ ...BASE_REQUEST, compatJsonSchema: COMPAT_SCHEMA });
+    expect(recorded).toHaveLength(3);
+    const thirdMessages = recorded[2]?.body.messages as Array<{ role: string; content: string }> | undefined;
+    expect(thirdMessages?.[0]?.content).toContain(JSON.stringify(COMPAT_SCHEMA));
+  });
+
   it('never retries at the SDK level on a 500 (maxRetries: 0, review round I2) — one fetch call, error propagates', async () => {
     const { fetch: fetchStub, recorded } = stubFetch(() =>
       jsonResponse(500, { error: { message: 'upstream error', type: 'server_error' } }),
@@ -184,6 +221,105 @@ describe('createOpenRouterClient (plan.md Task 2.4)', () => {
     // The OpenAI SDK's own `maxRetries` defaults to 2 (i.e. 3 fetch calls for
     // a retryable 500) — `extract.ts` already owns primary->fallback retry
     // logic on top, so the SDK's own retries must be disabled.
+    expect(recorded).toHaveLength(1);
+  });
+
+  // Task 2.18 compat fix A — real-API finding: `openai/gpt-5-mini` 404s with
+  // OpenRouter's "No endpoints found that can handle the requested
+  // parameters" because `temperature: 0` is sent unconditionally alongside
+  // `provider.require_parameters: true`, but the model's listed endpoints
+  // don't support `temperature`.
+  it('retries without temperature after OpenRouter\'s "no endpoints found" 404, and remembers the model', async () => {
+    let call = 0;
+    const { fetch: fetchStub, recorded } = stubFetch(() => {
+      call += 1;
+      if (call === 1) {
+        return jsonResponse(404, {
+          error: {
+            message: 'No endpoints found that can handle the requested parameters.',
+            code: 404,
+          },
+        });
+      }
+      return jsonResponse(
+        200,
+        chatCompletion({ usage: { prompt_tokens: 10, completion_tokens: 5, cost: 0.0001 } }),
+      );
+    });
+    const client = createOpenRouterClient({ apiKey: 'k', referer: 'r', title: 't', fetch: fetchStub });
+
+    const res = await client.complete(BASE_REQUEST);
+
+    expect(recorded).toHaveLength(2);
+    expect(recorded[0]?.body.temperature).toBe(0);
+    expect(recorded[1]?.body.temperature).toBeUndefined();
+    // The other request shape (strict json_schema) is untouched — only
+    // temperature is dropped.
+    expect(recorded[1]?.body.response_format).toMatchObject({ type: 'json_schema' });
+    expect(res.model).toBe('openrouter/model-x');
+
+    // A later call for the same model must skip straight to no-temperature.
+    await client.complete(BASE_REQUEST);
+    expect(recorded).toHaveLength(3);
+    expect(recorded[2]?.body.temperature).toBeUndefined();
+  });
+
+  it('does not retry on a "no endpoints found" 404 for a different reason (e.g. an unknown model id)', async () => {
+    const { fetch: fetchStub, recorded } = stubFetch(() =>
+      jsonResponse(404, { error: { message: 'No endpoints found matching your data policy.', code: 404 } }),
+    );
+    const client = createOpenRouterClient({ apiKey: 'k', referer: 'r', title: 't', fetch: fetchStub });
+
+    await expect(client.complete(BASE_REQUEST)).rejects.toThrow();
+    expect(recorded).toHaveLength(1);
+  });
+
+  // Task 2.18 compat fix B — real-API finding: `google/gemini-3.8-flash` 400s
+  // with a generic OpenRouter-level "Provider returned error" message whose
+  // `error.metadata.raw` (Google AI Studio's own untouched error text)
+  // contains `INVALID_ARGUMENT`. The old `response_format`-substring check
+  // never saw this, since OpenRouter's top-level message never mentions
+  // `response_format` here.
+  it('retries in json_object mode after a 400 whose provider raw error is INVALID_ARGUMENT for a json_schema request', async () => {
+    let call = 0;
+    const { fetch: fetchStub, recorded } = stubFetch(() => {
+      call += 1;
+      if (call === 1) {
+        return jsonResponse(400, {
+          error: {
+            message: 'Provider returned error',
+            code: 400,
+            metadata: {
+              raw: 'Request contains an invalid argument. INVALID_ARGUMENT',
+              provider_name: 'Google AI Studio',
+            },
+          },
+        });
+      }
+      return jsonResponse(
+        200,
+        chatCompletion({ usage: { prompt_tokens: 10, completion_tokens: 5, cost: 0.0001 } }),
+      );
+    });
+    const client = createOpenRouterClient({ apiKey: 'k', referer: 'r', title: 't', fetch: fetchStub });
+
+    const res = await client.complete(BASE_REQUEST);
+
+    expect(recorded).toHaveLength(2);
+    expect(recorded[0]?.body.response_format).toMatchObject({ type: 'json_schema' });
+    expect(recorded[1]?.body.response_format).toEqual({ type: 'json_object' });
+    expect(res.model).toBe('openrouter/model-x');
+  });
+
+  it('does not treat an unrelated 400 (no INVALID_ARGUMENT raw error) as a json_schema rejection', async () => {
+    const { fetch: fetchStub, recorded } = stubFetch(() =>
+      jsonResponse(400, {
+        error: { message: 'Provider returned error', code: 400, metadata: { raw: 'Rate limited' } },
+      }),
+    );
+    const client = createOpenRouterClient({ apiKey: 'k', referer: 'r', title: 't', fetch: fetchStub });
+
+    await expect(client.complete(BASE_REQUEST)).rejects.toThrow();
     expect(recorded).toHaveLength(1);
   });
 });

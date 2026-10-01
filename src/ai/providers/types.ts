@@ -15,7 +15,14 @@ export interface Usage {
 export interface CompletionRequest {
   model: string;
   messages: ExtractionInput['messages'];
+  // The full strict schema, sent by default. Task 2.18 compat fix C:
+  // `compatJsonSchema`, when given, is used instead once the client has
+  // remembered this model as rejecting `jsonSchema` outright (see
+  // `src/ai/providers/openrouter.ts`'s `nonStrictModels`) — typically a
+  // narrower schema a stricter provider (e.g. Gemini) can actually accept.
+  // Falls back to `jsonSchema` itself when omitted.
   jsonSchema: Record<string, unknown> | null;
+  compatJsonSchema?: Record<string, unknown> | null;
   timeoutMs: number;
 }
 

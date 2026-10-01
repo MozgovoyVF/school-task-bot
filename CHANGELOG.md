@@ -52,6 +52,33 @@ dataset + runner.
   and constructs a real `AiProviders` (OpenRouter client + extraction provider) from env, so the
   AI pipeline actually runs outside tests.
 
+- `prompts/extractor.v2.md` (D45, Task 2.18) — vague-intention rule: an intention with no concrete
+  action, assignee, or due date no longer creates a proposal; `extractor.v1.md` is kept unedited
+  (D27).
+- Model selection (Task 2.18, `eval/reports/COMPARISON.md`): primary `openai/gpt-5-mini`, fallback
+  `openai/gpt-4.1-mini`, both on `extractor.v2` — `src/config/constants.ts`'s
+  `EXTRACTOR_PROMPT_VERSION` now points at `extractor.v2`, `.env.example` documents the chosen
+  models.
+
+### Fixed
+
+- Real-eval findings from running candidate models through `pnpm eval` (Task 2.18) surfaced four
+  OpenRouter/provider-compat bugs, fixed before any candidate could be scored:
+  - `openrouter.ts` sent `temperature: 0` unconditionally, 404ing on models whose endpoints don't
+    support it (`openai/gpt-5-mini`); now retried once without `temperature` and remembered
+    per model, like the existing non-strict-schema fallback.
+  - the wire JSON schema now defaults to the full strict schema (needed by
+    `deepseek/deepseek-v4-flash`, whose recall collapsed under a stripped schema) and only falls
+    back to a Gemini-compatible schema (no `pattern`/`minLength`/`maxLength`) per model once that
+    model is seen rejecting the strict one.
+  - `parseExtraction` now always normalizes a `create` action's `target_ref` to `null` instead of
+    validating it (not meaningful for a new task), so a stray value there can no longer fail the
+    whole batch; `update`/`complete`/`cancel` still validate `target_ref` as before.
+  - `eval/run.ts` samples `--limit` cases evenly across the dataset instead of taking a prefix,
+    scores each case independently instead of aborting the run on the first failure (surfacing
+    per-case errors and a per-model error summary in the report), and now always asks for
+    confirmation (or requires `--yes`) before any real `--provider openrouter` API call.
+
 ### Known open points (flagged for the user, not blocking)
 
 - **D44** (`plan.md`): the business meaning of accepting/completing/cancelling a proposal that
@@ -62,9 +89,9 @@ dataset + runner.
 - Proposal reactions (👀) fire when a card is actually delivered to the Owner, not strictly "at
   creation time" as SPEC §9 literally says — deliberate tradeoff to avoid firing reactions on
   proposals still waiting out quiet hours.
-- Real-model eval (recall ≥0.90/precision ≥0.60/date-accuracy ≥0.85 against a chosen OpenRouter
-  model) has not been run — needs an OpenRouter account/key and the user's model choice (Task
-  2.18), and an optional prompt-iteration pass (Task 2.19) depending on the result.
+- Real-model eval ran and the model/prompt choice is recorded (Task 2.18 steps 1–4,
+  `eval/reports/COMPARISON.md`); manual acceptance on the dev bot (Task 2.18 step 5, RC
+  `v0.3.0-rc.1`) and phase closing (step 6) are still open.
 
 ## [0.2.0] — 2026-09-28
 

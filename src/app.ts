@@ -30,7 +30,7 @@ import { syncCommands } from './bot/commands.js';
 import type { AppDeps } from './deps.js';
 import { createOpenRouterClient } from './ai/providers/openrouter.js';
 import { LlmExtractionProvider } from './ai/pipeline/extract.js';
-import { extractionJsonSchema } from './ai/schemas.js';
+import { extractionJsonSchema, extractionJsonSchemaCompat } from './ai/schemas.js';
 import type { AiProviders } from './ai/providers/types.js';
 
 /** Update types the production long-polling runner asks Telegram for (brief Step 3). */
@@ -138,6 +138,7 @@ export async function startApp(env: Env, overrides?: StartAppOverrides): Promise
         primary: env.LLM_MODEL_PRIMARY,
         fallback: env.LLM_MODEL_FALLBACK ?? null,
         jsonSchema: extractionJsonSchema(),
+        compatJsonSchema: extractionJsonSchemaCompat(),
       }),
       decision: null,
       client,

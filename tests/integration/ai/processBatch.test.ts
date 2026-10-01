@@ -240,7 +240,7 @@ describe('processBatch (plan.md Task 2.10)', () => {
     const batchAfter = await getBatch(batch.id);
     expect(batchAfter?.status).toBe('done');
     expect(batchAfter?.model).toBe('fixture/primary');
-    expect(batchAfter?.promptVersion).toBe('extractor.v1');
+    expect(batchAfter?.promptVersion).toBe('extractor.v2');
     expect(batchAfter?.inputTokens).toBe(512);
     expect(batchAfter?.outputTokens).toBe(96);
     expect(Number(batchAfter?.costUsd)).toBeCloseTo(0.00081, 6);

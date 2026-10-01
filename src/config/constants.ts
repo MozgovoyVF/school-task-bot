@@ -6,8 +6,9 @@ export const BATCH_MAX_ATTEMPTS = 5;
 export const STALE_RUNNING_BATCH_MS = 5 * 60_000;
 // How many queued batches one analyzeJob tick claims and processes at most (plan.md Task 2.9).
 export const MAX_BATCHES_PER_TICK = 5;
-// analysis_batches.prompt_version for the current extractor prompt file (prompts/extractor.v1.md).
-export const EXTRACTOR_PROMPT_VERSION = 'extractor.v1';
+// analysis_batches.prompt_version for the current extractor prompt file (prompts/extractor.v2.md, D45).
+// extractor.v1.md stays on disk unedited (D27) and is still used by fixtures/tests that pin it deliberately.
+export const EXTRACTOR_PROMPT_VERSION = 'extractor.v2';
 // analysis_batches.prompt_version for the free-text date parser (plan.md Task 2.14, prompts/parseDate.v1.md).
 export const PARSE_DATE_PROMPT_VERSION = 'parseDate.v1';
 // SPEC §8/§9.2 — consecutive LLM-call failures (across batches) before superadmin is alerted.

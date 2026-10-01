@@ -71,29 +71,42 @@ function injectSchemaIntoSystem(
   return [{ role: 'system', content: instruction }, ...messages];
 }
 
-function buildRequestBody(req: CompletionRequest, useJsonSchema: boolean): OpenRouterCreateParams {
+function buildRequestBody(
+  req: CompletionRequest,
+  useJsonSchema: boolean,
+  includeTemperature: boolean,
+): OpenRouterCreateParams {
   const messages = req.messages.map(toChatMessage);
+  const base: OpenRouterCreateParams = {
+    model: req.model,
+    messages,
+    provider: { require_parameters: true },
+    // CLAUDE.md requires temperature 0 wherever the endpoint supports it;
+    // `includeTemperature` is only ever false for a model already remembered
+    // (`noTemperatureModels`) as rejecting it outright (see
+    // `isNoEndpointsError` below), not a general opt-out.
+    ...(includeTemperature ? { temperature: 0 } : {}),
+  };
   if (req.jsonSchema === null) {
-    return { model: req.model, messages, temperature: 0, provider: { require_parameters: true } };
+    return base;
   }
   if (useJsonSchema) {
     return {
-      model: req.model,
-      messages,
-      temperature: 0,
+      ...base,
       response_format: {
         type: 'json_schema',
         json_schema: { name: RESPONSE_FORMAT_SCHEMA_NAME, strict: true, schema: req.jsonSchema },
       },
-      provider: { require_parameters: true },
     };
   }
+  // Task 2.18 compat fix C: the compat path (a model already remembered as
+  // rejecting the full strict schema) uses `compatJsonSchema` when the
+  // caller provided one, not `jsonSchema` itself — see `CompletionRequest`.
+  const compatSchema = req.compatJsonSchema ?? req.jsonSchema;
   return {
-    model: req.model,
-    messages: injectSchemaIntoSystem(messages, req.jsonSchema),
-    temperature: 0,
+    ...base,
+    messages: injectSchemaIntoSystem(messages, compatSchema),
     response_format: { type: 'json_object' },
-    provider: { require_parameters: true },
   };
 }
 
@@ -103,6 +116,58 @@ function isResponseFormatBadRequest(err: unknown): boolean {
     err.status === 400 &&
     typeof err.message === 'string' &&
     err.message.toLowerCase().includes('response_format')
+  );
+}
+
+// OpenRouter's JSON body shape for a provider-side error, as handed back
+// through `OpenAI.APIError#error` (the SDK parses `errorResponse['error']`
+// itself — see `node_modules/openai/core/error.js`'s `APIError.generate`).
+// `metadata.raw` carries the upstream provider's own untouched error text
+// (e.g. Google AI Studio's), which is where an `INVALID_ARGUMENT` for a
+// rejected `json_schema` request actually shows up — `APIError#message` only
+// ever contains the generic OpenRouter-level `message` field, not this.
+const OpenRouterApiErrorBodySchema = z
+  .object({
+    message: z.string().optional(),
+    metadata: z.object({ raw: z.string().optional(), provider_name: z.string().optional() }).optional(),
+  })
+  .passthrough();
+
+/**
+ * A strict `json_schema` request rejected with a 400 whose upstream raw
+ * error is `INVALID_ARGUMENT` (observed from Google AI Studio/Gemini: our
+ * schema's `pattern`/`minLength`/`maxLength` keywords — present by default
+ * in `extractionJsonSchema()`, dropped only in the compat variant
+ * `extractionJsonSchemaCompat()` (`src/ai/schemas.ts`, Task 2.18 compat fix
+ * C) — trigger this). Once remembered, later requests for this model use
+ * `compatJsonSchema` (the stripped schema) if the caller supplied one.
+ * Distinct from `isResponseFormatBadRequest`, which only catches a provider
+ * saying it does not support `response_format`/structured outputs at all.
+ */
+function isJsonSchemaInvalidArgument(err: unknown): boolean {
+  if (!(err instanceof OpenAI.APIError) || err.status !== 400) return false;
+  const parsed = OpenRouterApiErrorBodySchema.safeParse(err.error);
+  if (!parsed.success) return false;
+  const raw = parsed.data.metadata?.raw ?? '';
+  return raw.toUpperCase().includes('INVALID_ARGUMENT');
+}
+
+/**
+ * OpenRouter's exact "no route for this parameter set" 404 message, returned
+ * instead of silently dropping an unsupported request parameter when
+ * `provider.require_parameters: true` is set (provider-routing docs).
+ * Observed for `temperature` on a model whose listed endpoints don't support
+ * it (e.g. `openai/gpt-5-mini`). Matched on the full phrase, not just "no
+ * endpoints found" — OpenRouter also 404s with that shorter prefix for
+ * unrelated routing reasons (e.g. a data-policy mismatch), which dropping
+ * `temperature` would never fix and must not be retried as if it would.
+ */
+function isNoEndpointsError(err: unknown): boolean {
+  return (
+    err instanceof OpenAI.APIError &&
+    err.status === 404 &&
+    typeof err.message === 'string' &&
+    err.message.toLowerCase().includes('no endpoints found that can handle the requested parameters')
   );
 }
 
@@ -138,10 +203,22 @@ function toCompletionResponse(
 
 /**
  * Builds a `ChatCompletionClient` that talks to OpenRouter through the
- * `openai` SDK (plan.md Task 2.4). A model that rejects strict
- * `json_schema` mode (400 mentioning `response_format`) is remembered for
- * the lifetime of this client and every later request for it goes straight
- * to `json_object` mode with the schema spelled out in the system message.
+ * `openai` SDK (plan.md Task 2.4). Two independent per-model fallbacks are
+ * remembered for the lifetime of this client, each triggered by a distinct
+ * error shape and each retried at most once:
+ *   - a model that rejects strict `json_schema` mode (400 mentioning
+ *     `response_format`, or a 400 whose upstream raw error is
+ *     `INVALID_ARGUMENT` — see `isJsonSchemaInvalidArgument`) goes straight
+ *     to `json_object` mode with the compat schema (`req.compatJsonSchema`,
+ *     falling back to `req.jsonSchema`) spelled out in the system message
+ *     for every later request (`nonStrictModels`) — a model never remembered
+ *     this way keeps getting the full `req.jsonSchema` in strict mode
+ *     (Task 2.18 compat fix C);
+ *   - a model whose endpoints don't support `temperature` (OpenRouter's "no
+ *     endpoints found" 404, since `provider.require_parameters: true` is
+ *     always set) drops `temperature` from every later request
+ *     (`noTemperatureModels`) — `temperature: 0` (CLAUDE.md) is otherwise
+ *     always sent.
  */
 export function createOpenRouterClient(opts: {
   apiKey: string;
@@ -163,28 +240,43 @@ export function createOpenRouterClient(opts: {
     maxRetries: 0,
   });
   const nonStrictModels = new Set<string>();
+  const noTemperatureModels = new Set<string>();
 
   return {
     async complete(req: CompletionRequest): Promise<CompletionResponse> {
       const useJsonSchema = req.jsonSchema !== null && !nonStrictModels.has(req.model);
+      const includeTemperature = !noTemperatureModels.has(req.model);
       try {
-        const response = await client.chat.completions.create(buildRequestBody(req, useJsonSchema), {
-          timeout: req.timeoutMs,
-        });
+        const response = await client.chat.completions.create(
+          buildRequestBody(req, useJsonSchema, includeTemperature),
+          { timeout: req.timeoutMs },
+        );
         return toCompletionResponse(response, req.model, opts.logger);
       } catch (err) {
-        if (!useJsonSchema || !isResponseFormatBadRequest(err)) {
-          throw err;
+        if (useJsonSchema && (isResponseFormatBadRequest(err) || isJsonSchemaInvalidArgument(err))) {
+          opts.logger?.warn(
+            { model: req.model },
+            'openrouter rejected strict json_schema response_format, retrying in json_object mode',
+          );
+          nonStrictModels.add(req.model);
+          const response = await client.chat.completions.create(
+            buildRequestBody(req, false, includeTemperature),
+            { timeout: req.timeoutMs },
+          );
+          return toCompletionResponse(response, req.model, opts.logger);
         }
-        opts.logger?.warn(
-          { model: req.model },
-          'openrouter rejected strict json_schema response_format, retrying in json_object mode',
-        );
-        nonStrictModels.add(req.model);
-        const response = await client.chat.completions.create(buildRequestBody(req, false), {
-          timeout: req.timeoutMs,
-        });
-        return toCompletionResponse(response, req.model, opts.logger);
+        if (includeTemperature && isNoEndpointsError(err)) {
+          opts.logger?.warn(
+            { model: req.model },
+            'openrouter found no endpoints supporting temperature for this model, retrying without it',
+          );
+          noTemperatureModels.add(req.model);
+          const response = await client.chat.completions.create(buildRequestBody(req, useJsonSchema, false), {
+            timeout: req.timeoutMs,
+          });
+          return toCompletionResponse(response, req.model, opts.logger);
+        }
+        throw err;
       }
     },
   };

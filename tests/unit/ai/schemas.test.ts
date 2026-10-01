@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { parseExtraction, extractionJsonSchema } from '../../../src/ai/schemas.js';
+import {
+  parseExtraction,
+  extractionJsonSchema,
+  extractionJsonSchemaCompat,
+} from '../../../src/ai/schemas.js';
 
 const create = {
   type: 'create',
@@ -52,7 +56,10 @@ describe('extraction schema', () => {
     expect(r.ok && r.value.actions[0]).toMatchObject({ changes: { title: 'Новое' } });
     expect(r.ok && 'due' in (r.value.actions[0] as { changes: object }).changes).toBe(false);
   });
-  it('produces a strict-compatible JSON schema', () => {
+  it.each([
+    ['extractionJsonSchema (full, strict default)', extractionJsonSchema],
+    ['extractionJsonSchemaCompat (Gemini-compatible)', extractionJsonSchemaCompat],
+  ])('produces a strict-compatible JSON schema — %s', (_label, schemaFn) => {
     const walk = (n: unknown): void => {
       if (n && typeof n === 'object') {
         const o = n as Record<string, unknown>;
@@ -63,7 +70,77 @@ describe('extraction schema', () => {
         Object.values(o).forEach(walk);
       }
     };
-    walk(extractionJsonSchema());
-    expect(JSON.stringify(extractionJsonSchema())).not.toContain('"oneOf"'); // strict mode понимает только anyOf
+    walk(schemaFn());
+    expect(JSON.stringify(schemaFn())).not.toContain('"oneOf"'); // strict mode понимает только anyOf
+  });
+  // Task 2.18 compat fix C — real-API finding: stripping
+  // pattern/minLength/maxLength from the wire schema for *every* model (to
+  // satisfy `google/gemini-3.8-flash`'s 400 INVALID_ARGUMENT on those
+  // keywords) was itself a regression for a model that honours strict
+  // `json_schema` (e.g. `deepseek/deepseek-v4-flash`): with no
+  // `target_ref` pattern sent, the model is free to emit anything for it
+  // and fails local validation instead (recall dropped from ~95% to
+  // 54–71% in a real eval run). `extractionJsonSchema()` now sends the
+  // full schema by default; only `extractionJsonSchemaCompat()` strips
+  // these keywords, for a model already remembered as rejecting the full
+  // one.
+  it('extractionJsonSchema (default) keeps pattern/minLength/maxLength', () => {
+    expect(JSON.stringify(extractionJsonSchema())).toContain('"pattern"');
+    expect(JSON.stringify(extractionJsonSchema())).toContain('"maxLength"');
+  });
+  it('extractionJsonSchemaCompat strips pattern/minLength/maxLength (unsupported by Gemini structured outputs)', () => {
+    const walk = (n: unknown): void => {
+      if (n && typeof n === 'object') {
+        const o = n as Record<string, unknown>;
+        expect(o).not.toHaveProperty('pattern');
+        expect(o).not.toHaveProperty('minLength');
+        expect(o).not.toHaveProperty('maxLength');
+        Object.values(o).forEach(walk);
+      }
+    };
+    walk(extractionJsonSchemaCompat());
+  });
+  it('still enforces regex/length constraints locally even though the compat wire schema does not', () => {
+    expect(parseExtraction({ actions: [{ ...create, assignee_ref: 'not-a-valid-ref' }] }).ok).toBe(false);
+    expect(parseExtraction({ actions: [{ ...create, title: 'ab' }] }).ok).toBe(false);
+  });
+  // Task 2.18 compat fix C — target_ref is not meaningful on a `create`
+  // action; a model (especially one unconstrained by the schema, e.g. under
+  // the json_object compat path) must not be able to fail a whole batch by
+  // attaching an invalid one to it.
+  it.each([['bogus'], [''], ['T']])(
+    'normalises an invalid create.target_ref (%j) to null instead of rejecting the batch',
+    (badRef) => {
+      const r = parseExtraction({ actions: [{ ...create, target_ref: badRef }] });
+      expect(r.ok).toBe(true);
+      if (r.ok) {
+        const action = r.value.actions[0] as { target_ref: unknown };
+        expect(action.target_ref).toBeNull();
+      }
+    },
+  );
+  it('normalises a missing create.target_ref to null', () => {
+    // `create` (the shared fixture above) has no `target_ref` key at all.
+    const r = parseExtraction({ actions: [create] });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const action = r.value.actions[0] as { target_ref: unknown };
+      expect(action.target_ref).toBeNull();
+    }
+  });
+  it('still rejects an invalid target_ref on update/complete/cancel actions (inventing a target is worse than dropping one)', () => {
+    expect(
+      parseExtraction({
+        actions: [
+          {
+            type: 'complete',
+            target_ref: 'bogus',
+            source_message_ids: ['M1'],
+            confidence: 0.9,
+            reasoning: 'r',
+          },
+        ],
+      }).ok,
+    ).toBe(false);
   });
 });
