@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import type { EvalCase } from './schema.js';
 
 // OpenRouter `GET /api/v1/models` (https://openrouter.ai/docs) has no Context7
 // ID (see docs/agents/reference.md), so this schema was checked against a
@@ -66,26 +65,35 @@ export async function fetchModelPricing(
 // real cost comes back from OpenRouter's own `usage.cost` per call).
 const CHARS_PER_TOKEN_ESTIMATE = 3;
 
-function charsInCase(evalCase: EvalCase): number {
-  let total = 0;
-  for (const m of evalCase.context) total += m.text.length;
-  for (const m of evalCase.messages) total += m.text.length;
-  return total;
-}
+// A live eval run (2026-10-01, 30 cases, deepseek/deepseek-v4-flash)
+// actually cost $0.0065, while the original estimate — built only from each
+// case's own message text, ignoring the system prompt/few-shot examples
+// repeated on *every* request and all output-token cost — reported $0.0004,
+// off by more than an order of magnitude. `estimateCostUsd` now takes each
+// case's full rendered request length (`eval/run.ts` measures this straight
+// off the same `ExtractionInput.messages` sent to the provider: system +
+// few-shot + that case's own data) and adds a flat output-token allowance.
+// Extraction responses are a short JSON actions array (SPEC §9.5's `Action`
+// schema) — typically 0-2 actions per case, each a few dozen tokens of
+// title/description/reasoning/due — so 300 tokens/case is a deliberately
+// generous guardrail, not a tight prediction (same spirit as the input-side
+// chars/3 approximation: catch an order-of-magnitude mistake, not predict
+// the exact bill).
+const OUTPUT_TOKENS_PER_CASE_ESTIMATE = 300;
 
 /**
- * Pre-flight cost estimate (brief step 3) for running `cases` against a
- * model priced at `pricing`: total message-text characters across every
- * case, divided by {@link CHARS_PER_TOKEN_ESTIMATE} to approximate input
- * tokens, priced at the prompt (input) rate. Deliberately ignores
- * completion-token cost and everything else that goes into the real prompt
- * (participants, open tasks/proposals, the system prompt, few-shot
- * examples) — this is only meant to catch an order-of-magnitude mistake
- * (e.g. running the full dataset against an expensive model) before
- * spending real money, not to predict the exact bill.
+ * Pre-flight cost estimate (brief step 3) for running against a model
+ * priced at `pricing`. `inputCharsPerCase` must be each case's *full*
+ * rendered request length — i.e. every message `eval/run.ts` would actually
+ * send for that case (system prompt + few-shot examples + that case's own
+ * data), not just its raw message text — since the system prompt and
+ * few-shot examples are resent on every single call, not once per run.
  */
-export function estimateCostUsd(cases: readonly EvalCase[], pricing: ModelPricing): number {
-  const totalChars = cases.reduce((sum, c) => sum + charsInCase(c), 0);
-  const estimatedTokens = totalChars / CHARS_PER_TOKEN_ESTIMATE;
-  return estimatedTokens * pricing.promptUsdPerToken;
+export function estimateCostUsd(inputCharsPerCase: readonly number[], pricing: ModelPricing): number {
+  const totalInputChars = inputCharsPerCase.reduce((sum, chars) => sum + chars, 0);
+  const estimatedInputTokens = totalInputChars / CHARS_PER_TOKEN_ESTIMATE;
+  const estimatedOutputTokens = inputCharsPerCase.length * OUTPUT_TOKENS_PER_CASE_ESTIMATE;
+  return (
+    estimatedInputTokens * pricing.promptUsdPerToken + estimatedOutputTokens * pricing.completionUsdPerToken
+  );
 }

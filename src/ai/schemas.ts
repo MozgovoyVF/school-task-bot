@@ -112,8 +112,38 @@ function replaceOneOfWithAnyOf(node: unknown): unknown {
   return node;
 }
 
+// Gemini's `response_json_schema` only understands a named subset of JSON
+// Schema (Google Gen AI SDK, `types.py`'s `response_json_schema` docstring:
+// `$id`/`$defs`/`$ref`/`$anchor`/`type`/`format`/`title`/`description`/
+// `enum`/`items`/`prefixItems`/`minItems`/`maxItems`/`minimum`/`maximum`/
+// `anyOf`/`oneOf`/`properties`/`additionalProperties`/`required`, plus the
+// non-standard `propertyOrdering`) — `pattern`, `minLength` and `maxLength`
+// are not on that list. `zod.toJSONSchema()` emits all three throughout this
+// schema (every `.regex()`/string `.min()`/`.max()`), and sending them was
+// reproduced live (2026-09-30, `google/gemini-3.8-flash` via OpenRouter) as
+// a 400 `INVALID_ARGUMENT` straight from Google AI Studio. Dropping them
+// from the wire schema is safe: the local `ExtractionResult`/`Action` zod
+// schema above (not this one) is what actually validates a response via
+// `parseExtraction`, and it keeps every `.regex()`/`.min()`/`.max()`
+// constraint regardless of what the provider was asked to enforce.
+const UNSUPPORTED_SCHEMA_KEYWORDS = new Set(['pattern', 'minLength', 'maxLength']);
+
+function stripUnsupportedKeywords(node: unknown): unknown {
+  if (Array.isArray(node)) {
+    return node.map(stripUnsupportedKeywords);
+  }
+  if (node && typeof node === 'object') {
+    const entries = Object.entries(node as Record<string, unknown>)
+      .filter(([key]) => !UNSUPPORTED_SCHEMA_KEYWORDS.has(key))
+      .map(([key, value]): [string, unknown] => [key, stripUnsupportedKeywords(value)]);
+    return Object.fromEntries(entries);
+  }
+  return node;
+}
+
 export function extractionJsonSchema(): Record<string, unknown> {
-  return replaceOneOfWithAnyOf(z.toJSONSchema(ExtractionWire)) as Record<string, unknown>;
+  const withAnyOf = replaceOneOfWithAnyOf(z.toJSONSchema(ExtractionWire));
+  return stripUnsupportedKeywords(withAnyOf) as Record<string, unknown>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

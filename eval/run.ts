@@ -7,12 +7,13 @@ import { z } from 'zod';
 import { EXTRACTOR_PROMPT_VERSION } from '../src/config/constants.js';
 import type { ActionT, DueT, ExtractionResultT } from '../src/ai/schemas.js';
 import { ExtractionResult, extractionJsonSchema } from '../src/ai/schemas.js';
-import type { ExtractionProvider } from '../src/ai/providers/types.js';
+import { ExtractionError, type ExtractionProvider } from '../src/ai/providers/types.js';
 import { createOpenRouterClient } from '../src/ai/providers/openrouter.js';
 import { LlmExtractionProvider } from '../src/ai/pipeline/extract.js';
 import {
   buildExtractionInput,
   type AssigneeResolution as PromptAssignee,
+  type ExtractionInput,
   type MessageForLlm,
   type OpenProposalForLlm,
   type OpenTaskForLlm,
@@ -382,9 +383,26 @@ interface RunCtx {
   providerFactory: (evalCase: EvalCase) => ExtractionProvider;
   prompt: PromptBundle;
   settings: Settings;
+  /** The model label this run was invoked with (`--model`, or `'fixture'`) — used only as the fallback error-summary bucket for a failure that isn't an `ExtractionError` (so has no per-model `attempts` to attribute to). */
+  modelLabel: string;
 }
 
-async function runCase(evalCase: EvalCase, ctx: RunCtx): Promise<EvalRow> {
+interface PipelineInput {
+  now: Date;
+  input: ExtractionInput;
+  forResolve: ResolveContext['messages'];
+}
+
+/**
+ * Builds everything `runCase` needs *before* the provider call: the exact
+ * `ExtractionInput` (system + few-shot + this case's own data — the same
+ * shape `LlmExtractionProvider` sends) plus the resolve-step context. Pulled
+ * out of `runCase` so `main()` can also call it up front, purely to measure
+ * each case's full rendered request length for the pre-flight cost estimate
+ * (`--provider openrouter` step, below) without making any network call or
+ * duplicating this assembly logic.
+ */
+function buildPipelineInput(evalCase: EvalCase, prompt: PromptBundle): PipelineInput {
   const now = new Date(evalCase.now);
   const owner = evalCase.participants.find((p) => p.role === 'owner');
   if (!owner || owner.code !== 'OWNER') {
@@ -416,8 +434,29 @@ async function runCase(evalCase: EvalCase, ctx: RunCtx): Promise<EvalRow> {
 
   const input = buildExtractionInput(
     { now, workspaceTz: evalCase.workspaceTz, participants, openTasks, openProposals, context, messages },
-    ctx.prompt,
+    prompt,
   );
+
+  return { now, input, forResolve };
+}
+
+/** Sum of every message's content length in a case's full rendered request — what the pre-flight cost estimate (brief step 3, broadened per review) prices. */
+function totalInputChars(input: ExtractionInput): number {
+  return input.messages.reduce((sum, m) => sum + m.content.length, 0);
+}
+
+/** `expected[].due` run through `resolveDue`, parallel to `expected` by index — shared between a successful run (`runCase`) and an errored one (`runCaseSafe`), since it only depends on the case's own data, not on the provider call. */
+function computeResolvedExpectedDue(evalCase: EvalCase, settings: Settings): Array<Date | null> {
+  const now = new Date(evalCase.now);
+  return evalCase.expected.map((exp) =>
+    exp.due !== undefined
+      ? resolveDue(toDueT(exp.due), { zone: evalCase.workspaceTz, now, fuzzy: settings.fuzzyTimes }).dueAt
+      : null,
+  );
+}
+
+async function runCase(evalCase: EvalCase, pipeline: PipelineInput, ctx: RunCtx): Promise<EvalRow> {
+  const { now, input, forResolve } = pipeline;
 
   const extraction = ctx.providerFactory(evalCase);
   const startedAt = performance.now();
@@ -445,20 +484,59 @@ async function runCase(evalCase: EvalCase, ctx: RunCtx): Promise<EvalRow> {
     decision: applyPolicy(action, ctx.settings.ai.thresholds, 'auto').decision,
   }));
 
-  const resolvedExpectedDue = evalCase.expected.map((exp) =>
-    exp.due !== undefined
-      ? resolveDue(toDueT(exp.due), { zone: evalCase.workspaceTz, now, fuzzy: ctx.settings.fuzzyTimes }).dueAt
-      : null,
-  );
-
   return {
     caseId: evalCase.id,
     expected: evalCase.expected,
     predicted,
-    resolvedExpectedDue,
+    resolvedExpectedDue: computeResolvedExpectedDue(evalCase, ctx.settings),
     costUsd: extracted.usage.costUsd,
     latencyMs,
   };
+}
+
+interface EvalOutcome {
+  row: EvalRow;
+  /** `null` on success; the error's own text (no chat message content, SPEC §18) otherwise. */
+  errorText: string | null;
+  /** Models an error can be attributed to, for the per-model error summary — `[]` on success. */
+  failedModels: string[];
+}
+
+/** `"model: reason"` (how `extract.ts`'s `ExtractionError.attempts` entries are built) -> `"model"`. */
+function modelFromAttempt(attempt: string): string {
+  const idx = attempt.indexOf(':');
+  return idx === -1 ? attempt : attempt.slice(0, idx);
+}
+
+/**
+ * Runs one case without ever letting it abort the whole eval run (review
+ * finding: a single bad case used to crash `main()` before any report was
+ * written). A failure — provider error, a parse/validation dead end
+ * (`ExtractionError`), or a bug in this file's own case conversion — is
+ * recorded as a case with nothing shown (`predicted: []`, which `scoreRow`
+ * then scores as a plain FN/TN like any other miss) plus the error text and
+ * the model(s) it can be attributed to, for `main()`'s failures section and
+ * per-model error summary.
+ */
+async function runCaseSafe(evalCase: EvalCase, pipeline: PipelineInput, ctx: RunCtx): Promise<EvalOutcome> {
+  try {
+    const row = await runCase(evalCase, pipeline, ctx);
+    return { row, errorText: null, failedModels: [] };
+  } catch (err) {
+    const errorText = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    const failedModels =
+      err instanceof ExtractionError ? [...new Set(err.attempts.map(modelFromAttempt))] : [ctx.modelLabel];
+    console.error(`eval case "${evalCase.id}" failed: ${errorText}`);
+    const row: EvalRow = {
+      caseId: evalCase.id,
+      expected: evalCase.expected,
+      predicted: [],
+      resolvedExpectedDue: computeResolvedExpectedDue(evalCase, ctx.settings),
+      costUsd: err instanceof ExtractionError ? err.usage.costUsd : 0,
+      latencyMs: 0,
+    };
+    return { row, errorText, failedModels };
+  }
 }
 
 async function runWithConcurrency<T, R>(
@@ -504,6 +582,47 @@ function writeReport(meta: ReportMeta, report: string, metrics: Metrics): void {
   console.log(`eval: appended a row to ${comparisonPath}`);
 }
 
+/** Tallies {@link EvalOutcome.failedModels} across a run, for the per-model error summary `main()` prints after the report. */
+function tallyErrorsByModel(outcomes: readonly EvalOutcome[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const outcome of outcomes) {
+    for (const model of outcome.failedModels) counts.set(model, (counts.get(model) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/**
+ * The real-money guardrail for `--provider openrouter` (review finding: the
+ * old `estimate > $1` threshold meant a cheap-looking estimate — itself
+ * wrong by over an order of magnitude, see `pricing.ts` — skipped
+ * confirmation entirely). Now **always** asks, regardless of the estimate
+ * (even an unpriced one), unless `--yes` was passed. With no `--yes` and
+ * stdin not a TTY (CI, a piped invocation, anything non-interactive) there
+ * is no one to ask, so the run aborts rather than silently calling the API
+ * or silently blocking forever on `readline`.
+ */
+async function confirmOpenRouterSpend(
+  cases: readonly EvalCase[],
+  args: CliArgs,
+  estimate: number | null,
+): Promise<boolean> {
+  if (args.yes) return true;
+  if (process.stdin.isTTY !== true) {
+    console.error(
+      'eval: --provider openrouter requires --yes when stdin is not a TTY (no interactive confirmation possible)',
+    );
+    return false;
+  }
+  const estimateText =
+    estimate !== null ? `$${estimate.toFixed(4)}` : 'unknown (no OpenRouter pricing found)';
+  const modelText = args.model ?? '(unset)';
+  const fallbackText = args.fallback ?? 'none';
+  return confirm(
+    `About to call OpenRouter for ${String(cases.length)} case(s) — model "${modelText}" ` +
+      `(fallback: ${fallbackText}). Estimated cost: ${estimateText}. Proceed? [y/N] `,
+  );
+}
+
 // -- main ----------------------------------------------------------------
 
 async function main(): Promise<void> {
@@ -526,37 +645,52 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (args.provider === 'openrouter') {
-    const pricing = await fetchModelPricing(modelLabel);
-    if (pricing === null) {
-      console.warn(
-        `eval: no OpenRouter pricing found for "${modelLabel}", skipping the pre-flight cost estimate`,
-      );
-    } else {
-      const estimate = estimateCostUsd(cases, pricing);
-      console.log(
-        `eval: pre-flight cost estimate for ${String(cases.length)} case(s): $${estimate.toFixed(4)}`,
-      );
-      if (estimate > 1 && !args.yes) {
-        const proceed = await confirm(`Estimated cost $${estimate.toFixed(2)} exceeds $1. Proceed? [y/N] `);
-        if (!proceed) {
-          console.log('eval: aborted by user');
-          return;
-        }
-      }
-    }
-  }
-
   const prompt = loadPrompt({ name: 'extractor', version: args.promptVersion, profile: 'school_ru' });
   const settings = SettingsSchema.parse({});
   const providerFactory = buildProviderFactory(args, modelLabel);
 
-  const rows = await runWithConcurrency(cases, args.concurrency, (evalCase) =>
-    runCase(evalCase, { providerFactory, prompt, settings }),
+  // Built once up front (network-free): reused both for the pre-flight cost
+  // estimate below (its exact rendered length) and for every case's actual
+  // run, so the two can never drift apart.
+  const pipelines = cases.map((evalCase) => ({ evalCase, pipeline: buildPipelineInput(evalCase, prompt) }));
+
+  if (args.provider === 'openrouter') {
+    const pricing = await fetchModelPricing(modelLabel);
+    let estimate: number | null = null;
+    if (pricing === null) {
+      console.warn(`eval: no OpenRouter pricing found for "${modelLabel}", cost estimate unavailable`);
+    } else {
+      estimate = estimateCostUsd(
+        pipelines.map(({ pipeline }) => totalInputChars(pipeline.input)),
+        pricing,
+      );
+      console.log(
+        `eval: pre-flight cost estimate for ${String(cases.length)} case(s): $${estimate.toFixed(4)}`,
+      );
+    }
+    const proceed = await confirmOpenRouterSpend(cases, args, estimate);
+    if (!proceed) {
+      console.log('eval: aborted');
+      process.exitCode = 1;
+      return;
+    }
+  }
+
+  const ctx: RunCtx = { providerFactory, prompt, settings, modelLabel };
+  const outcomes = await runWithConcurrency(pipelines, args.concurrency, ({ evalCase, pipeline }) =>
+    runCaseSafe(evalCase, pipeline, ctx),
   );
 
+  const rows = outcomes.map((o) => o.row);
   const metrics = computeMetrics(rows);
-  const failures = reportableFailures(rows.map((row) => ({ caseId: row.caseId, ...explainRow(row) })));
+  const failures = reportableFailures(
+    outcomes.map((o) => {
+      const explanation = explainRow(o.row);
+      const mismatches =
+        o.errorText !== null ? [...explanation.mismatches, `error: ${o.errorText}`] : explanation.mismatches;
+      return { caseId: o.row.caseId, classification: explanation.classification, mismatches };
+    }),
+  );
   const actualCostUsd = rows.reduce((sum, row) => sum + row.costUsd, 0);
 
   const meta: ReportMeta = {
@@ -575,6 +709,14 @@ async function main(): Promise<void> {
 
   console.log(report);
   console.log(`eval: actual cost $${actualCostUsd.toFixed(4)}`);
+
+  const errorCounts = tallyErrorsByModel(outcomes);
+  if (errorCounts.size > 0) {
+    console.error('eval: errors by model:');
+    for (const [model, count] of errorCounts) {
+      console.error(`  ${model}: ${String(count)} case(s)`);
+    }
+  }
 }
 
 main().catch((err: unknown) => {

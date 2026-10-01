@@ -66,4 +66,27 @@ describe('extraction schema', () => {
     walk(extractionJsonSchema());
     expect(JSON.stringify(extractionJsonSchema())).not.toContain('"oneOf"'); // strict mode понимает только anyOf
   });
+  // Task 2.18 compat fix B — real-API finding: `google/gemini-3.8-flash` 400s
+  // (INVALID_ARGUMENT) on this schema's `pattern`/`minLength`/`maxLength`
+  // keywords, which aren't in Gemini's `response_json_schema` supported
+  // subset (Google Gen AI SDK's `response_json_schema` docstring). Dropping
+  // them from the wire schema must not loosen local validation — only
+  // `extractionJsonSchema()`'s output changes, `parseExtraction` still uses
+  // the separate, unmodified local `ExtractionResult`/`Action` schema.
+  it('strips pattern/minLength/maxLength (unsupported by Gemini structured outputs) from the wire schema', () => {
+    const walk = (n: unknown): void => {
+      if (n && typeof n === 'object') {
+        const o = n as Record<string, unknown>;
+        expect(o).not.toHaveProperty('pattern');
+        expect(o).not.toHaveProperty('minLength');
+        expect(o).not.toHaveProperty('maxLength');
+        Object.values(o).forEach(walk);
+      }
+    };
+    walk(extractionJsonSchema());
+  });
+  it('still enforces regex/length constraints locally even though the wire schema no longer does', () => {
+    expect(parseExtraction({ actions: [{ ...create, assignee_ref: 'not-a-valid-ref' }] }).ok).toBe(false);
+    expect(parseExtraction({ actions: [{ ...create, title: 'ab' }] }).ok).toBe(false);
+  });
 });
