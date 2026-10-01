@@ -149,6 +149,18 @@ async function confirm(question: string): Promise<boolean> {
 
 // -- Dataset -------------------------------------------------------------
 
+/** Deterministic, evenly spaced sample of `limit` items (same cases for every model). */
+function spreadSample<T>(items: readonly T[], limit: number): T[] {
+  if (limit >= items.length) return [...items];
+  const step = items.length / limit;
+  const picked: T[] = [];
+  for (let i = 0; i < limit; i += 1) {
+    const item = items[Math.floor(i * step)];
+    if (item !== undefined) picked.push(item);
+  }
+  return picked;
+}
+
 function loadDataset(path: string): EvalCase[] {
   const raw = readFileSync(path, 'utf8');
   return raw
@@ -505,7 +517,9 @@ async function main(): Promise<void> {
   const modelLabel = args.model ?? 'fixture';
 
   const allCases = loadDataset(DATASET_PATH);
-  const cases = args.limit !== null ? allCases.slice(0, args.limit) : allCases;
+  // `--limit` takes evenly spaced cases across the whole dataset, not the first N: the dataset is
+  // grouped by category, so a prefix would miss whole categories (e.g. all negatives).
+  const cases = args.limit !== null ? spreadSample(allCases, args.limit) : allCases;
   if (cases.length === 0) {
     console.error('eval: no cases to run (empty dataset or --limit 0)');
     process.exitCode = 1;
