@@ -60,6 +60,27 @@ function buttonsFor(taskId: number): Buttons {
   ];
 }
 
+/** The reminder's own `pickTimeButton` row (`texts.reminders`) opens this submenu (plan.md Task 3.4,
+ * SPEC §13.3): three fixed-option buttons
+ * (`snz`, with `arg` one of `'3h'`/`'today18'`/`'dayafter'` — `src/domain/notifications/snooze.ts`'s
+ * `SnoozeOption`) plus the free-text entry button (`inp`, no `arg` — enters `src/bot/conversations/
+ * snoozeInput.ts`'s conversation). `taskId` is always the task's own id, same as `buttonsFor` above. */
+export function renderSnoozeMenu(taskId: number): ReminderRender {
+  const b = (text: string, action: string, arg?: string): Buttons[number][number] => ({
+    text,
+    data: encodeCallback({ entity: 'n', action, id: taskId, ...(arg !== undefined ? { arg } : {}) }),
+  });
+
+  return {
+    text: texts.reminders.pickMenuTitle,
+    buttons: [
+      [b(texts.reminders.pick3hButton, 'snz', '3h'), b(texts.reminders.pickToday18Button, 'snz', 'today18')],
+      [b(texts.reminders.pickDayAfterButton, 'snz', 'dayafter')],
+      [b(texts.reminders.pickEnterButton, 'inp')],
+    ],
+  };
+}
+
 /**
  * Pure render for one reminder DM (SPEC §13.2/§13.3, Task 3.3). No DB, no I/O (CLAUDE.md §7) — the caller
  * (`notifyJob`) resolves `v.task`/`v.viewerZone` beforehand.

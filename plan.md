@@ -343,7 +343,7 @@ describe('planTaskNotifications', () => {
   - `snoozeFireAt(option: SnoozeOption, now: Date, zone: string, reminders: Settings['reminders']): Date | null` — `null`, если вариант уже неприменим (например, «Сегодня 18:00» после 18:00);
   - `createSnooze(tx, { taskId, recipientUserId, fireAt, workspaceId })` — `kind='snooze'`, ключ `snooze:{task}:{recipient}:{fireAtISO}`.
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
   - `snoozeFireAt` (сейчас 2026-09-23T09:00Z = 12:00 МСК):
     - `1h` → `10:00Z`;
     - `3h` → `12:00Z`;
@@ -355,8 +355,8 @@ describe('planTaskNotifications', () => {
     2. «🕐 Выбрать время» → `[Через 3 ч] [Сегодня 18:00] [Послезавтра] [Ввести…]`. «Ввести…» → текст → `parseDateText` → превью → snooze.
     3. «✅ Готово» от owner → задача `done`.
     4. Кнопку напоминания нажимает не owner (подделанный или пересланный callback) → `forbidden`.
-- [ ] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(reminders): add done and snooze buttons`.
+- [x] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(reminders): add done and snooze buttons`.
 
 ### Task 3.5: Утренняя сводка
 

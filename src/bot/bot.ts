@@ -27,11 +27,13 @@ import { registerPeopleHandlers } from './handlers/people.js';
 import { registerPrivacyHandlers } from './handlers/privacy.js';
 import { registerGroupHandlers } from './handlers/group.js';
 import { registerProposalCallbackHandlers } from './handlers/proposalCallbacks.js';
+import { registerReminderCallbackHandlers } from './handlers/reminderCallbacks.js';
 import { registerInboxHandlers } from './handlers/inbox.js';
 import { registerStubCommandHandlers } from './handlers/stubs.js';
 import { registerTimezoneConversation } from './conversations/timezone.js';
 import { registerEditPersonConversation } from './conversations/editPerson.js';
 import { registerEditProposalConversation } from './conversations/editProposal.js';
+import { registerSnoozeInputConversation } from './conversations/snoozeInput.js';
 
 /**
  * The subset of `AppDeps` (`src/deps.ts`) that bot construction and its
@@ -114,6 +116,10 @@ export function createBot(
   registerTimezoneConversation(bot, deps);
   registerEditPersonConversation(bot, deps);
   registerEditProposalConversation(bot, deps);
+  // Must be registered before `registerReminderCallbackHandlers` below — its own `v1:n:inp:` entry
+  // callback needs first crack at that action, same ordering reason `registerEditProposalConversation`
+  // above is registered ahead of `registerProposalCallbackHandlers` for its `v1:p:edt:` entry callback.
+  registerSnoozeInputConversation(bot, deps);
   registerDmHandlers(bot);
   registerAdminHandlers(bot, deps, startedAt);
   registerTransferHandlers(bot, deps);
@@ -138,6 +144,7 @@ export function createBot(
   registerStubCommandHandlers(bot);
   registerGroupHandlers(bot, deps);
   registerProposalCallbackHandlers(bot, deps);
+  registerReminderCallbackHandlers(bot, deps);
 
   bot.catch((err) => {
     void deps.errors.report(err.error, { updateId: err.ctx.update.update_id });

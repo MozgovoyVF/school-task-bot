@@ -929,6 +929,31 @@ export const texts = {
     overdueDigestMore(count: number): string {
       return `… ещё ${String(count)} → /tasks`;
     },
+    /** `[✅ Готово]` succeeded (plan.md Task 3.4, SPEC §13.3) — `title` is already escaped by the caller,
+     * same convention as `proposalDecide.completedCard`. */
+    doneConfirm(taskId: number, title: string): string {
+      return `✅ Готово: T${String(taskId)} «${title}»`;
+    },
+    /** `[⏰ +1 час]`/`[📅 Завтра]`/the submenu's own three buttons all land here — `due` is
+     * `texts.formatDue`'s own output for the snooze's `fireAt`. The task's own due date never changed
+     * (SPEC §13.3), so this deliberately never mentions "due", only when the next ping will be. */
+    snoozeConfirm(due: string): string {
+      return `🔔 Отложено до: ${due}`;
+    },
+    /** `[🕐 Выбрать время]`'s own submenu (SPEC §13.3: `[Через 3 ч] [Сегодня 18:00] [Послезавтра] [Ввести…]`). */
+    pickMenuTitle: 'Когда напомнить?',
+    pick3hButton: 'Через 3 ч',
+    pickToday18Button: 'Сегодня 18:00',
+    pickDayAfterButton: 'Послезавтра',
+    pickEnterButton: 'Ввести…',
+    /** The submenu's own "Ввести…" button's free-text prompt (`src/bot/conversations/snoozeInput.ts`). */
+    snoozeEnterPrompt: 'Введите дату и время свободным текстом, например «15.10 14:00» или «через 2 часа».',
+    /** `snoozeFireAt` returned `null` — the picked option (currently only `today18`) is already unreachable
+     * today (SPEC §13.3's own example: pressing it after 18:00). */
+    snoozeUnavailable: 'Это время уже прошло. Выберите другой вариант.',
+    /** The task a reminder button was pressed on no longer exists, or is already `done`/`cancelled` —
+     * shared by every `v1:n:*` button and the `snoozeInput` conversation's own entry guard. */
+    taskGone: 'Задача не найдена или уже закрыта.',
   },
   /**
    * `/inbox` (SPEC §12.2 row, Owner only — D40, Task 2.15): every still-`pending` proposal (`shown` *and*
