@@ -40,3 +40,13 @@ export async function updateTaskRow(tx: Tx, id: number, patch: Partial<NewTaskRo
   if (!row) throw new Error(`updateTaskRow: task ${String(id)} not found`);
   return row;
 }
+
+/** Hard delete (plan.md Task 3.6's "delete forever" button, SPEC §12.4) — `task_events.task_id` and
+ * `notifications.task_id` both carry `onDelete: 'cascade'` (`src/db/schema/tasks.ts`/`notifications.ts`),
+ * so deleting the `tasks` row alone cascades both; no manual cleanup, no `task_events` row for this (there
+ * is nothing left for it to reference). Returns `true` when a row actually existed and was deleted, `false`
+ * for an id that was already gone — lets the caller tell a genuine delete apart from a no-op. */
+export async function deleteTaskById(tx: Tx, id: number): Promise<boolean> {
+  const [row] = await tx.delete(tasks).where(eq(tasks.id, id)).returning({ id: tasks.id });
+  return row !== undefined;
+}

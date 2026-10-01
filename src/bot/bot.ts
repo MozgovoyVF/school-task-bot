@@ -28,11 +28,13 @@ import { registerPrivacyHandlers } from './handlers/privacy.js';
 import { registerGroupHandlers } from './handlers/group.js';
 import { registerProposalCallbackHandlers } from './handlers/proposalCallbacks.js';
 import { registerReminderCallbackHandlers } from './handlers/reminderCallbacks.js';
+import { registerTaskCallbackHandlers } from './handlers/taskCallbacks.js';
 import { registerInboxHandlers } from './handlers/inbox.js';
 import { registerStubCommandHandlers } from './handlers/stubs.js';
 import { registerTimezoneConversation } from './conversations/timezone.js';
 import { registerEditPersonConversation } from './conversations/editPerson.js';
 import { registerEditProposalConversation } from './conversations/editProposal.js';
+import { registerEditTaskConversation } from './conversations/editTask.js';
 import { registerSnoozeInputConversation } from './conversations/snoozeInput.js';
 
 /**
@@ -116,6 +118,11 @@ export function createBot(
   registerTimezoneConversation(bot, deps);
   registerEditPersonConversation(bot, deps);
   registerEditProposalConversation(bot, deps);
+  // Must be registered before `registerTaskCallbackHandlers` below, same ordering convention as
+  // `registerEditProposalConversation` relative to `registerProposalCallbackHandlers` — its own `v1:t:edt:`
+  // entry callback gets first crack at that action (though `taskCallbacks.ts`'s own `next()` fallthrough
+  // for unknown actions would still reach it either way).
+  registerEditTaskConversation(bot, deps);
   // Must be registered before `registerReminderCallbackHandlers` below — its own `v1:n:inp:` entry
   // callback needs first crack at that action, same ordering reason `registerEditProposalConversation`
   // above is registered ahead of `registerProposalCallbackHandlers` for its `v1:p:edt:` entry callback.
@@ -145,6 +152,7 @@ export function createBot(
   registerGroupHandlers(bot, deps);
   registerProposalCallbackHandlers(bot, deps);
   registerReminderCallbackHandlers(bot, deps);
+  registerTaskCallbackHandlers(bot, deps);
 
   bot.catch((err) => {
     void deps.errors.report(err.error, { updateId: err.ctx.update.update_id });

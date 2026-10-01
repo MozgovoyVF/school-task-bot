@@ -1,7 +1,7 @@
 import { and, asc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import { DateTime } from 'luxon';
 import type { DbOrTx } from '../../db/client.js';
-import { memberships, tasks } from '../../db/schema/index.js';
+import { chats, memberships, tasks } from '../../db/schema/index.js';
 import { texts } from '../../bot/texts/ru.js';
 import { listPendingProposals } from '../proposals/queries.js';
 import { getTaskById, type TaskRow } from './repo.js';
@@ -42,7 +42,10 @@ async function resolveAssigneeDisplayName(
   return row?.displayName ?? null;
 }
 
-async function resolveAssigneeName(db: DbOrTx, task: TaskRow): Promise<string | null> {
+/** Exported for `src/bot/handlers/taskCallbacks.ts` (plan.md Task 3.6) — its task-card builder resolves
+ * the same three-way assignee display name {@link getTaskListItem} already resolves internally, rather
+ * than duplicating this logic. */
+export async function resolveAssigneeName(db: DbOrTx, task: TaskRow): Promise<string | null> {
   if (task.assigneeAll) return texts.proposalCard.assigneeAll;
   if (task.assigneeUserId !== null)
     return resolveAssigneeDisplayName(db, task.workspaceId, task.assigneeUserId);
@@ -68,6 +71,35 @@ export async function getTaskListItem(db: DbOrTx, taskId: number): Promise<TaskL
   if (task === null) return null;
   const assigneeName = await resolveAssigneeName(db, task);
   return toListItem(task, assigneeName);
+}
+
+/** The task card's own data (plan.md Task 3.6, SPEC §12.4) — the raw {@link TaskRow} plus the two
+ * display-ready fields the card needs that aren't columns on it directly: the resolved assignee name
+ * (same three-way resolution as {@link getTaskListItem}) and the source chat's title (`tasks.sourceChatId`
+ * → `chats.title`, `null` for a DM-created task or one whose chat has since been deleted —
+ * `sourceChatId`'s own `ON DELETE SET NULL`, same graceful-`null` stance as `resolveAssigneeDisplayName`
+ * above). `tasks.sourceQuote`/`sourceLink` are already plain columns on the row itself, set once by
+ * `TaskService.create` — no further resolution needed for those two. `null` if the task no longer exists. */
+export interface TaskCardData {
+  task: TaskRow;
+  assigneeName: string | null;
+  chatTitle: string | null;
+}
+
+export async function getTaskCardData(db: DbOrTx, taskId: number): Promise<TaskCardData | null> {
+  const task = await getTaskById(db, taskId);
+  if (task === null) return null;
+  const assigneeName = await resolveAssigneeName(db, task);
+  let chatTitle: string | null = null;
+  if (task.sourceChatId !== null) {
+    const [chatRow] = await db
+      .select({ title: chats.title })
+      .from(chats)
+      .where(eq(chats.id, task.sourceChatId))
+      .limit(1);
+    chatTitle = chatRow?.title ?? null;
+  }
+  return { task, assigneeName, chatTitle };
 }
 
 async function toListItems(db: DbOrTx, rows: readonly TaskRow[]): Promise<TaskListItem[]> {

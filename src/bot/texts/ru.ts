@@ -956,6 +956,98 @@ export const texts = {
     taskGone: 'Задача не найдена или уже закрыта.',
   },
   /**
+   * The task card (`src/bot/views/taskCard.ts`/`src/bot/handlers/taskCallbacks.ts`, plan.md Task 3.6,
+   * SPEC §12.4) — Owner only (D40/`task.edit`). `titleLine`/`statusLine` assemble the card header; the
+   * meta/quote/link lines reuse `texts.reminders.metaLine`/`texts.proposalCard.quoteLine`/`.linkLine`
+   * directly rather than duplicating identically-worded lines here. Every parameter carrying user/DB text
+   * arrives here already HTML-escaped by the caller (`src/bot/views/taskCard.ts`), same convention as
+   * `texts.proposalCard`.
+   */
+  taskCard: {
+    titleLine(taskId: number, title: string): string {
+      return `📌 T${String(taskId)} · ${title}`;
+    },
+    statusLine(statusLabel: string, priorityLabel: string): string {
+      return `Статус: ${statusLabel} · Приоритет: ${priorityLabel}`;
+    },
+    statusOpen: 'открыта',
+    statusInProgress: 'в работе',
+    statusDone: 'выполнена',
+    statusCancelled: 'отменена',
+    descriptionLine(description: string): string {
+      return `📝 ${description}`;
+    },
+    doneButton: '✅ Выполнено',
+    startButton: '▶️ В работу',
+    editButton: '✏️ Изменить',
+    snoozeButton: '⏰ Отложить',
+    cancelButton: '🗑 Отменить',
+    historyButton: '📜 История',
+    restoreButton: '♻️ Восстановить',
+    deleteForeverButton: '🗑 Удалить навсегда',
+    backButton: '↩️ К задаче',
+    /** The card's own "edit" button opened the dialog, but the task is no longer in an editable (open/
+     * in_progress) state (e.g. it was archived by another update while the card sat open). */
+    editArchived: 'Эта задача в архиве. Сначала восстановите её, чтобы изменить.',
+    /** Shared "задача не найдена" reply (brief scenario 9, Фокус ревью 2) — every `v1:t:*` button looks the
+     * task up fresh before acting; a stale callback referencing an already-deleted/non-existent task gets
+     * this instead of a thrown exception. */
+    notFound: 'Задача не найдена.',
+    /** "🗑 Удалить навсегда"'s own two-step confirmation (SPEC §12.4: "с двойным подтверждением") — the
+     * initial press shows this first screen. */
+    deleteConfirm1(taskId: number, title: string): string {
+      return `Удалить задачу T${String(taskId)} «${title}» навсегда? Это действие нельзя отменить.`;
+    },
+    /** The first confirmation's own follow-up — the *second* of the two required confirmations. */
+    deleteConfirm2:
+      'Вы точно уверены? Будут безвозвратно удалены сама задача, её история и все уведомления по ней.',
+    deleteConfirmButton: 'Да, продолжить',
+    deleteForeverConfirmButton: 'Да, удалить навсегда',
+    deleteCancelButton: '↩️ Отмена',
+    deletedConfirm(taskId: number, title: string): string {
+      return `🗑 Задача T${String(taskId)} «${title}» удалена навсегда.`;
+    },
+    /** `src/bot/conversations/editTask.ts`'s own menu header — distinct from `texts.editProposal.menuHeader`
+     * only in that this edits an *existing* task rather than a not-yet-created one; its field menu/submenus
+     * otherwise reuse `texts.editProposal`'s own wording directly (field names, due/assignee/priority
+     * submenu titles and buttons, free-text date prompt/preview) since none of it is proposal-specific. */
+    editMenuHeader: '✏️ Изменение задачи',
+    /** Reuses every other button/prompt from `texts.editProposal`, but needs its own save label:
+     * `texts.editProposal.saveButton` ("Сохранить и создать") always creates a task, which is wrong wording
+     * for editing one that already exists. */
+    editSaveButton: '✅ Сохранить',
+    editSaved(taskId: number, title: string): string {
+      return `✅ Сохранено: T${String(taskId)} «${title}»`;
+    },
+  },
+  /**
+   * The task card's "📜 История" button (`src/bot/views/history.ts`, plan.md Task 3.6, SPEC §12.4's "все
+   * изменения пишутся в task_events") — the last 20 `task_events` rows for one task, newest first, dates in
+   * the viewer's own zone (the Owner's — only they ever see this). `actor*`/`type*` cover
+   * `task_events.actor_type`/`.type`'s known values (`src/domain/tasks/events.ts`); `typeOther` is the
+   * fallback for a `type` this list doesn't name individually.
+   */
+  taskHistory: {
+    header(taskId: number, title: string): string {
+      return `📜 История задачи T${String(taskId)} «${title}»`;
+    },
+    empty: 'Событий пока нет.',
+    line(dateLabel: string, actor: string, typeLabel: string): string {
+      return `${dateLabel} · ${actor} · ${typeLabel}`;
+    },
+    actorSystem: 'Система',
+    actorAi: 'ИИ',
+    actorApple: 'Apple Reminders',
+    /** `actor_type === 'user'` but the membership couldn't be resolved (should not normally happen). */
+    actorUnknownUser: 'Пользователь',
+    typeCreated: 'Создана',
+    typeUpdated: 'Изменена',
+    typeStatusChanged: 'Статус изменён',
+    typeOther(type: string): string {
+      return `Событие: ${type}`;
+    },
+  },
+  /**
    * The morning summary (`src/scheduler/jobs/summary.ts`/`src/bot/views/summary.ts`, plan.md Task 3.5,
    * SPEC §13.4) — Owner only (D40, no "Ждут вашей проверки" section, since the review flow is
    * Member-only and was removed). Section order: overdue, today, unprocessed proposals, no-due — an empty

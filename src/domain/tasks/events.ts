@@ -1,4 +1,5 @@
-import type { Tx } from '../../db/client.js';
+import { desc, eq } from 'drizzle-orm';
+import type { DbOrTx, Tx } from '../../db/client.js';
 import { taskEvents } from '../../db/schema/index.js';
 
 export type TaskEventRow = typeof taskEvents.$inferSelect;
@@ -34,4 +35,15 @@ export async function insertTaskEvent(tx: Tx, event: NewTaskEvent): Promise<Task
     .returning();
   if (!row) throw new Error('insertTaskEvent: insert returned no row');
   return row;
+}
+
+/** The task's own `task_events`, newest first, capped at `limit` (plan.md Task 3.6: the card's history button shows the last 20). Read-only — never called inside the write transaction that produced the rows
+ * it reads, unlike {@link insertTaskEvent}, so `db` (not `tx`) is accepted here. */
+export async function listTaskEvents(db: DbOrTx, taskId: number, limit: number): Promise<TaskEventRow[]> {
+  return db
+    .select()
+    .from(taskEvents)
+    .where(eq(taskEvents.taskId, taskId))
+    .orderBy(desc(taskEvents.createdAt), desc(taskEvents.id))
+    .limit(limit);
 }

@@ -395,7 +395,7 @@ describe('planTaskNotifications', () => {
   - общий редактор полей `editFieldsConversation`, который делят 2.14 и 3.6: после 2.14 вынести общие шаги в `src/bot/conversations/editFields.ts`.
   - Форвард-ссылка на Task 2.13 (fix round 1, M4): терминальная карточка «✅ Создано: T<id> …» (`src/bot/views/taskCreated.ts`, `src/bot/handlers/proposalCallbacks.ts`) сейчас редактируется без кнопок — SPEC §11.2 хочет там кнопки управления задачей. Когда `renderTaskCard` появится здесь, стоит навесить его кнопки (или ссылку на карточку задачи) на эту терминальную карточку тоже.
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
   - View:
     - snapshot карточки owner с кнопками `[✅ Выполнено] [▶️ В работу] / [✏️ Изменить] [⏰ Отложить] / [🗑 Отменить] [📜 История]`;
     - у архивной задачи кнопки `[♻️ Восстановить] [🗑 Удалить навсегда]`;
@@ -410,8 +410,8 @@ describe('planTaskNotifications', () => {
     8. «История» → последние 20 событий с датами в поясе получателя.
     9. Кнопка удалённой задачи → «Задача не найдена», без исключения (Фокус ревью 2).
     10. Member жмёт кнопку управления → `forbidden`.
-- [ ] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(tasks): add task card with status, edit, archive and delete actions`.
+- [x] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(tasks): add task card with status, edit, archive and delete actions`.
 
 ### Task 3.7: Списки и фильтры — `/tasks`, `/today`, `/overdue`, `/archive`
 
