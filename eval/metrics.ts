@@ -87,6 +87,49 @@ function dueOf(action: ResolvedAction): ResolvedDue | null {
 }
 
 /**
+ * `P7`/`OWNER`/`ALL`/`text:<name>`/`none` — the inverse of
+ * {@link participantCodeToUserId}, for printing a predicted
+ * {@link AssigneeResolution} next to the dataset's own expected assignee
+ * code in a failure line (brief step 2: "expected vs actual").
+ */
+function formatAssigneeResolution(a: AssigneeResolution): string {
+  switch (a.type) {
+    case 'user':
+      return a.userId === EVAL_OWNER_USER_ID ? 'OWNER' : `P${String(a.userId)}`;
+    case 'all':
+      return 'ALL';
+    case 'text':
+      return `text:${a.name}`;
+    case 'none':
+      return 'none';
+  }
+}
+
+/** The dataset's own `{date, time, hint}` shape, printed verbatim next to the predicted due (brief step 2) — this is the synthetic input the case author wrote, not a resolved instant. */
+function formatExpectedDue(due: ExpectedAction['due']): string {
+  if (due === undefined) return '(none)';
+  return `date=${due.date ?? 'null'} time=${due.time ?? 'null'} hint=${due.hint}`;
+}
+
+/** The predicted side of a due mismatch, resolved to a concrete instant in its own zone (or `'none'`/`'invalid'` when `resolveDue` found nothing usable) — the counterpart to {@link formatExpectedDue}. */
+function formatActualDue(due: ResolvedDue | null): string {
+  if (due === null) return 'none';
+  if (due.dueAt === null) return due.invalid ? 'invalid' : 'none';
+  const zone = due.tz ?? 'UTC';
+  const local = DateTime.fromJSDate(due.dueAt).setZone(zone).toISO({ suppressMilliseconds: true });
+  return `${local ?? due.dueAt.toISOString()}${due.allDay ? ' (all-day)' : ''}`;
+}
+
+/** A short `category=.../assignee=.../due=...` tag for the fields an expected action actually specifies — appended to "expected ... not shown" (FN) lines so a failure is readable without cross-referencing the dataset file. */
+function summarizeExpected(exp: ExpectedAction): string {
+  const parts: string[] = [];
+  if (exp.category !== undefined) parts.push(`category=${exp.category}`);
+  if (exp.assignee !== undefined) parts.push(`assignee=${exp.assignee ?? 'none'}`);
+  if (exp.due !== undefined) parts.push(`due=(${formatExpectedDue(exp.due)})`);
+  return parts.length > 0 ? ` [${parts.join(' ')}]` : '';
+}
+
+/**
  * Brief step 1.4: "всё, что не all-day, должно совпадать с точностью до
  * минуты; у all-day — дата." All-day-ness is read off the *predicted*
  * action's own `ResolvedDue.allDay` (the expected side only ever reaches
@@ -196,7 +239,7 @@ function scoreRow(row: EvalRow): RowScore {
     score.typeTotal += 1;
     const matchIndex = findMatchIndex(shown, used, exp);
     if (matchIndex === undefined) {
-      score.mismatches.push(`expected ${exp.type} not shown`);
+      score.mismatches.push(`expected ${exp.type} not shown${summarizeExpected(exp)}`);
       return;
     }
     used.add(matchIndex);
@@ -216,23 +259,33 @@ function scoreRow(row: EvalRow): RowScore {
     if (exp.type === 'create' && exp.assignee !== undefined && predicted.kind === 'create') {
       score.assigneeTotal += 1;
       if (assigneeMatches(predicted.assignee, exp.assignee)) score.assigneeCorrect += 1;
-      else score.mismatches.push(`assignee: expected ${exp.assignee ?? 'none'}`);
+      else {
+        score.mismatches.push(
+          `assignee: expected ${exp.assignee ?? 'none'}, got ${formatAssigneeResolution(predicted.assignee)}`,
+        );
+      }
     }
 
     const expectedDueAt = row.resolvedExpectedDue[i] ?? null;
     if (expectedDueAt !== null) {
       score.dueTotal += 1;
       const predictedDue = dueOf(predicted);
-      if (predictedDue !== null && dueMatches(expectedDueAt, predictedDue)) score.dueCorrect += 1;
-      else score.mismatches.push('due: mismatch');
+      if (predictedDue !== null && dueMatches(expectedDueAt, predictedDue)) {
+        score.dueCorrect += 1;
+      } else {
+        score.mismatches.push(
+          `due: expected (${formatExpectedDue(exp.due)}), got ${formatActualDue(predictedDue)}`,
+        );
+      }
     }
   });
 
   for (let i = 0; i < shown.length; i += 1) {
     if (!used.has(i)) {
       const predicted = shown[i];
-      const title = predicted?.kind === 'create' ? ` "${predicted.title}"` : '';
-      score.mismatches.push(`unexpected ${predicted?.kind}${title} shown`);
+      const detail =
+        predicted?.kind === 'create' ? ` "${predicted.title}" (category=${predicted.category})` : '';
+      score.mismatches.push(`unexpected ${predicted?.kind}${detail} shown`);
     }
   }
 
