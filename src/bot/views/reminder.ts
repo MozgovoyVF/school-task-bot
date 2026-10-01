@@ -1,5 +1,6 @@
 import type { Buttons } from '../../domain/messenger.js';
 import type { TaskListItem } from '../../domain/tasks/queries.js';
+import { TELEGRAM_TEXT_LIMIT } from '../../config/constants.js';
 import { formatDue } from '../../time/format.js';
 import { texts } from '../texts/ru.js';
 import { encodeCallback } from '../keyboards/callbackCodec.js';
@@ -80,13 +81,33 @@ export function renderReminder(v: {
  * The grouped-overdue digest (SPEC §13.2: 3+ simultaneous `overdue` reminders for the Owner become one
  * list message instead of individual ones): one line per task, no buttons — acting on an individual task
  * from here would need one button row per task, so the Owner goes through `/tasks` instead.
+ *
+ * `notifyJob` groups up to its own 50-row batch limit into one digest, and each title can be up to
+ * `TASK_TITLE_MAX_CHARS` long — well past Telegram's `TELEGRAM_TEXT_LIMIT` (4096, CLAUDE.md) for a large
+ * backlog. Rows are added one at a time, always leaving room for a trailing `overdueDigestMore(N)` footer
+ * (review round 1, I4) the moment a row would no longer fit; the footer itself is only appended if the list
+ * actually had to be cut short.
  */
 export function renderOverdueDigest(items: TaskListItem[], viewerZone: string): ReminderRender {
-  const lines = [
-    texts.reminders.overdueDigestHeader(items.length),
-    ...items.map((task) =>
-      texts.reminders.overdueDigestLine(task.id, escapeHtml(task.title), dueLine(task, viewerZone)),
-    ),
-  ];
+  const lines = [texts.reminders.overdueDigestHeader(items.length)];
+  let shown = 0;
+
+  for (const task of items) {
+    const line = texts.reminders.overdueDigestLine(
+      task.id,
+      escapeHtml(task.title),
+      dueLine(task, viewerZone),
+    );
+    const remainingAfterThis = items.length - shown - 1;
+    const footerReserve =
+      remainingAfterThis > 0 ? texts.reminders.overdueDigestMore(remainingAfterThis).length + 1 : 0;
+    const lengthWithThisLine = lines.join('\n').length + 1 + line.length + footerReserve;
+    if (lengthWithThisLine > TELEGRAM_TEXT_LIMIT) break;
+    lines.push(line);
+    shown += 1;
+  }
+
+  if (shown < items.length) lines.push(texts.reminders.overdueDigestMore(items.length - shown));
+
   return { text: lines.join('\n'), buttons: [] };
 }

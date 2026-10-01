@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { renderReminder, renderOverdueDigest } from '../../../../src/bot/views/reminder.js';
 import type { TaskListItem } from '../../../../src/domain/tasks/queries.js';
+import { TELEGRAM_TEXT_LIMIT } from '../../../../src/config/constants.js';
 
 const task: TaskListItem = {
   id: 12,
@@ -113,5 +114,25 @@ describe('renderOverdueDigest (SPEC §13.2 — grouped overdue)', () => {
   it('escapes HTML in each task title', () => {
     const { text } = renderOverdueDigest([{ ...task, title: 'A <b> B' }], 'Europe/Moscow');
     expect(text).toContain('«A &lt;b&gt; B»');
+  });
+
+  it('caps the list before crossing the 4096-char limit, appending an overflow footer (review round 1, I4)', () => {
+    const items: TaskListItem[] = Array.from({ length: 60 }, (_, i) => ({
+      ...task,
+      id: i + 1,
+      title: 'А'.repeat(120),
+    }));
+
+    const { text } = renderOverdueDigest(items, 'Europe/Moscow');
+
+    expect(text.length).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT);
+    // The header still reports the true total, even though the body was cut short.
+    expect(text).toContain('🔴 Просрочено (60):');
+    expect(text).toMatch(/… ещё \d+ → \/tasks$/);
+  });
+
+  it('does not add an overflow footer when every row already fits', () => {
+    const { text } = renderOverdueDigest([task, second], 'Europe/Moscow');
+    expect(text).not.toContain('→ /tasks');
   });
 });

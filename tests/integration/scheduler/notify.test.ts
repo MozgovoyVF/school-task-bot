@@ -405,6 +405,50 @@ describe('notifyJob (SPEC §13.1, plan.md Task 3.3)', () => {
       const [after] = await db.select().from(notifications).where(eq(notifications.id, n.id));
       expect(after?.status).toBe('sent');
     });
+
+    it('suppresses "summary" (no task, taskId=null): cancelled with last_error="quiet" (review round 1, I1)', async () => {
+      const { ws, owner, clock } = await setupOwner();
+      await setQuietAllDay(ws.id);
+      const messenger = new FakeMessenger();
+      const deps = makeDeps(db, clock, ws, messenger);
+
+      const n = await insertNotification({
+        workspaceId: ws.id,
+        taskId: null,
+        recipientUserId: owner.id,
+        kind: 'summary',
+        fireAt: new Date(clock.now().getTime() - 60_000),
+      });
+
+      await notifyJob.run(deps);
+
+      expect(messenger.sent).toHaveLength(0);
+      const [after] = await db.select().from(notifications).where(eq(notifications.id, n.id));
+      expect(after?.status).toBe('cancelled');
+      expect(after?.lastError).toBe('quiet');
+    });
+
+    it('a "summary" row outside quiet hours is left scheduled untouched (Task 3.5 sends it)', async () => {
+      const { ws, owner, clock } = await setupOwner();
+      // No quiet hours configured — `setQuietAllDay` deliberately not called.
+      const messenger = new FakeMessenger();
+      const deps = makeDeps(db, clock, ws, messenger);
+
+      const n = await insertNotification({
+        workspaceId: ws.id,
+        taskId: null,
+        recipientUserId: owner.id,
+        kind: 'summary',
+        fireAt: new Date(clock.now().getTime() - 60_000),
+      });
+
+      await notifyJob.run(deps);
+
+      expect(messenger.sent).toHaveLength(0);
+      const [after] = await db.select().from(notifications).where(eq(notifications.id, n.id));
+      expect(after?.status).toBe('scheduled');
+      expect(after?.lastError).toBeNull();
+    });
   });
 
   describe('send failures and backoff (SPEC §13.1)', () => {
@@ -455,6 +499,64 @@ describe('notifyJob (SPEC §13.1, plan.md Task 3.3)', () => {
       expect(after?.attempts).toBe(5);
       expect(after?.lastError).toBe('network');
     });
+
+    it('continues the overdue chain even once retries are exhausted ("failed") — D7 (review round 1, I2)', async () => {
+      const { ws, owner, clock } = await setupOwner();
+      const task = await insertTask(ws.id);
+      const messenger = new FakeMessenger();
+      const deps = makeDeps(db, clock, ws, messenger);
+
+      const n = await insertNotification({
+        workspaceId: ws.id,
+        taskId: task.id,
+        recipientUserId: owner.id,
+        kind: 'overdue',
+        fireAt: clock.now(),
+        attempts: 4,
+      });
+
+      messenger.failNextWith(new MessengerError('network', 'connection reset'));
+      await notifyJob.run(deps);
+
+      const rows = await db.select().from(notifications).where(eq(notifications.taskId, task.id));
+      const original = rows.find((r) => r.id === n.id);
+      expect(original?.status).toBe('failed');
+      expect(original?.attempts).toBe(5);
+
+      const next = rows.find((r) => r.id !== n.id);
+      expect(next?.status).toBe('scheduled');
+      expect(next?.kind).toBe('overdue');
+      expect(next?.fireAt.toISOString()).toBe(new Date('2026-09-24T07:00:00Z').toISOString());
+    });
+  });
+
+  it('after downtime, the next chain link is anchored on "now", not the stale row\'s own fire_at (review round 1, I3)', async () => {
+    const { ws, owner, clock } = await setupOwner();
+    const task = await insertTask(ws.id);
+    const messenger = new FakeMessenger();
+    const deps = makeDeps(db, clock, ws, messenger);
+
+    // Simulates the bot having been down for 3 days: this overdue row's own fire_at is 3 days stale, but
+    // it is only picked up and sent once the bot comes back ("now").
+    const staleFireAt = new Date(clock.now().getTime() - 3 * 24 * 60 * 60 * 1000);
+    await insertNotification({
+      workspaceId: ws.id,
+      taskId: task.id,
+      recipientUserId: owner.id,
+      kind: 'overdue',
+      fireAt: staleFireAt,
+    });
+
+    await notifyJob.run(deps);
+
+    expect(messenger.sent).toHaveLength(1);
+    const rows = await db.select().from(notifications).where(eq(notifications.taskId, task.id));
+    const next = rows.find((r) => r.status === 'scheduled');
+    expect(next).toBeDefined();
+    // Anchored on "now" (2026-09-23T07:00Z + 1 day) — never on the stale fire_at's own "+1 day"
+    // (2026-09-21T07:00Z), which would still be in the past and cascade into an immediate re-send.
+    expect(next?.fireAt.toISOString()).toBe(new Date('2026-09-24T07:00:00Z').toISOString());
+    expect(next?.fireAt.toISOString()).not.toBe(new Date('2026-09-21T07:00:00Z').toISOString());
   });
 
   it('forbidden (403): flips users.dm_blocked and cancels every scheduled notification for that user', async () => {

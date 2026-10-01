@@ -19,10 +19,11 @@ type NotificationRow = typeof notifications.$inferSelect;
 
 const CLOSED_TASK_STATUSES = new Set(['done', 'cancelled']);
 
-/** D10/SPEC §13.5: these three kinds are suppressed during quiet hours (`status='cancelled'`,
- * `last_error='quiet'`); `due` and `snooze` are always sent, and `summary` is never produced by today's
- * code (Task 3.5 renders it at send time) but is listed here for when it is. */
-const SUPPRESSED_BY_QUIET = new Set<NotificationRow['kind']>(['pre_due', 'overdue', 'summary']);
+/** D10/SPEC §13.5: these two task-bound kinds are suppressed during quiet hours (`status='cancelled'`,
+ * `last_error='quiet'`); `due` and `snooze` are always sent. `summary` is also suppressed by D10, but it
+ * has no task and is handled on its own branch in `resolveNotification` (review round 1, I1) rather than
+ * through this set. */
+const SUPPRESSED_BY_QUIET = new Set<NotificationRow['kind']>(['pre_due', 'overdue']);
 
 const NOTIFY_BATCH_LIMIT = 50;
 
@@ -58,9 +59,22 @@ async function cancelNotification(tx: Tx, id: number, lastError: string | null):
   await tx.update(notifications).set({ status: 'cancelled', lastError }).where(eq(notifications.id, id));
 }
 
-/** The next link of an `overdue` chain (D7), planned from `after` — the notification instant that was just
- * handled (sent, or quiet-suppressed), never "now" (SPEC §13.2: the chain advances one `overdueTime` at a
- * time from where it left off). A no-op once the task has no due date left or is closed. */
+/**
+ * `nextOverdueAfter`'s underlying `earliestTimeStrictlyAfter` has no awareness of "now" — it only finds the
+ * first `overdueTime` strictly after whatever instant it's given. After real downtime (bot down for days),
+ * anchoring purely on the just-handled row's own `fireAt` would compute a next link that is *itself* still
+ * in the past, cascading into several near-instant catch-up overdue pings the next few ticks (review round
+ * 1, I3). Clamping the anchor forward to `now` fixes that without changing anything in normal operation —
+ * a row's `fireAt` is only ever at or before `now` by construction (the job only selects due rows), so this
+ * only has an effect when it is *behind* `now` by more than the gap between one `overdueTime` and the next.
+ */
+function chainAnchor(fireAt: Date, now: Date): Date {
+  return fireAt.getTime() > now.getTime() ? fireAt : now;
+}
+
+/** The next link of an `overdue` chain (D7 — the chain continues daily until the task closes): planned from
+ * `after` (see {@link chainAnchor} for why callers pass a clamped instant, not the row's raw `fireAt`). A
+ * no-op once the task has no due date left or is closed. */
 async function scheduleNextOverdueLink(
   tx: Tx,
   workspaceId: number,
@@ -85,13 +99,15 @@ async function scheduleNextOverdueLink(
 }
 
 /** `attempts++`/backoff (SPEC §13.1): reuses `src/ai/pipeline/batcher.ts`'s `nextAttemptAt` — 1/5/15 min,
- * `failed` once `attempts` reaches its cap. */
+ * `failed` once `attempts` reaches its cap. Returns whether this failure was the one that pushed the row to
+ * `failed` — its caller uses that to decide whether an `overdue` row's chain still needs continuing (review
+ * round 1, I2: exhausting retries must not silently end the chain). */
 async function recordSendFailure(
   tx: Tx,
   row: NotificationRow,
   kind: MessengerErrorKind,
   now: Date,
-): Promise<void> {
+): Promise<{ failed: boolean }> {
   const attempts = row.attempts + 1;
   const next = nextAttemptAt(attempts, now);
   if (next === null) {
@@ -99,12 +115,13 @@ async function recordSendFailure(
       .update(notifications)
       .set({ status: 'failed', attempts, lastError: kind })
       .where(eq(notifications.id, row.id));
-  } else {
-    await tx
-      .update(notifications)
-      .set({ attempts, fireAt: next, lastError: kind })
-      .where(eq(notifications.id, row.id));
+    return { failed: true };
   }
+  await tx
+    .update(notifications)
+    .set({ attempts, fireAt: next, lastError: kind })
+    .where(eq(notifications.id, row.id));
+  return { failed: false };
 }
 
 /** 403 (SPEC §13.1): flips `users.dm_blocked` and cancels every `scheduled` notification for that
@@ -118,8 +135,11 @@ async function handleForbidden(tx: Tx, recipientId: number): Promise<void> {
 }
 
 /** Applies one send's outcome to every row it covers (a single reminder, or every row behind a grouped
- * overdue digest, which is exactly one Telegram message) and, on success, continues each covered task's own
- * `overdue` chain. */
+ * overdue digest, which is exactly one Telegram message): on success, or once an `overdue` row's retries
+ * are exhausted (`failed` — review round 1, I2: D7's chain continues "until the task closes", not until the
+ * first unlucky Telegram outage), continues each covered task's own `overdue` chain. `forbidden` is the one
+ * outcome that deliberately does *not* continue any chain — the recipient blocked the bot, so nothing more
+ * is scheduled for them until they unblock it and D40's recipient resolution picks them up again. */
 async function applySendResult(
   tx: Tx,
   deps: AppDeps,
@@ -132,8 +152,20 @@ async function applySendResult(
   if (!result.ok) {
     if (result.kind === 'forbidden') {
       await handleForbidden(tx, recipient.id);
-    } else {
-      for (const r of rows) await recordSendFailure(tx, r.row, result.kind, now);
+      return;
+    }
+    for (const r of rows) {
+      const { failed } = await recordSendFailure(tx, r.row, result.kind, now);
+      if (failed && r.row.kind === 'overdue') {
+        await scheduleNextOverdueLink(
+          tx,
+          deps.workspace.id,
+          r.taskRow,
+          { userId: r.recipient.id, zone: r.zone },
+          settings.reminders,
+          chainAnchor(r.row.fireAt, now),
+        );
+      }
     }
     return;
   }
@@ -150,7 +182,7 @@ async function applySendResult(
         r.taskRow,
         { userId: r.recipient.id, zone: r.zone },
         settings.reminders,
-        r.row.fireAt,
+        chainAnchor(r.row.fireAt, now),
       );
     }
   }
@@ -158,11 +190,15 @@ async function applySendResult(
 
 /**
  * Resolves one `scheduled` row against its (possibly now-stale) task and recipient: `null` once it has
- * nothing left to send for (the task is gone, closed, or its recipient is gone) — the row is cancelled in
- * that case and `null` is returned. Quiet-hours suppression (`pre_due`/`overdue`/`summary`) is applied here
- * too, since it also needs the resolved task/recipient; a suppressed `overdue` still advances its chain.
- * `summary` rows are left `scheduled` untouched when not quiet — no code creates them yet (Task 3.5 renders
- * them at send time).
+ * nothing left to send for — the row is cancelled (or, for a quiet-suppressed `summary`, left for its own
+ * branch below) and `null` is returned in every such case.
+ *
+ * `summary` rows have no task (`taskId` is `null` — their dedupe key is `summary:{ws}:{user}:{date}`, SPEC
+ * §13.1) and are resolved on their own branch, checked *before* the generic task lookup (review round 1,
+ * I1 — checking the generic "no task" branch first was unconditionally cancelling every `summary` row,
+ * quiet hours or not, instead of only suppressing it during quiet hours like D10 requires): quiet hours
+ * cancel it with `last_error='quiet'`; otherwise it is left `scheduled` untouched — no code creates
+ * `summary` rows yet, Task 3.5 renders and sends them at their own fire time.
  */
 async function resolveNotification(
   tx: Tx,
@@ -171,18 +207,23 @@ async function resolveNotification(
   row: NotificationRow,
   now: Date,
 ): Promise<ResolvedNotification | null> {
-  const taskRow = row.taskId === null ? null : await getTaskById(tx, row.taskId);
-  if (taskRow === null || CLOSED_TASK_STATUSES.has(taskRow.status)) {
-    await cancelNotification(tx, row.id, null);
-    return null;
-  }
-
   const recipient = await getUserById(tx, row.recipientUserId);
   if (recipient === null) {
     await cancelNotification(tx, row.id, null);
     return null;
   }
   const zone = userZone(recipient, deps.workspace);
+
+  if (row.kind === 'summary') {
+    if (isQuietAt(now, zone, settings.quiet)) await cancelNotification(tx, row.id, 'quiet');
+    return null;
+  }
+
+  const taskRow = row.taskId === null ? null : await getTaskById(tx, row.taskId);
+  if (taskRow === null || CLOSED_TASK_STATUSES.has(taskRow.status)) {
+    await cancelNotification(tx, row.id, null);
+    return null;
+  }
 
   if (SUPPRESSED_BY_QUIET.has(row.kind) && isQuietAt(now, zone, settings.quiet)) {
     await cancelNotification(tx, row.id, 'quiet');
@@ -193,13 +234,11 @@ async function resolveNotification(
         taskRow,
         { userId: recipient.id, zone },
         settings.reminders,
-        row.fireAt,
+        chainAnchor(row.fireAt, now),
       );
     }
     return null;
   }
-
-  if (row.kind === 'summary') return null;
 
   const listItem = await getTaskListItem(tx, taskRow.id);
   if (listItem === null) {
@@ -222,8 +261,9 @@ function reminderKind(row: NotificationRow): ReminderKind {
  * {@link NOTIFY_BATCH_LIMIT} due `scheduled` rows (`FOR UPDATE SKIP LOCKED`, so two concurrent ticks never
  * send the same notification twice), resolves each against its current task/recipient, groups same-tick
  * `overdue` rows per recipient into one digest once their count reaches `settings.reminders.
- * groupOverdueThreshold`, sends everything else individually, and records each send's outcome (sent,
- * backed-off retry, `failed` past the attempt cap, or `forbidden`'s `dm_blocked` + cancel-all).
+ * groupOverdueThreshold`, sends everything else individually, and records each send's outcome (sent —
+ * continuing that task's own `overdue` chain; backed-off retry; `failed` past the attempt cap — also
+ * continuing the chain, review round 1 I2; or `forbidden`'s `dm_blocked` + cancel-all, which does not).
  */
 export const notifyJob: Job = {
   name: 'notify',

@@ -925,6 +925,10 @@ export const texts = {
     overdueDigestLine(taskId: number, title: string, due: string): string {
       return `• T${String(taskId)} «${title}» — ${due}`;
     },
+    /** The digest's own overflow footer (review round 1, I4) — `src/bot/views/reminder.ts`'s `renderOverdueDigest` stops adding rows once the text would cross Telegram's 4096-char limit (CLAUDE.md) and appends this instead, mirroring SPEC §13.4's "ещё N → /tasks" overflow convention for the summary's own "no-due" section. */
+    overdueDigestMore(count: number): string {
+      return `… ещё ${String(count)} → /tasks`;
+    },
   },
   /**
    * `/inbox` (SPEC §12.2 row, Owner only — D40, Task 2.15): every still-`pending` proposal (`shown` *and*
