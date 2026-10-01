@@ -56,16 +56,16 @@ const NO_DATA_LABEL = 'н/д';
  * real, nonzero budget). Below one cent, shows up to 4 decimal places instead, trimmed of trailing zeros
  * (`0.0001` stays `0.0001`, `0.0050` becomes `0.005`) so the value stays visibly nonzero without padding it
  * with meaningless precision. `0` itself (a real zero, not a rounded-away one) still prints `0.00`, matching
- * every other amount's two-decimal shape.
+ * every other amount's two-decimal shape. Below `0.0001` itself (review round 1, M7 — the original
+ * 4-decimal rounding still printed a genuinely nonzero value like `1e-6` as a bare `"0.0000"`, the exact
+ * class of bug this function exists to avoid), prints `<0.0001` instead of a misleadingly precise-looking
+ * zero.
  */
-function formatUsd(amount: number): string {
+export function formatUsd(amount: number): string {
   const abs = Math.abs(amount);
   if (abs === 0 || abs >= 0.01) return amount.toFixed(2);
-  const fourDecimals = amount.toFixed(4);
-  const trimmed = fourDecimals.replace(/0+$/, '');
-  // `trimmed` ends bare (`"0."`) only when all 4 decimals were zero — a value too small to show even at
-  // this precision (e.g. 1e-6); fall back to the untrimmed 4-decimal form rather than a bare trailing dot.
-  return trimmed.endsWith('.') ? fourDecimals : trimmed;
+  if (abs < 0.0001) return '<0.0001';
+  return amount.toFixed(4).replace(/0+$/, '');
 }
 
 /** "1ч 02мин 03с" — a short, fixed-order duration for `/admin`'s uptime line. */
