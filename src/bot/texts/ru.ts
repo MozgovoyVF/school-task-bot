@@ -895,6 +895,38 @@ export const texts = {
     ownerBlocked: '⚠️ Руководитель заблокировал бота в Telegram — карточки предложений не доставляются.',
   },
   /**
+   * Reminder DMs (`src/scheduler/jobs/notify.ts`/`src/bot/views/reminder.ts`, plan.md Task 3.3, SPEC
+   * §13.2/§13.3) — only ever sent to the Owner (D40). `pre_due`/`due`/`overdue`/`snooze` share one header
+   * per kind, then the same title/assignee/due layout `proposalCard` uses for a card. The grouped-overdue
+   * digest (3+ at once, `settings.reminders.groupOverdueThreshold`) reuses `overdueHeader`'s wording in its
+   * own count header instead, one `overdueDigestLine` per task.
+   */
+  reminders: {
+    preDueHeader: '⏳ Завтра срок',
+    dueHeader: '🔔 Срок сегодня',
+    overdueHeader: '🔴 Просрочено',
+    /** A user-requested repeat ping (`[⏰ +1 час]`/`[📅 Завтра]`/`[🕐 Выбрать время]`) — the due date itself never changed, so this gets a neutral header rather than `dueHeader`/`overdueHeader`'s implied urgency. */
+    snoozeHeader: '🔔 Напоминание',
+    titleLine(title: string): string {
+      return `📌 ${title}`;
+    },
+    metaLine(assignee: string, due: string): string {
+      return `👤 ${assignee} · 📅 ${due}`;
+    },
+    doneButton: '✅ Готово',
+    plusHourButton: '⏰ +1 час',
+    tomorrowButton: '📅 Завтра',
+    pickTimeButton: '🕐 Выбрать время',
+    /** The grouped-overdue digest's own header — `count` is always `>= settings.reminders.groupOverdueThreshold`. */
+    overdueDigestHeader(count: number): string {
+      return `🔴 Просрочено (${String(count)}):`;
+    },
+    /** One digest row per overdue task — no per-task buttons (SPEC doesn't specify any for the grouped case); `/tasks` is where the Owner acts on them individually. */
+    overdueDigestLine(taskId: number, title: string, due: string): string {
+      return `• T${String(taskId)} «${title}» — ${due}`;
+    },
+  },
+  /**
    * `/inbox` (SPEC §12.2 row, Owner only — D40, Task 2.15): every still-`pending` proposal (`shown` *and*
    * `suppressed` alike — this is deliberately the one place a `suppressed` proposal is ever surfaced to
    * the Owner, so a message the auto-pipeline hid below threshold is never permanently lost, CLAUDE.md's

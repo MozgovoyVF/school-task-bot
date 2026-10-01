@@ -1,0 +1,311 @@
+import { and, asc, eq, lte } from 'drizzle-orm';
+import type { AppDeps } from '../../deps.js';
+import type { Tx } from '../../db/client.js';
+import { notifications } from '../../db/schema/index.js';
+import { getUserById, markDmBlocked, type UserRow } from '../../domain/people/repo.js';
+import { getSettings } from '../../domain/workspaces/repo.js';
+import { getTaskById, type TaskRow } from '../../domain/tasks/repo.js';
+import { getTaskListItem, type TaskListItem } from '../../domain/tasks/queries.js';
+import { nextOverdueAfter, type PlanRecipient } from '../../domain/notifications/plan.js';
+import { nextAttemptAt } from '../../ai/pipeline/batcher.js';
+import { userZone } from '../../time/zones.js';
+import { isQuietAt } from '../../time/quiet.js';
+import { renderOverdueDigest, renderReminder, type ReminderKind } from '../../bot/views/reminder.js';
+import { MessengerError, type Buttons, type MessengerErrorKind } from '../../domain/messenger.js';
+import type { Job } from '../ticker.js';
+import type { Settings } from '../../domain/settings/schema.js';
+
+type NotificationRow = typeof notifications.$inferSelect;
+
+const CLOSED_TASK_STATUSES = new Set(['done', 'cancelled']);
+
+/** D10/SPEC §13.5: these three kinds are suppressed during quiet hours (`status='cancelled'`,
+ * `last_error='quiet'`); `due` and `snooze` are always sent, and `summary` is never produced by today's
+ * code (Task 3.5 renders it at send time) but is listed here for when it is. */
+const SUPPRESSED_BY_QUIET = new Set<NotificationRow['kind']>(['pre_due', 'overdue', 'summary']);
+
+const NOTIFY_BATCH_LIMIT = 50;
+
+/** One `scheduled` row, resolved against its still-current task/recipient and ready to be sent (or grouped
+ * into an overdue digest) this tick. */
+interface ResolvedNotification {
+  row: NotificationRow;
+  taskRow: TaskRow;
+  listItem: TaskListItem;
+  recipient: UserRow;
+  zone: string;
+}
+
+type SendResult = { ok: true; messageId: number } | { ok: false; kind: MessengerErrorKind };
+
+/** Sends one reminder DM, translating a `Messenger` failure into {@link SendResult} instead of throwing — mirrors `src/scheduler/jobs/cards.ts`'s `sendToOwner`. */
+async function sendReminder(
+  deps: AppDeps,
+  tgUserId: number,
+  text: string,
+  buttons: Buttons,
+): Promise<SendResult> {
+  try {
+    const { messageId } = await deps.messenger.send(tgUserId, text, { buttons });
+    return { ok: true, messageId };
+  } catch (err) {
+    if (err instanceof MessengerError) return { ok: false, kind: err.kind };
+    throw err;
+  }
+}
+
+async function cancelNotification(tx: Tx, id: number, lastError: string | null): Promise<void> {
+  await tx.update(notifications).set({ status: 'cancelled', lastError }).where(eq(notifications.id, id));
+}
+
+/** The next link of an `overdue` chain (D7), planned from `after` — the notification instant that was just
+ * handled (sent, or quiet-suppressed), never "now" (SPEC §13.2: the chain advances one `overdueTime` at a
+ * time from where it left off). A no-op once the task has no due date left or is closed. */
+async function scheduleNextOverdueLink(
+  tx: Tx,
+  workspaceId: number,
+  task: TaskRow,
+  recipient: PlanRecipient,
+  reminders: Settings['reminders'],
+  after: Date,
+): Promise<void> {
+  const planned = nextOverdueAfter({ task, recipient, reminders, after });
+  if (planned === null) return;
+  await tx
+    .insert(notifications)
+    .values({
+      workspaceId,
+      taskId: task.id,
+      recipientUserId: planned.recipientUserId,
+      kind: planned.kind,
+      fireAt: planned.fireAt,
+      dedupeKey: planned.dedupeKey,
+    })
+    .onConflictDoNothing({ target: notifications.dedupeKey });
+}
+
+/** `attempts++`/backoff (SPEC §13.1): reuses `src/ai/pipeline/batcher.ts`'s `nextAttemptAt` — 1/5/15 min,
+ * `failed` once `attempts` reaches its cap. */
+async function recordSendFailure(
+  tx: Tx,
+  row: NotificationRow,
+  kind: MessengerErrorKind,
+  now: Date,
+): Promise<void> {
+  const attempts = row.attempts + 1;
+  const next = nextAttemptAt(attempts, now);
+  if (next === null) {
+    await tx
+      .update(notifications)
+      .set({ status: 'failed', attempts, lastError: kind })
+      .where(eq(notifications.id, row.id));
+  } else {
+    await tx
+      .update(notifications)
+      .set({ attempts, fireAt: next, lastError: kind })
+      .where(eq(notifications.id, row.id));
+  }
+}
+
+/** 403 (SPEC §13.1): flips `users.dm_blocked` and cancels every `scheduled` notification for that
+ * recipient — not just the one that just failed. */
+async function handleForbidden(tx: Tx, recipientId: number): Promise<void> {
+  await markDmBlocked(tx, recipientId, true);
+  await tx
+    .update(notifications)
+    .set({ status: 'cancelled' })
+    .where(and(eq(notifications.recipientUserId, recipientId), eq(notifications.status, 'scheduled')));
+}
+
+/** Applies one send's outcome to every row it covers (a single reminder, or every row behind a grouped
+ * overdue digest, which is exactly one Telegram message) and, on success, continues each covered task's own
+ * `overdue` chain. */
+async function applySendResult(
+  tx: Tx,
+  deps: AppDeps,
+  rows: readonly ResolvedNotification[],
+  recipient: UserRow,
+  settings: Settings,
+  now: Date,
+  result: SendResult,
+): Promise<void> {
+  if (!result.ok) {
+    if (result.kind === 'forbidden') {
+      await handleForbidden(tx, recipient.id);
+    } else {
+      for (const r of rows) await recordSendFailure(tx, r.row, result.kind, now);
+    }
+    return;
+  }
+
+  for (const r of rows) {
+    await tx
+      .update(notifications)
+      .set({ status: 'sent', sentTgMessageId: result.messageId })
+      .where(eq(notifications.id, r.row.id));
+    if (r.row.kind === 'overdue') {
+      await scheduleNextOverdueLink(
+        tx,
+        deps.workspace.id,
+        r.taskRow,
+        { userId: r.recipient.id, zone: r.zone },
+        settings.reminders,
+        r.row.fireAt,
+      );
+    }
+  }
+}
+
+/**
+ * Resolves one `scheduled` row against its (possibly now-stale) task and recipient: `null` once it has
+ * nothing left to send for (the task is gone, closed, or its recipient is gone) — the row is cancelled in
+ * that case and `null` is returned. Quiet-hours suppression (`pre_due`/`overdue`/`summary`) is applied here
+ * too, since it also needs the resolved task/recipient; a suppressed `overdue` still advances its chain.
+ * `summary` rows are left `scheduled` untouched when not quiet — no code creates them yet (Task 3.5 renders
+ * them at send time).
+ */
+async function resolveNotification(
+  tx: Tx,
+  deps: AppDeps,
+  settings: Settings,
+  row: NotificationRow,
+  now: Date,
+): Promise<ResolvedNotification | null> {
+  const taskRow = row.taskId === null ? null : await getTaskById(tx, row.taskId);
+  if (taskRow === null || CLOSED_TASK_STATUSES.has(taskRow.status)) {
+    await cancelNotification(tx, row.id, null);
+    return null;
+  }
+
+  const recipient = await getUserById(tx, row.recipientUserId);
+  if (recipient === null) {
+    await cancelNotification(tx, row.id, null);
+    return null;
+  }
+  const zone = userZone(recipient, deps.workspace);
+
+  if (SUPPRESSED_BY_QUIET.has(row.kind) && isQuietAt(now, zone, settings.quiet)) {
+    await cancelNotification(tx, row.id, 'quiet');
+    if (row.kind === 'overdue') {
+      await scheduleNextOverdueLink(
+        tx,
+        deps.workspace.id,
+        taskRow,
+        { userId: recipient.id, zone },
+        settings.reminders,
+        row.fireAt,
+      );
+    }
+    return null;
+  }
+
+  if (row.kind === 'summary') return null;
+
+  const listItem = await getTaskListItem(tx, taskRow.id);
+  if (listItem === null) {
+    await cancelNotification(tx, row.id, null);
+    return null;
+  }
+
+  return { row, taskRow, listItem, recipient, zone };
+}
+
+/** `row.kind` narrowed to {@link ReminderKind} — safe once `resolveNotification` has already returned
+ * `null` for `summary`. */
+function reminderKind(row: NotificationRow): ReminderKind {
+  if (row.kind === 'summary') throw new Error('notifyJob: unexpected summary row past resolveNotification');
+  return row.kind;
+}
+
+/**
+ * The reminder outbox (SPEC §13.1/§13.2, plan.md Task 3.3): one transaction claims up to
+ * {@link NOTIFY_BATCH_LIMIT} due `scheduled` rows (`FOR UPDATE SKIP LOCKED`, so two concurrent ticks never
+ * send the same notification twice), resolves each against its current task/recipient, groups same-tick
+ * `overdue` rows per recipient into one digest once their count reaches `settings.reminders.
+ * groupOverdueThreshold`, sends everything else individually, and records each send's outcome (sent,
+ * backed-off retry, `failed` past the attempt cap, or `forbidden`'s `dm_blocked` + cancel-all).
+ */
+export const notifyJob: Job = {
+  name: 'notify',
+  async run(deps) {
+    const now = deps.clock.now();
+
+    await deps.db.transaction(async (tx) => {
+      const due = await tx
+        .select()
+        .from(notifications)
+        .where(
+          and(
+            eq(notifications.workspaceId, deps.workspace.id),
+            eq(notifications.status, 'scheduled'),
+            lte(notifications.fireAt, now),
+          ),
+        )
+        .orderBy(asc(notifications.fireAt), asc(notifications.id))
+        .limit(NOTIFY_BATCH_LIMIT)
+        .for('update', { skipLocked: true });
+      if (due.length === 0) return;
+
+      const settings = await getSettings(tx, deps.workspace.id);
+
+      const individual: ResolvedNotification[] = [];
+      const overdueByRecipient = new Map<number, ResolvedNotification[]>();
+
+      for (const row of due) {
+        const resolved = await resolveNotification(tx, deps, settings, row, now);
+        if (resolved === null) continue;
+        if (resolved.row.kind === 'overdue') {
+          const list = overdueByRecipient.get(resolved.recipient.id) ?? [];
+          list.push(resolved);
+          overdueByRecipient.set(resolved.recipient.id, list);
+        } else {
+          individual.push(resolved);
+        }
+      }
+
+      // 403 is scoped to its recipient (`handleForbidden` cancels every `scheduled` row for them, including
+      // ones already resolved into `overdueByRecipient` above) — skip sending to a recipient this tick has
+      // already found blocked, rather than sending (and failing) again.
+      const blocked = new Set<number>();
+
+      for (const r of individual) {
+        if (blocked.has(r.recipient.id)) continue;
+        const { text, buttons } = renderReminder({
+          kind: reminderKind(r.row),
+          task: r.listItem,
+          viewerZone: r.zone,
+        });
+        const result = await sendReminder(deps, r.recipient.tgUserId, text, buttons);
+        if (!result.ok && result.kind === 'forbidden') blocked.add(r.recipient.id);
+        await applySendResult(tx, deps, [r], r.recipient, settings, now, result);
+      }
+
+      for (const list of overdueByRecipient.values()) {
+        const first = list[0];
+        if (first === undefined || blocked.has(first.recipient.id)) continue;
+
+        if (list.length >= settings.reminders.groupOverdueThreshold) {
+          const { text, buttons } = renderOverdueDigest(
+            list.map((r) => r.listItem),
+            first.zone,
+          );
+          const result = await sendReminder(deps, first.recipient.tgUserId, text, buttons);
+          if (!result.ok && result.kind === 'forbidden') blocked.add(first.recipient.id);
+          await applySendResult(tx, deps, list, first.recipient, settings, now, result);
+        } else {
+          for (const r of list) {
+            if (blocked.has(r.recipient.id)) continue;
+            const { text, buttons } = renderReminder({
+              kind: reminderKind(r.row),
+              task: r.listItem,
+              viewerZone: r.zone,
+            });
+            const result = await sendReminder(deps, r.recipient.tgUserId, text, buttons);
+            if (!result.ok && result.kind === 'forbidden') blocked.add(r.recipient.id);
+            await applySendResult(tx, deps, [r], r.recipient, settings, now, result);
+          }
+        }
+      }
+    });
+  },
+};

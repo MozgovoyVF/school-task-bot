@@ -319,7 +319,7 @@ describe('planTaskNotifications', () => {
   - `renderOverdueDigest(items: TaskListItem[], viewerZone): { text; buttons }`;
   - `interface TaskListItem { id: number; title: string; assigneeName: string | null; dueAt: Date | null; dueAllDay: boolean; dueTz: string | null; status: string }` и `getTaskListItem(db, taskId): Promise<TaskListItem | null>` в `src/domain/tasks/queries.ts` (задачи 3.5 и 3.7 дополняют этот файл).
 
-- [ ] **Шаг 1: падающие тесты** (интеграционные, FakeMessenger, `fixedClock`)
+- [x] **Шаг 1: падающие тесты** (интеграционные, FakeMessenger, `fixedClock`)
   1. Scheduled `due` с `fire_at <= now` → отправлено, `status='sent'`, `sent_tg_message_id` заполнен.
   2. **Два параллельных `tickOnce`** (два соединения) → каждое уведомление отправлено ровно один раз (Фокус ревью 1).
   3. Три `overdue` одному owner в один тик → одно сообщение-список (`groupOverdueThreshold=3`). Два — отдельными сообщениями.
@@ -328,10 +328,10 @@ describe('planTaskNotifications', () => {
   6. Тихие часы: `pre_due`, `overdue` и `summary` → `cancelled`, `last_error='quiet'`, цепочка `overdue` продолжается. `due` и `snooze` отправляются (SPEC §13.5).
   7. `send` бросает `rate_limited` или `network` → `attempts++`, `fire_at` сдвигается по `nextAttemptAt`. После 5 неудач → `failed`.
   8. `forbidden` (403) → `users.dm_blocked=true`, все `scheduled` этого пользователя `cancelled`.
-- [ ] **Шаг 2:** FAIL.
-- [ ] **Шаг 3: реализация.** Одна транзакция: `SELECT … WHERE status='scheduled' AND fire_at <= $now ORDER BY fire_at LIMIT 50 FOR UPDATE SKIP LOCKED` (SPEC §13.1) → проверка актуальности → группировка → отправка через throttled messenger → обновление статусов. Сводки (`kind='summary'`) рендерятся в момент отправки (3.5).
-- [ ] **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(scheduler): send reminders with retries, grouping and quiet hours`.
+- [x] **Шаг 2:** FAIL.
+- [x] **Шаг 3: реализация.** Одна транзакция: `SELECT … WHERE status='scheduled' AND fire_at <= $now ORDER BY fire_at LIMIT 50 FOR UPDATE SKIP LOCKED` (SPEC §13.1) → проверка актуальности → группировка → отправка через throttled messenger → обновление статусов. Сводки (`kind='summary'`) рендерятся в момент отправки (3.5).
+- [x] **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(scheduler): send reminders with retries, grouping and quiet hours`.
 
 ### Task 3.4: Кнопки в напоминании и snooze
 
