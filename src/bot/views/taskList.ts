@@ -39,18 +39,22 @@ export function rowMarker(item: TaskListItem, now: Date, zone: string): '🔴' |
 /** A row's own due column: no due date at all reads as `texts.taskList.noDueLabel`; an all-day due reads
  * its own calendar date in `item.dueTz ?? zone` (same business-date convention `dueBucket` itself uses),
  * a datetime due in the viewer's own `zone`. Deliberately never shows a time (SPEC §12.3's row sample is
- * date-only) — unlike `texts.formatDue`, which a task card/reminder uses for its own, more detailed line. */
-function dueLabelForRow(item: TaskListItem, zone: string): string {
+ * date-only) — unlike `texts.formatDue`, which a task card/reminder uses for its own, more detailed line.
+ * Exported for `src/bot/handlers/search.ts` (Task 3.8) — `/search`'s own result rows reuse this exact
+ * row-rendering convention rather than a second copy of it. */
+export function dueLabelForRow(item: TaskListItem, zone: string): string {
   if (item.dueAt === null) return texts.taskList.noDueLabel;
   const effectiveZone = item.dueAllDay ? (item.dueTz ?? zone) : zone;
   return formatDateLabel(item.dueAt, effectiveZone);
 }
 
-function assigneeLabel(name: string | null): string {
+/** Exported for `src/bot/handlers/search.ts` (Task 3.8), same reuse reason as {@link dueLabelForRow}. */
+export function assigneeLabel(name: string | null): string {
   return name === null ? texts.proposalCard.assigneeNone : escapeHtml(name);
 }
 
-function rowLine(item: TaskListItem, now: Date, zone: string): string {
+/** Exported for `src/bot/handlers/search.ts` (Task 3.8), same reuse reason as {@link dueLabelForRow}. */
+export function rowLine(item: TaskListItem, now: Date, zone: string): string {
   return texts.taskList.row(
     rowMarker(item, now, zone),
     item.id,
@@ -61,8 +65,10 @@ function rowLine(item: TaskListItem, now: Date, zone: string): string {
 }
 
 /** One row's own "open the card" button (`v1:l:opn:<taskId>`, `src/bot/handlers/lists.ts`) — the same
- * marker as the row's own text line, so the button visually matches the row it opens. */
-function openButton(item: TaskListItem, now: Date, zone: string): Buttons[number][number] {
+ * marker as the row's own text line, so the button visually matches the row it opens. Exported for
+ * `src/bot/handlers/search.ts` (Task 3.8) — `/search`'s own result rows open the same task card via the
+ * same `v1:l:opn:*` callback `lists.ts` already handles, rather than a second copy of this button. */
+export function openButton(item: TaskListItem, now: Date, zone: string): Buttons[number][number] {
   return {
     text: `${rowMarker(item, now, zone)} T${String(item.id)}`,
     data: encodeCallback({ entity: 'l', action: 'opn', id: item.id }),

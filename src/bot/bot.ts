@@ -31,6 +31,8 @@ import { registerReminderCallbackHandlers } from './handlers/reminderCallbacks.j
 import { registerTaskCallbackHandlers } from './handlers/taskCallbacks.js';
 import { registerInboxHandlers } from './handlers/inbox.js';
 import { registerListHandlers } from './handlers/lists.js';
+import { registerSearchHandlers } from './handlers/search.js';
+import { registerStatsHandlers } from './handlers/stats.js';
 import { registerStubCommandHandlers } from './handlers/stubs.js';
 import { registerTimezoneConversation } from './conversations/timezone.js';
 import { registerEditPersonConversation } from './conversations/editPerson.js';
@@ -149,9 +151,12 @@ export function createBot(
   // Same ordering constraint as `/privacy`/`/inbox` above — must run before `registerGroupHandlers`,
   // whose `bot.on('message', ...)` would otherwise swallow these DM commands first (see that file's own
   // doc comment, and `stubs.ts`'s). `registerListHandlers` (Task 3.7's `/tasks`/`/today`/`/overdue`/
-  // `/archive`) shares the exact same constraint, for the exact same reason — registered here too, ahead
-  // of both `registerGroupHandlers` and the now-narrower `registerStubCommandHandlers`.
+  // `/archive`) and `registerSearchHandlers`/`registerStatsHandlers` (Task 3.8's `/search`/`/stats`) share
+  // the exact same constraint, for the exact same reason — registered here too, ahead of both
+  // `registerGroupHandlers` and the now-narrower `registerStubCommandHandlers`.
   registerListHandlers(bot, deps);
+  registerSearchHandlers(bot, deps);
+  registerStatsHandlers(bot, deps);
   registerStubCommandHandlers(bot);
   registerGroupHandlers(bot, deps);
   registerProposalCallbackHandlers(bot, deps);

@@ -455,7 +455,7 @@ describe('planTaskNotifications', () => {
   - `searchTasks(db, { workspaceId, query, page }): Promise<{ items: TaskListItem[]; total: number }>` — по всем статусам (SPEC §12.2);
   - `taskStats(db, { workspaceId, periodDays: 7 | 30 | 90, now }): Promise<Array<{ key: { type: 'user'; userId: number; name: string } | { type: 'owner' } | { type: 'none' }; open: number; inProgress: number; overdueNow: number; done: number; onTimePct: number | null; avgLateHours: number | null }>>`.
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
   - Поиск:
     1. «расписан» находит «Подготовить расписание» (ILIKE) и «Расписание на ноябрь».
     2. Опечатка «расписане» находит через trigram.
@@ -466,10 +466,10 @@ describe('planTaskNotifications', () => {
     - 2 задачи выполнены в срок, 1 — с опозданием на 48 ч, 1 открыта и просрочена, 1 в работе;
     - ожидается: `open=1`, `inProgress=1`, `overdueNow=1`, `done=3`, `onTimePct=67`, `avgLateHours=48`;
     - отдельные строки «Owner» и «без исполнителя».
-- [ ] **Шаг 2:** FAIL.
-- [ ] **Шаг 3: реализация.** `ILIKE` с экранированием `%`, `_` и `\` (`ESCAPE '\'`) плюс `similarity(title, q) > 0.2`; сортировка по `greatest(similarity(title), similarity(description))`. Период выбирается кнопками `[7] [30] [90]`.
-- [ ] **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(tasks): add search and per-assignee statistics`.
+- [x] **Шаг 2:** FAIL.
+- [x] **Шаг 3: реализация.** `ILIKE` с экранированием `%`, `_` и `\` (`ESCAPE '\'`) плюс `similarity(title, q) > 0.2`; сортировка по `greatest(similarity(title), similarity(description))`. Период выбирается кнопками `[7] [30] [90]`.
+- [x] **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(tasks): add search and per-assignee statistics`.
 
 ### Task 3.9: (удалена — D40)
 

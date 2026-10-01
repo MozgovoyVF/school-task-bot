@@ -1225,4 +1225,74 @@ export const texts = {
     debug: 'Диагностика последнего анализа чата',
     reanalyze: 'Повторно проанализировать последние сообщения',
   },
+  /**
+   * `/search <текст>` (plan.md Task 3.8, SPEC §12.2) — Owner only (D40, `task.viewAll`). Result rows reuse
+   * `texts.taskList.row`/`pageFooter`/`prevButton`/`nextButton` directly (`src/bot/handlers/search.ts`
+   * builds the view) rather than a second copy of those; this namespace only holds what's actually new.
+   * `header`'s `query` must already be HTML-escaped by the caller, same convention
+   * `texts.taskList.headerAssignee`'s `name` already uses — the quoted query is also how
+   * `src/bot/handlers/search.ts` recovers the original search text for its own "▶️ next page" callback
+   * (parsed back out of this exact message, since `callback_data`'s charset can't carry arbitrary
+   * free-text/Cyrillic — see that file's own doc comment), so this exact `«…»` shape is load-bearing, not
+   * just decorative.
+   */
+  search: {
+    usage: 'Введите текст для поиска, например: <code>/search расписание</code>.',
+    header(query: string): string {
+      return `🔍 Поиск: «${query}»`;
+    },
+    /** The search matched nothing at all (distinct from `texts.taskList.empty`'s "nothing in this filter"
+     * wording — a search finding nothing isn't the same situation). */
+    empty: 'Ничего не найдено.',
+    /** The message this pagination callback points at no longer carries a parseable query — SPEC §12.2's
+     * own "a missed task is worse than a false positive" stance means a best-effort re-parse that fails
+     * must say so plainly rather than silently showing the wrong results. */
+    expired: 'Результаты поиска устарели — выполните /search ещё раз.',
+  },
+  /**
+   * `/stats` (plan.md Task 3.8, SPEC §12.5) — Owner only (D40, `task.viewAll`). One block per assignee
+   * (`src/bot/views/stats.ts`'s `renderStats` picks each block's own icon — 👤/👑/❓ — based on
+   * `TaskStatsRow.key.type`, this namespace only holds the Russian wording itself) plus the `[7] [30] [90]`
+   * period-switch row.
+   */
+  stats: {
+    header(periodDays: number): string {
+      return `📊 Статистика за ${String(periodDays)} дней`;
+    },
+    /** SPEC §12.5's own wording for the workspace Owner's own "delegated to myself" row — kept as the
+     * Latin "Owner" (SPEC §12.5 itself writes it this way, unlike every other label in this file). */
+    ownerLabel: 'Owner',
+    noneLabel: 'Без исполнителя',
+    /** No task in the cohort at all for the selected period. */
+    empty: 'За этот период задач нет.',
+    periodButton(periodDays: number): string {
+      return `${String(periodDays)} дн.`;
+    },
+    /** The currently-selected period's own button, visually marked so the Owner can see which window the
+     * numbers below belong to. */
+    periodButtonActive(periodDays: number): string {
+      return `• ${String(periodDays)} дн. •`;
+    },
+    /** One assignee's own block — `name` already carries its own icon prefix (`renderStats`'s job);
+     * `onTimePct`/`avgLateHours` of `null` (no `done` tasks / no late ones) read as `NO_DATA_LABEL`. */
+    row(
+      name: string,
+      open: number,
+      inProgress: number,
+      overdueNow: number,
+      done: number,
+      onTimePct: number | null,
+      avgLateHours: number | null,
+    ): string {
+      const onTime = onTimePct === null ? NO_DATA_LABEL : `${String(onTimePct)}%`;
+      const roundedLate = avgLateHours === null ? null : Math.round(avgLateHours);
+      const late =
+        roundedLate === null ? NO_DATA_LABEL : `${String(roundedLate)} ${pluralizeChas(roundedLate)}`;
+      return [
+        name,
+        `Открыто: ${String(open)} · В работе: ${String(inProgress)} · Просрочено сейчас: ${String(overdueNow)}`,
+        `Выполнено: ${String(done)} · В срок: ${onTime} · Опоздание в среднем: ${late}`,
+      ].join('\n');
+    },
+  },
 };
