@@ -386,7 +386,14 @@ async function handleSendFailure(
   }
 }
 
-async function markCardSent(
+/**
+ * Marks one proposal as delivered (`notified_at`/`owner_dm_message_id`). Exported (plan.md Task 3.10) for
+ * `src/bot/handlers/dmFreeText.ts`/`forwards.ts`, which render and send a manual draft's card inline, right
+ * inside the DM handler, instead of waiting for this job's own outbox tick — without this, that same
+ * proposal would be delivered a second time once this job's tick next ran (its `notified_at` would still
+ * be `null`). Same idempotent `WHERE status='pending' AND notified_at IS NULL` guard either way.
+ */
+export async function markCardSent(
   db: AppDeps['db'],
   proposalId: number,
   now: Date,

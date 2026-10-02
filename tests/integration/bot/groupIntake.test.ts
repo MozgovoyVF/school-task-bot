@@ -4,8 +4,13 @@ import { and, eq } from 'drizzle-orm';
 import { createBotHarness, type BotHarness } from '../../helpers/botHarness.js';
 import { groupText, editedGroupText } from '../../helpers/updates.js';
 import { createLogger } from '../../../src/ops/logger.js';
-import { chats, memberships, messages, users } from '../../../src/db/schema/index.js';
+import { chats, memberships, messages, proposals, users } from '../../../src/db/schema/index.js';
 import type { ChatRow } from '../../../src/domain/chats/repo.js';
+import type { FakeMessenger } from '../../helpers/fakeMessenger.js';
+
+function fake(harness: BotHarness): FakeMessenger {
+  return harness.deps.messenger as FakeMessenger;
+}
 
 const GROUP = { id: -1002222, type: 'supergroup' as const, title: 'Учительская' };
 const MEMBER = { id: 210, firstName: 'Мария Иванова' };
@@ -273,13 +278,14 @@ describe('group message intake (SPEC §7.2, plan.md Task 1.8)', () => {
     expect(lines.some((line) => line.includes('edited an already-analyzed message'))).toBe(true);
   });
 
-  it('/task is not saved by this handler (stub logs and returns); other commands are silently ignored', async () => {
-    const { logger, lines } = capturingLogger();
-    const harness = await createBotHarness({ logger });
+  it('/task <text> is handled for real (plan.md Task 3.10): a manual proposal is created, the command is reacted to, nothing is saved as a plain message, and the bot never replies in the group; other commands are silently ignored', async () => {
+    const harness = await createBotHarness();
     const chat = await makeChat(harness);
 
     const taskUpdate = groupText(GROUP, MEMBER, '/task купить бумагу');
     await harness.send(taskUpdate);
+    const taskMessageId = taskUpdate.message?.message_id;
+    if (taskMessageId === undefined) throw new Error('expected a message_id on the built update');
 
     // A command other than /task (and other than /privacy, which Task 1.11 gives its own
     // group-answering handler — see tests/integration/bot/privacy.test.ts) is still silently ignored.
@@ -287,8 +293,47 @@ describe('group message intake (SPEC §7.2, plan.md Task 1.8)', () => {
     await harness.send(otherUpdate);
 
     expect(await listMessages(harness, chat.id)).toHaveLength(0);
-    expect(lines.some((line) => line.includes('/task received'))).toBe(true);
     expect(harness.replies(GROUP.id)).toEqual([]);
+    expect(fake(harness).reactions).toContainEqual({
+      chatId: GROUP.id,
+      messageId: taskMessageId,
+      emoji: '✍',
+    });
+
+    const rows = await harness.db
+      .select()
+      .from(proposals)
+      .where(eq(proposals.workspaceId, harness.deps.workspace.id));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ category: 'manual', chatId: chat.id, policyDecision: 'shown' });
+    expect((rows[0]?.payload as { origin?: string }).origin).toBe('manual_group');
+  });
+
+  it('/task is ignored in a paused chat, but still works when only analysis_enabled=false (D12)', async () => {
+    const harness = await createBotHarness();
+    const pausedChat = await makeChat(harness, { tgChatId: -1002004, status: 'paused' });
+    const disabledChat = await makeChat(harness, { tgChatId: -1002005, analysisEnabled: false });
+
+    await harness.send(
+      groupText({ id: pausedChat.tgChatId, type: 'supergroup' }, MEMBER, '/task купить бумагу'),
+    );
+
+    const pausedProposals = await harness.db
+      .select()
+      .from(proposals)
+      .where(eq(proposals.chatId, pausedChat.id));
+    expect(pausedProposals).toHaveLength(0);
+    expect(fake(harness).reactions).toEqual([]);
+
+    await harness.send(
+      groupText({ id: disabledChat.tgChatId, type: 'supergroup' }, MEMBER, '/task купить бумагу'),
+    );
+
+    const disabledProposals = await harness.db
+      .select()
+      .from(proposals)
+      .where(eq(proposals.chatId, disabledChat.id));
+    expect(disabledProposals).toHaveLength(1);
   });
 });
 

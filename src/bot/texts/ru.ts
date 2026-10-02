@@ -1295,4 +1295,26 @@ export const texts = {
       ].join('\n');
     },
   },
+  /**
+   * Manual task creation (plan.md Task 3.10, SPEC §12.1): `/task` in a group, DM free text and `/new`
+   * (`src/bot/handlers/taskCommand.ts`/`dmFreeText.ts`/`forwards.ts`, `src/bot/conversations/newTask.ts`).
+   * `/task` itself never replies with text in the group (SPEC §12.1) — nothing here is shown there; this
+   * namespace is DM-only wording.
+   */
+  manualTask: {
+    /** A Member's free text in DM, outside any dialog (D40 — manual DM creation is Owner-only; no LLM call
+     * is made for this reply, unlike the Owner's own free text). */
+    membersNotSupported: 'Создание задач вручную доступно только руководителю.',
+  },
+  /** The `/new` conversation (`src/bot/conversations/newTask.ts`, plan.md Task 3.10, SPEC §12.1): a
+   * strictly linear название → исполнитель → срок → приоритет → подтверждение, reusing
+   * `texts.editProposal`'s submenu wording for the assignee/due/priority steps (identical UI, no
+   * proposal involved here) and `texts.proposalDecide.createdCard` for the final "✅ Создано" line. */
+  newTask: {
+    titlePrompt: 'Введите название новой задачи.',
+    menuHeader: '🆕 Новая задача',
+    confirmButton: '✅ Создать задачу',
+    cancelButton: '❌ Отмена',
+    cancelled: 'Создание задачи отменено.',
+  },
 };

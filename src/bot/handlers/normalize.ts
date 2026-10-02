@@ -62,8 +62,13 @@ function formatUserName(user: User): string {
   return user.last_name ? `${user.first_name} ${user.last_name}` : user.first_name;
 }
 
-/** `forward_origin`'s display name (SPEC §7.2: the name from `forward_origin`, when available), or `null` if not forwarded. */
-function forwardOriginName(msg: Message): string | null {
+/**
+ * `forward_origin`'s display name (SPEC §7.2: the name from `forward_origin`, when available), or `null`
+ * if not forwarded. Exported (plan.md Task 3.10) for `src/bot/handlers/forwards.ts`'s own, DM-side forward
+ * handling, which reads `ctx.message.forward_origin` directly off the raw grammY update rather than through
+ * `normalizeIncoming` (that function's `botUsername`/command-parsing concerns don't apply in a DM).
+ */
+export function forwardOriginName(msg: Message): string | null {
   const origin = msg.forward_origin;
   if (!origin) return null;
   switch (origin.type) {

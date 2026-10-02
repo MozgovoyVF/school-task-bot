@@ -31,15 +31,16 @@ async function makeMember(harness: BotHarness, tgUser: { id: number; firstName: 
   return userRow;
 }
 
-// `/settings` stands in for the whole `STUB_COMMANDS` list (`src/bot/handlers/stubs.ts`) — every one of
-// them is registered the same way, with the same `can(actor, 'task.viewAll')` gate, so one representative
-// command is enough to cover the gate itself. `/tasks` used to be this suite's representative command too,
-// until Task 3.7 gave it (and `/today`/`/overdue`/`/archive`) a real handler (`src/bot/handlers/lists.ts`,
+// `/settings` stands in for the whole `STUB_COMMANDS` list (`src/bot/handlers/stubs.ts`, now just
+// `/settings` itself) — every one of them is registered the same way, with the same
+// `can(actor, 'task.viewAll')` gate. `/tasks` used to be this suite's representative command too, until
+// Task 3.7 gave it (and `/today`/`/overdue`/`/archive`) a real handler (`src/bot/handlers/lists.ts`,
 // covered by `tests/integration/bot/lists.test.ts`); `/stats` was this suite's second example command
 // until Task 3.8 gave it (and `/search`) a real handler too (`src/bot/handlers/stats.ts`/`search.ts`,
-// covered by `tests/integration/bot/stats.test.ts`/`search.test.ts`) — `/settings`/`/new` are still stubs,
-// so `/new` took over as the second example here.
-describe('owner-command stubs (/new, /settings)', () => {
+// covered by `tests/integration/bot/stats.test.ts`/`search.test.ts`); `/new` was this suite's second
+// example command until Task 3.10 gave it a real handler too (`src/bot/conversations/newTask.ts`, covered
+// by `tests/integration/bot/newTask.test.ts`) — `/settings` is now the only stub left.
+describe('owner-command stubs (/settings)', () => {
   it('is forbidden for a Member (review round 1, I1)', async () => {
     const harness = await createBotHarness();
     await makeMember(harness, MEMBER);
@@ -64,18 +65,6 @@ describe('owner-command stubs (/new, /settings)', () => {
     await harness.send(dmText(OWNER, '/settings'));
 
     expect(harness.replies(OWNER.id)).toEqual([texts.common.comingSoon]);
-  });
-
-  it('gates every stub command, not just /settings', async () => {
-    const harness = await createBotHarness();
-    await makeOwner(harness, OWNER);
-    await makeMember(harness, MEMBER);
-
-    await harness.send(dmText(OWNER, '/new'));
-    await harness.send(dmText(MEMBER, '/new'));
-
-    expect(harness.replies(OWNER.id)).toEqual([texts.common.comingSoon]);
-    expect(harness.replies(MEMBER.id)).toEqual([texts.common.forbidden]);
   });
 
   it('has no effect in a group, even for the Owner', async () => {

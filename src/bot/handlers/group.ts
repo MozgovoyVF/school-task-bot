@@ -1,31 +1,29 @@
 import type { Bot } from 'grammy';
 import type { Message } from 'grammy/types';
-import type { Db } from '../../db/client.js';
-import type { Clock } from '../../time/clock.js';
-import type { Logger } from '../../ops/logger.js';
-import type { WorkspaceRow } from '../../domain/workspaces/repo.js';
 import { getChatByTgId, type ChatRow } from '../../domain/chats/repo.js';
 import { applyEdit, saveIncomingMessage } from '../../domain/chats/messages.js';
 import { ensureMembership, upsertTelegramUser } from '../../domain/people/repo.js';
 import { classifyForAnalysis } from '../../ai/pipeline/heuristics.js';
 import { normalizeIncoming, type IncomingMessage } from './normalize.js';
+import { handleTaskCommand, type TaskCommandDeps } from './taskCommand.js';
 import type { BotContext } from '../context.js';
 
-export interface GroupHandlersDeps {
-  db: Db;
-  clock: Clock;
-  logger: Logger;
-  /** The single default workspace (MVP, SPEC §5.2) every group message's author is a member of. */
-  workspace: WorkspaceRow;
-}
+/** `TaskCommandDeps` (`db`/`ai`/`workspace`/`clock`/`logger`/`messenger`) plus nothing extra — Task 3.10
+ * widened this from the original `{db, clock, logger, workspace}` so `handleTaskCommand` below gets
+ * everything it needs (`ai`, `messenger`) through the same `deps` this file already threads through. */
+export type GroupHandlersDeps = TaskCommandDeps;
 
 /**
  * `memberships.display_name`'s default (D28): the **first word** of
  * `first_name`. Telegram's `first_name` often carries a full name (first
  * plus last), and only the first name is ever sent to the LLM
- * (SPEC §19.3.2) — the Owner can still rename via `/people`.
+ * (SPEC §19.3.2) — the Owner can still rename via `/people`. Exported
+ * (plan.md Task 3.10) for `src/bot/handlers/taskCommand.ts`'s own
+ * membership-ensuring for `/task`'s invoker (and, when replying to someone
+ * else's message, that message's author too) — same default as any other
+ * first-seen group member.
  */
-function defaultDisplayName(firstName: string): string {
+export function defaultDisplayName(firstName: string): string {
   return firstName.trim().split(/\s+/)[0] ?? firstName;
 }
 
@@ -35,9 +33,8 @@ function defaultDisplayName(firstName: string): string {
  * awaiting Owner approval, a `paused` chat had its bot presence explicitly
  * paused, and a `left` chat (or no row at all, e.g. before `my_chat_member`
  * has been processed) means the bot isn't really "in" it. Only `active`
- * chats reach any further handling — including the `/task` stub below,
- * which is why this check happens before branching on `isTaskCommand`, not
- * after.
+ * chats reach any further handling — including `/task` itself, which is
+ * why this check happens before branching on `isTaskCommand`, not after.
  */
 function isChatActive(chat: ChatRow | null): chat is ChatRow {
   return chat !== null && chat.status === 'active';
@@ -76,10 +73,9 @@ async function handleIncoming(
   if (!incoming) return; // bot/service message, a command other than /task, or neither text nor caption
 
   if (incoming.isTaskCommand) {
-    // Task 3.10's handler owns /task for real; before phase 3 this is a logging-only stub
-    // (plan.md Task 1.8 brief, case 12) — deliberately not gated on analysis_enabled (D12's
-    // carried note: /task still works when a chat only has analysis turned off).
-    deps.logger.debug({ chatId: chat.id }, 'group: /task received (stub — Task 3.10 not implemented yet)');
+    // Deliberately not gated on analysis_enabled (D12's carried note: /task still works when a chat only
+    // has analysis turned off) — only on the chat being `active` at all, already checked above.
+    await handleTaskCommand(deps, chat, msg, incoming.commandArgs);
     return;
   }
 

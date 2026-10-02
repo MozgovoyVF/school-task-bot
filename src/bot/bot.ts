@@ -26,6 +26,8 @@ import { registerChatsHandlers } from './handlers/chats.js';
 import { registerPeopleHandlers } from './handlers/people.js';
 import { registerPrivacyHandlers } from './handlers/privacy.js';
 import { registerGroupHandlers } from './handlers/group.js';
+import { registerDmFreeTextHandler } from './handlers/dmFreeText.js';
+import { registerForwardsHandler } from './handlers/forwards.js';
 import { registerProposalCallbackHandlers } from './handlers/proposalCallbacks.js';
 import { registerReminderCallbackHandlers } from './handlers/reminderCallbacks.js';
 import { registerTaskCallbackHandlers } from './handlers/taskCallbacks.js';
@@ -39,6 +41,7 @@ import { registerEditPersonConversation } from './conversations/editPerson.js';
 import { registerEditProposalConversation } from './conversations/editProposal.js';
 import { registerEditTaskConversation } from './conversations/editTask.js';
 import { registerSnoozeInputConversation } from './conversations/snoozeInput.js';
+import { registerNewTaskConversation } from './conversations/newTask.js';
 
 /**
  * The subset of `AppDeps` (`src/deps.ts`) that bot construction and its
@@ -130,6 +133,7 @@ export function createBot(
   // callback needs first crack at that action, same ordering reason `registerEditProposalConversation`
   // above is registered ahead of `registerProposalCallbackHandlers` for its `v1:p:edt:` entry callback.
   registerSnoozeInputConversation(bot, deps);
+  registerNewTaskConversation(bot, deps);
   registerDmHandlers(bot);
   registerAdminHandlers(bot, deps, startedAt);
   registerTransferHandlers(bot, deps);
@@ -157,6 +161,11 @@ export function createBot(
   registerListHandlers(bot, deps);
   registerSearchHandlers(bot, deps);
   registerStatsHandlers(bot, deps);
+  // `bot.chatType('private')`-scoped (grammY auto-continues for any other chat type), so — unlike the
+  // handlers above — these two have no ordering constraint relative to `registerGroupHandlers`; kept here
+  // anyway, alongside the rest of this DM-feature cluster (plan.md Task 3.10).
+  registerDmFreeTextHandler(bot, deps);
+  registerForwardsHandler(bot, deps);
   registerStubCommandHandlers(bot);
   registerGroupHandlers(bot, deps);
   registerProposalCallbackHandlers(bot, deps);

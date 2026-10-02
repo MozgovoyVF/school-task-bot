@@ -54,6 +54,27 @@ export async function saveIncomingMessage(
   return row ?? null;
 }
 
+/**
+ * Looks up a saved message by its Telegram id within one chat (plan.md Task 3.10's `/task`-replying-to-a-
+ * message case: resolving the replied-to message's internal id for `proposals.source_message_ids`/the
+ * card's deep link, when that message happens to already be saved). `null` when it was never saved at all
+ * — a `/task` command message itself is never saved (`src/bot/handlers/group.ts`), and a message sent while
+ * `analysis_enabled=false` (D12) isn't either — callers must treat that as "no source message", not an
+ * error.
+ */
+export async function getMessageByTgId(
+  db: DbOrTx,
+  chatId: number,
+  tgMessageId: number,
+): Promise<MessageRow | null> {
+  const [row] = await db
+    .select()
+    .from(messages)
+    .where(and(eq(messages.chatId, chatId), eq(messages.tgMessageId, tgMessageId)))
+    .limit(1);
+  return row ?? null;
+}
+
 export interface ApplyEditInput {
   chatId: number;
   tgMessageId: number;

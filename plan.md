@@ -477,27 +477,27 @@ describe('planTaskNotifications', () => {
 
 ### Task 3.10: Ручное создание — `/task` в группе, `/new`, свободный текст, пересылки
 
-**Файлы:** создать `src/ai/pipeline/extractSingle.ts`, `src/bot/handlers/taskCommand.ts`, `src/bot/handlers/dmFreeText.ts`, `src/bot/handlers/forwards.ts`, `src/bot/conversations/newTask.ts`; тесты `tests/integration/bot/manualCreation.test.ts`, `tests/unit/ai/extractSingle.test.ts`.
+**Файлы:** создать `src/ai/pipeline/extractSingle.ts`, `src/bot/handlers/taskCommand.ts`, `src/bot/handlers/dmFreeText.ts`, `src/bot/handlers/forwards.ts`, `src/bot/conversations/newTask.ts`; изменить `src/bot/handlers/group.ts` (реальный `/task` вместо стаба), `src/bot/handlers/stubs.ts` (`/new` убран из стабов), `src/bot/handlers/normalize.ts`/`src/scheduler/jobs/cards.ts` (экспорт `forwardOriginName`/`markCardSent` для переиспользования), `src/domain/chats/messages.ts` (`getMessageByTgId`), `src/domain/proposals/repo.ts` (`createManualProposal`, `ProposalCategoryColumn`); тесты `tests/integration/bot/manualCreation.test.ts`, `tests/integration/bot/newTask.test.ts`, `tests/integration/ai/extractSingle.test.ts` (не `tests/unit/...` — см. шаг 1, пункт 11).
 
 **Интерфейсы:**
 - Produces:
   - `extractSingle(deps, { text: string; authorUserId: number; workspaceId: number; now: Date }): Promise<ResolvedAction & { kind: 'create' }>` — промпт `extractor.v1` + `extractor.single.v1`. Если действия нет или LLM недоступен, возвращает черновик с `title = первые 80 символов` (D19). Стоимость пишется как `analysis_batches` с `kind='manual'`;
   - `createManualProposal(deps, { workspaceId, chatId: number | null, action, origin: 'manual_group' | 'manual_dm' | 'forward', sourceMessageIds, quote, quoteAuthorName, createdByUserId })` — `category='manual'`, `policy_decision='shown'`, дальше обычный outbox (2.12).
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты** (не из списка D43 — реализовано напрямую; `extractSingle` всё же покрыто реальным тестом, см. ниже)
   1. `/task` ответом на сообщение в группе → карточка у owner с пометкой «вручную», на команду стоит реакция ✍, текстом в группу бот не отвечает.
   2. `/task купить бумагу` → карточка с этим текстом.
   3. `/task` от member → то же (предложение для owner).
   4. `/task` в `paused`-чате игнорируется. При `analysis_enabled=false` работает (D12).
   5. `/task` без текста и без ответа → игнорируется, пишется debug-лог.
   6. `/new` → шаги название → исполнитель → срок → приоритет → подтверждение → задача `origin='manual_dm'`.
-  7. Свободный текст owner'а в DM (вне диалога) → черновик «Создать задачу?» `[✅ Создать] [✏️ Изменить] [❌ Отмена]`.
+  7. Свободный текст owner'а в DM (вне диалога) → черновик отправляется как обычная карточка предложения (`[✅ Создать] [✏️ Изменить] [❌ Не задача]`), рендерится сразу, а не ждёт тика outbox.
   8. Свободный текст от member → вежливый ответ, что бот работает только с руководителем, LLM не вызывается.
-  9. Три пересланных сообщения за 1 с → один черновик `origin='forward'` с цитатой первого и автором из `forward_origin`. Пересылки с интервалом 5 с → два черновика (D18).
-  10. Бюджет превышен → ручное создание всё равно работает (SPEC §9.2).
-  11. LLM недоступен → черновик с названием из первых 80 символов (unit на `extractSingle`).
-- [ ] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(tasks): add manual task creation from group, DM text and forwards`.
+  9. Пересланные сообщения в DM в пределах `FORWARD_BURST_MS` (3 с) → один черновик `origin='forward'` с цитатой первого и автором из `forward_origin`; пауза ≥3 с → новый черновик (D18).
+  10. Бюджет превышен → ручное создание всё равно работает (SPEC §9.2, D13): `extractSingle`/`createManualProposal` не проверяют `spentTodayUsd` вовсе.
+  11. LLM недоступен → черновик с названием из первых 80 символов — покрыто `tests/integration/ai/extractSingle.test.ts` (не `tests/unit/...`: как и `processBatch.test.ts`, этот модуль пайплайна реально читает участников/владельца из БД — см. комментарий в начале файла).
+- [x] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(tasks): add manual task creation from group, DM text and forwards`.
 
 ### Task 3.11: `/settings` и технические настройки в `/admin`
 

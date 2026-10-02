@@ -2,7 +2,17 @@ import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { DbOrTx, Tx } from '../../db/client.js';
 import { proposals } from '../../db/schema/index.js';
-import type { AssigneeResolution, Category } from '../../ai/pipeline/resolve.js';
+import type { AssigneeResolution, Category, ResolvedAction } from '../../ai/pipeline/resolve.js';
+import type { ResolvedDue } from '../../time/resolveDue.js';
+
+/**
+ * `proposals.category`'s full DB range (plan.md Task 3.10): `'manual'` is a sibling of {@link Category},
+ * not a member of it — the same ad hoc widening `src/scheduler/jobs/cards.ts`'s own
+ * `ProposalCardView.category` already anticipated (`Category | 'manual' | null`) before this task ever
+ * wrote a `'manual'` row. `ai/pipeline/resolve.ts`'s `Category` stays the AI extractor's own 5-value
+ * categorization and is not touched by this widening.
+ */
+export type ProposalCategoryColumn = Category | 'manual';
 
 export type ProposalRow = typeof proposals.$inferSelect;
 
@@ -80,7 +90,7 @@ export interface NewProposal {
   chatId: number | null;
   batchId: number | null;
   kind: 'create' | 'update' | 'complete' | 'cancel';
-  category: Category | null;
+  category: ProposalCategoryColumn | null;
   payload: ProposalPayload;
   targetTaskId: number | null;
   confidence: number;
@@ -124,6 +134,91 @@ export async function insertProposal(tx: Tx, p: NewProposal): Promise<ProposalRo
 export async function getProposalById(db: DbOrTx, id: number): Promise<ProposalRow | null> {
   const [row] = await db.select().from(proposals).where(eq(proposals.id, id)).limit(1);
   return row ?? null;
+}
+
+function serializeManualDue(due: ResolvedDue): ProposalPayloadDue {
+  return {
+    dueAt: due.dueAt !== null ? due.dueAt.toISOString() : null,
+    allDay: due.allDay,
+    tz: due.tz,
+    inPast: due.inPast,
+    invalid: due.invalid,
+  };
+}
+
+export interface CreateManualProposalInput {
+  workspaceId: number;
+  /** `null` for a DM-origin draft (`manual_dm`/`forward`) — proposals.chat_id is nullable for exactly this
+   * case (see the schema's own D5 comment). */
+  chatId: number | null;
+  /** `extractSingle`'s (`src/ai/pipeline/extractSingle.ts`) resolved draft — always `kind: 'create'`, D19. */
+  action: Extract<ResolvedAction, { kind: 'create' }>;
+  origin: 'manual_group' | 'manual_dm' | 'forward';
+  sourceMessageIds: number[];
+  quote: string | null;
+  quoteAuthorName: string | null;
+  /** Not persisted on `proposals` (no such column) — accepted only so callers have one place to pass it
+   * through for a future audit log, and for a `debug` log line here. */
+  createdByUserId: number;
+  /** CLAUDE.md §8: never `new Date()` — the caller's already-captured `now`. */
+  now: Date;
+}
+
+/**
+ * Inserts one manually-triggered `create` proposal (plan.md Task 3.10): `/task` in a group, DM free text,
+ * or a DM forward batch (D18), as opposed to the AI batch pipeline's own `processBatch`/`insertProposal`
+ * call site. `category='manual'` (not one of `action.category`'s five AI values — SPEC's card marks it
+ * manual via `payload.origin !== 'ai'`, independent of this column), `policyDecision='shown'` always
+ * (D19: the auto-pipeline's confidence thresholds never apply to a manual request — CLAUDE.md: a missed
+ * task is worse than a false positive), `batchId: null` (not tied to any `analysis_batches` row —
+ * `extractSingle`'s own cost tracking writes its own, separate `kind='manual'` row). `noReaction: true` on
+ * every row this writes: `/task`'s own ✍ acknowledgement (`src/bot/handlers/taskCommand.ts`) already marks
+ * the source message, so the card outbox's usual 👀 (`reactions.onDetect`, `src/scheduler/jobs/cards.ts`)
+ * would otherwise double up on it once the card is actually delivered — harmless for a DM-origin draft
+ * (`chatId: null`), which never gets a source reaction in the first place. Takes a plain `DbOrTx` rather than
+ * `insertProposal`'s stricter `Tx`: none of this task's three call sites need atomicity with another write,
+ * so this inserts directly instead of forcing an otherwise-pointless `db.transaction(...)` wrapper on every
+ * caller.
+ */
+export async function createManualProposal(
+  db: DbOrTx,
+  input: CreateManualProposalInput,
+): Promise<ProposalRow> {
+  const { action } = input;
+  const payload: ProposalPayload = {
+    title: action.title,
+    description: action.description,
+    category: action.category,
+    assignee: action.assignee,
+    due: serializeManualDue(action.due),
+    dueText: action.due.dueText,
+    priority: action.priority,
+    reasoning: action.reasoning,
+    origin: input.origin,
+    noReaction: true,
+    quote: input.quote,
+    quoteAuthorName: input.quoteAuthorName,
+  };
+
+  const [row] = await db
+    .insert(proposals)
+    .values({
+      workspaceId: input.workspaceId,
+      chatId: input.chatId,
+      batchId: null,
+      kind: 'create',
+      category: 'manual',
+      payload,
+      targetTaskId: null,
+      confidence: action.confidence,
+      policyDecision: 'shown',
+      policyReason: 'manual_override',
+      sourceMessageIds: input.sourceMessageIds,
+      createdAt: input.now,
+    })
+    .returning();
+  if (!row) throw new Error('createManualProposal: insert returned no row');
+  return row;
 }
 
 // CLAUDE.md §8: jsonb goes through zod. Mirrors `ProposalPayload` above field-for-field — kept here,
