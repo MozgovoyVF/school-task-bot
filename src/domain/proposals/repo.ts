@@ -83,8 +83,15 @@ export interface ProposalPayload {
    * redacts `quote` to `texts.erase.redactedQuote` wherever this matches the member being erased, and does
    * so independently of `messages` retention (`chats/retention.ts`) — the whole reason this field exists
    * instead of `eraseMember` re-deriving the author via `source_message_ids`/`messages` at erasure time.
+   *
+   * Optional (not just nullable) on the *parse* side only (D46 fix round 1): every row written before
+   * this field existed has no such key in its jsonb at all, and `ProposalPayloadSchema.safeParse` must
+   * accept that or every pre-existing proposal becomes unparsable (`parseProposalPayload` returning
+   * `null` for all of them). Every read site already treats it as possibly-absent (`?? null`). Every
+   * *write* site (`CreateManualProposalInput`, `processBatch`'s `QuoteInfo`) still requires it — only
+   * old rows need the absence tolerated, never a row written from here on.
    */
-  quoteAuthorUserId: number | null;
+  quoteAuthorUserId?: number | null;
   /**
    * Fields the Owner changed in the editProposal dialog (`src/bot/conversations/editProposal.ts`, plan.md
    * Task 2.14) before accepting, keyed by field name (`title`/`assignee`/`due`/`priority`/`description`) —
@@ -275,7 +282,7 @@ export const ProposalPayloadSchema = z.object({
   noReaction: z.boolean().optional(),
   quote: z.string().nullable(),
   quoteAuthorName: z.string().nullable(),
-  quoteAuthorUserId: z.number().nullable(),
+  quoteAuthorUserId: z.number().nullable().optional(),
   ownerEdits: z.record(z.string(), OwnerEditSchema).optional(),
 });
 

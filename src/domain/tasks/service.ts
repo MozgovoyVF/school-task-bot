@@ -28,7 +28,11 @@ export interface CreateTaskInput {
     tgMessageId: number | null;
     link: string | null;
     quote: string | null;
-    /** D46: the quote's own author by internal `users.id` — threaded straight onto `tasks.quote_author_user_id` so `eraseMember` (`src/domain/people/erase.ts`) can redact `source_quote` without depending on the `messages` row still existing. */
+    /**
+     * D46: the quote's own author by internal `users.id` — threaded straight onto
+     * `tasks.quote_author_user_id` so `eraseMember` (`src/domain/people/erase.ts`) can redact
+     * `source_quote` without depending on the `messages` row still existing.
+     */
     quoteAuthorUserId: number | null;
   };
 }

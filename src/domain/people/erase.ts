@@ -159,10 +159,22 @@ export async function eraseMember(
     // member — regardless of `status` (pending/accepted/rejected/expired), same spirit as step 2 below,
     // which also doesn't filter by status. `payload->>'quoteAuthorUserId'` is `NULL` for a legacy row with
     // no such key, so the cast/comparison below simply never matches it (no backfill, D46).
+    //
+    // Also nulls out `payload.quoteAuthorUserId` itself in the same write (D46 fix round 1): leaving it
+    // pointing at the now-possibly-deleted user would make a later `acceptProposal` on this still-pending
+    // row try to insert a nonexistent `users.id` into `tasks.quote_author_user_id` and fail on the FK —
+    // mirrors that column's own `onDelete: 'set null'` semantics. Guarded by `payload->>'quote' is not
+    // null` (mirrors step 1a's `isNotNull(tasks.sourceQuote)` guard): `processBatch` can legitimately
+    // store `quote: null` with `quoteAuthorUserId` set (the source message had no text) — without this
+    // guard that row would get a fake `redactedQuote` string materialized where there never was a quote.
     await tx.execute(sql`
       update proposals
-      set payload = jsonb_set(payload, '{quote}', to_jsonb(${texts.erase.redactedQuote}::text))
+      set payload = jsonb_set(
+        jsonb_set(payload, '{quote}', to_jsonb(${texts.erase.redactedQuote}::text)),
+        '{quoteAuthorUserId}', 'null'::jsonb
+      )
       where workspace_id = ${input.workspaceId}
+        and payload ->> 'quote' is not null
         and (payload ->> 'quoteAuthorUserId')::bigint = ${input.userId}
     `);
 

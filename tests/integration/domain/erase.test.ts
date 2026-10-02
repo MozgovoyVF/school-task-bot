@@ -10,6 +10,9 @@ import type { Actor } from '../../../src/domain/people/permissions.js';
 import { eraseMember, EraseMemberError } from '../../../src/domain/people/erase.js';
 import { eraseWorkspace, EraseWorkspaceError } from '../../../src/domain/workspaces/erase.js';
 import { createClaimCode, redeemClaimCode } from '../../../src/domain/people/claim.js';
+import { acceptProposal } from '../../../src/domain/proposals/decide.js';
+import { fixedClock } from '../../helpers/clock.js';
+import type { Env } from '../../../src/config/env.js';
 import {
   analysisBatches,
   chats,
@@ -477,6 +480,105 @@ describe('eraseMember', () => {
     const [acceptedAfter] = await db.select().from(proposals).where(eq(proposals.id, acceptedProposal.id));
     expect((acceptedAfter?.payload as Record<string, unknown>).quote).toBe(texts.erase.redactedQuote);
   });
+
+  it(
+    'also nulls out payload.quoteAuthorUserId when redacting a quote (D46 fix round 1) so accepting the ' +
+      "proposal afterward doesn't try to insert a now-deleted user id into tasks.quote_author_user_id",
+    async () => {
+      const { ws, owner, maria, chat } = await setupSchool();
+
+      const [pendingProposal] = await db
+        .insert(proposals)
+        .values({
+          workspaceId: ws.id,
+          chatId: chat.id,
+          kind: 'create',
+          payload: {
+            title: 'Подготовить зал',
+            reasoning: 'placeholder',
+            origin: 'ai',
+            quote: 'Подготовлю зал к утру',
+            quoteAuthorName: 'Maria',
+            quoteAuthorUserId: maria.id,
+          },
+          confidence: 0.9,
+          policyDecision: 'shown',
+          status: 'pending',
+        })
+        .returning();
+      if (!pendingProposal) throw new Error('setup: failed to insert pendingProposal');
+
+      // Maria has no other membership, so erasing her also deletes her `users` row
+      // (`deleteUserIfOrphaned`) — the FK that `acceptProposal` would otherwise violate below.
+      await eraseMember(
+        { db, logger, superadminIds: [] },
+        { workspaceId: ws.id, userId: maria.id, actor: actorOf(owner.id, 'owner') },
+      );
+      expect(await getUserByTgId(db, 2)).toBeNull();
+
+      const [pendingAfter] = await db.select().from(proposals).where(eq(proposals.id, pendingProposal.id));
+      const payloadAfter = pendingAfter?.payload as Record<string, unknown>;
+      expect(payloadAfter.quote).toBe(texts.erase.redactedQuote);
+      expect(payloadAfter.quoteAuthorUserId).toBeNull();
+
+      const deps = {
+        db,
+        clock: fixedClock('2026-09-24T09:00:00Z'),
+        config: {} as Env,
+        messenger: new FakeMessenger(),
+        logger,
+        workspace: ws,
+        taskHooks: [],
+      };
+      const result = await acceptProposal(deps, {
+        proposalId: pendingProposal.id,
+        actor: actorOf(owner.id, 'owner'),
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error('expected acceptProposal to succeed');
+      expect(result.value.quoteAuthorUserId).toBeNull();
+    },
+  );
+
+  it(
+    'does not fabricate a redacted quote on a proposal that never had one (payload.quote is null) even ' +
+      'when payload.quoteAuthorUserId is set to the erased member (processBatch can store this combination ' +
+      'when the source message had no text)',
+    async () => {
+      const { ws, owner, maria, chat } = await setupSchool();
+
+      const [proposal] = await db
+        .insert(proposals)
+        .values({
+          workspaceId: ws.id,
+          chatId: chat.id,
+          kind: 'create',
+          payload: {
+            title: 'Задача без цитаты',
+            reasoning: 'placeholder',
+            origin: 'ai',
+            quote: null,
+            quoteAuthorName: null,
+            quoteAuthorUserId: maria.id,
+          },
+          confidence: 0.9,
+          policyDecision: 'shown',
+          status: 'pending',
+        })
+        .returning();
+      if (!proposal) throw new Error('setup: failed to insert proposal');
+
+      await eraseMember(
+        { db, logger, superadminIds: [] },
+        { workspaceId: ws.id, userId: maria.id, actor: actorOf(owner.id, 'owner') },
+      );
+
+      const [after] = await db.select().from(proposals).where(eq(proposals.id, proposal.id));
+      const payloadAfter = after?.payload as Record<string, unknown>;
+      expect(payloadAfter.quote).toBeNull();
+    },
+  );
 
   it("leaves a task's and a proposal's quote untouched when their quote author is a different member", async () => {
     const { ws, owner, maria, chat } = await setupSchool();

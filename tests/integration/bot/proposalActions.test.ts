@@ -222,6 +222,35 @@ describe('proposal decision callbacks (v1:p:*)', () => {
     expect(tasksAfterSecondPress).toHaveLength(1);
   });
 
+  // D46 fix round 1 (test gap #3): the only prior coverage of `tasks.quote_author_user_id` inserted it
+  // directly via a raw fixture (`erase.test.ts`), never through the real `acceptProposal` ->
+  // `TaskService.create` plumbing (`decide.ts`'s `buildCreateInput` -> `service.ts`'s `create`). If that
+  // one line were ever dropped, every AI-created task would silently get a `null` author and the whole
+  // D46 redaction feature would quietly stop working for new tasks, with the suite staying green.
+  it('carries payload.quoteAuthorUserId onto the created task.quoteAuthorUserId', async () => {
+    const harness = await createBotHarness();
+    await makeOwner(harness, OWNER);
+    const quoteAuthor = await upsertTelegramUser(harness.db, { id: MEMBER.id, first_name: MEMBER.firstName });
+    await harness.db.insert(memberships).values({
+      workspaceId: harness.deps.workspace.id,
+      userId: quoteAuthor.id,
+      role: 'member',
+      displayName: MEMBER.firstName,
+    });
+    const proposal = await insertCreateProposal(harness, {
+      payload: { quoteAuthorUserId: quoteAuthor.id },
+    });
+    const data = encodeCallback({ entity: 'p', action: 'acc', id: proposal.id });
+
+    await harness.send(callback(OWNER, data, botKeyboardMessage(OWNER)));
+
+    const [task] = await harness.db
+      .select()
+      .from(tasks)
+      .where(eq(tasks.workspaceId, harness.deps.workspace.id));
+    expect(task?.quoteAuthorUserId).toBe(quoteAuthor.id);
+  });
+
   it('two concurrent accepts on the same proposal create exactly one task; the loser gets already_decided', async () => {
     const harness = await createBotHarness();
     const owner = await makeOwner(harness, OWNER);
