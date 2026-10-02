@@ -60,8 +60,12 @@ export function renderPeopleList(rows: MemberWithUser[], workspace: WorkspaceRow
 /**
  * Pure render for a single member's `/people` card (Task 1.10): name,
  * aliases, timezone, an edit button (`v1:u:edt:<membershipId>`, which enters
- * `editPerson.ts`'s dialog) and a back button. No delete-data button yet —
- * that arrives in Task 3.12.
+ * `editPerson.ts`'s dialog), a "delete data" button (`v1:u:era:<membershipId>`,
+ * Task 3.12 — `src/bot/handlers/people.ts`'s own double-confirmation flow,
+ * same shape as `taskCallbacks.ts`'s delete-forever flow) and a back button.
+ * Shown on every member's card, including the Owner's own — the Owner-can't-
+ * erase-themselves rule (`eraseMember`'s `'owner_must_transfer'`) is enforced
+ * by the handler, not by hiding this button.
  */
 export function renderPersonCard(row: MemberWithUser, workspace: WorkspaceRow, at: Date): PeopleView {
   const lines = [
@@ -77,6 +81,12 @@ export function renderPersonCard(row: MemberWithUser, workspace: WorkspaceRow, a
         {
           text: texts.people.editButton,
           data: encodeCallback({ entity: 'u', action: 'edt', id: row.membership.id }),
+        },
+      ],
+      [
+        {
+          text: texts.erase.memberButton,
+          data: encodeCallback({ entity: 'u', action: 'era', id: row.membership.id }),
         },
       ],
       backButtonRow(),

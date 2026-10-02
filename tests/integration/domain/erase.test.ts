@@ -1,0 +1,389 @@
+import { describe, it, expect, beforeEach } from 'vitest';
+import { eq } from 'drizzle-orm';
+import { getTestDb, truncateAll } from '../../helpers/db.js';
+import { createLogger } from '../../../src/ops/logger.js';
+import { FakeMessenger } from '../../helpers/fakeMessenger.js';
+import { ensureDefaultWorkspace } from '../../../src/domain/workspaces/repo.js';
+import { upsertTelegramUser, getUserByTgId } from '../../../src/domain/people/repo.js';
+import { upsertChatOnAdd, pauseChatRow, markChatLeft } from '../../../src/domain/chats/repo.js';
+import type { Actor } from '../../../src/domain/people/permissions.js';
+import { eraseMember, EraseMemberError } from '../../../src/domain/people/erase.js';
+import { eraseWorkspace, EraseWorkspaceError } from '../../../src/domain/workspaces/erase.js';
+import {
+  chats,
+  memberships,
+  messages,
+  proposals,
+  taskEvents,
+  tasks,
+  workspaces,
+} from '../../../src/db/schema/index.js';
+import { texts } from '../../../src/bot/texts/ru.js';
+import { MessengerError } from '../../../src/domain/messenger.js';
+
+const db = getTestDb();
+const logger = createLogger({ level: 'silent' });
+beforeEach(() => truncateAll(db));
+
+function actorOf(userId: number, role: 'owner' | 'member' | null, isSuperadmin = false): Actor {
+  return { userId, isSuperadmin, role, dmStarted: true };
+}
+
+async function setupSchool() {
+  const ws = await ensureDefaultWorkspace(db, { name: 'School', timezone: 'Europe/Moscow' });
+  const owner = await upsertTelegramUser(db, { id: 1, first_name: 'Anna' });
+  await db
+    .insert(memberships)
+    .values({ workspaceId: ws.id, userId: owner.id, role: 'owner', displayName: 'Anna' });
+  const maria = await upsertTelegramUser(db, { id: 2, first_name: 'Maria' });
+  await db
+    .insert(memberships)
+    .values({ workspaceId: ws.id, userId: maria.id, role: 'member', displayName: 'Maria' });
+  const chat = await upsertChatOnAdd(db, {
+    tgChatId: -100,
+    title: 'Group',
+    type: 'supergroup',
+    workspaceId: ws.id,
+    addedByUserId: owner.id,
+    status: 'active',
+    pendingSince: null,
+    now: new Date('2026-09-23T12:00:00Z'),
+  });
+  return { ws, owner, maria, chat };
+}
+
+describe('eraseMember', () => {
+  it("erases Maria's data: her messages, task anonymization, source_quote, audit actor fields, source_message_ids, membership and the user row", async () => {
+    const { ws, owner, maria, chat } = await setupSchool();
+
+    // Maria's own message, quoted by a task sourced from it.
+    const [mariaMessage] = await db
+      .insert(messages)
+      .values({
+        chatId: chat.id,
+        tgMessageId: 10,
+        authorUserId: maria.id,
+        sentAt: new Date('2026-09-23T12:01:00Z'),
+        text: 'Сделаю расписание к пятнице',
+      })
+      .returning();
+    if (!mariaMessage) throw new Error('setup: failed to insert mariaMessage');
+
+    // Another member's message, untouched.
+    const [otherMessage] = await db
+      .insert(messages)
+      .values({
+        chatId: chat.id,
+        tgMessageId: 11,
+        authorUserId: owner.id,
+        sentAt: new Date('2026-09-23T12:02:00Z'),
+        text: 'Спасибо',
+      })
+      .returning();
+    if (!otherMessage) throw new Error('setup: failed to insert otherMessage');
+
+    const [task] = await db
+      .insert(tasks)
+      .values({
+        workspaceId: ws.id,
+        title: 'Подготовить расписание',
+        assigneeUserId: maria.id,
+        origin: 'ai',
+        sourceChatId: chat.id,
+        sourceTgMessageId: mariaMessage.tgMessageId,
+        sourceQuote: 'Сделаю расписание к пятнице',
+        createdByUserId: owner.id,
+      })
+      .returning();
+    if (!task) throw new Error('setup: failed to insert task');
+
+    const [untouchedTask] = await db
+      .insert(tasks)
+      .values({
+        workspaceId: ws.id,
+        title: 'Другая задача',
+        origin: 'manual_group',
+        createdByUserId: owner.id,
+      })
+      .returning();
+    if (!untouchedTask) throw new Error('setup: failed to insert untouchedTask');
+
+    const [event] = await db
+      .insert(taskEvents)
+      .values({ taskId: task.id, actorType: 'user', actorUserId: maria.id, type: 'status_changed' })
+      .returning();
+    if (!event) throw new Error('setup: failed to insert task event');
+
+    const [proposal] = await db
+      .insert(proposals)
+      .values({
+        workspaceId: ws.id,
+        chatId: chat.id,
+        kind: 'create',
+        payload: { title: 'Подготовить расписание' },
+        confidence: 0.9,
+        policyDecision: 'shown',
+        status: 'accepted',
+        sourceMessageIds: [mariaMessage.id, otherMessage.id],
+        decidedByUserId: maria.id,
+      })
+      .returning();
+    if (!proposal) throw new Error('setup: failed to insert proposal');
+
+    const result = await eraseMember(
+      { db, logger, superadminIds: [] },
+      { workspaceId: ws.id, userId: maria.id, actor: actorOf(owner.id, 'owner') },
+    );
+
+    expect(result).toEqual({ messages: 1, tasksAnonymized: 1, userDeleted: true });
+
+    // Her message is gone; the other member's message is untouched.
+    const remainingMessages = await db.select().from(messages).where(eq(messages.chatId, chat.id));
+    expect(remainingMessages.map((m) => m.id)).toEqual([otherMessage.id]);
+
+    // The task she was assigned to is anonymized.
+    const [taskAfter] = await db.select().from(tasks).where(eq(tasks.id, task.id));
+    expect(taskAfter?.assigneeUserId).toBeNull();
+    expect(taskAfter?.assigneeNameText).toBe(texts.erase.anonymous);
+    expect(taskAfter?.sourceQuote).toBeNull();
+
+    // A task she was never involved with is untouched.
+    const [untouchedAfter] = await db.select().from(tasks).where(eq(tasks.id, untouchedTask.id));
+    expect(untouchedAfter?.title).toBe('Другая задача');
+
+    // task_events.actor_user_id cleared, the event row itself stays (audit trail).
+    const [eventAfter] = await db.select().from(taskEvents).where(eq(taskEvents.id, event.id));
+    expect(eventAfter).toBeDefined();
+    expect(eventAfter?.actorUserId).toBeNull();
+
+    // proposals.decided_by_user_id cleared, her message id removed from source_message_ids, the
+    // proposal row itself stays (audit trail / feedback-report input).
+    const [proposalAfter] = await db.select().from(proposals).where(eq(proposals.id, proposal.id));
+    expect(proposalAfter).toBeDefined();
+    expect(proposalAfter?.decidedByUserId).toBeNull();
+    expect(proposalAfter?.sourceMessageIds).toEqual([otherMessage.id]);
+
+    // Membership and the user row itself are both gone — no other workspace, not a superadmin.
+    const [membershipAfter] = await db.select().from(memberships).where(eq(memberships.userId, maria.id));
+    expect(membershipAfter).toBeUndefined();
+    expect(await getUserByTgId(db, 2)).toBeNull();
+  });
+
+  it('keeps the users row when the member still belongs to another workspace', async () => {
+    const { ws, owner, maria } = await setupSchool();
+    const otherWs = await db
+      .insert(workspaces)
+      .values({ name: 'Other School', timezone: 'Europe/Moscow' })
+      .returning();
+    const other = otherWs[0];
+    if (!other) throw new Error('setup: failed to insert other workspace');
+    await db.insert(memberships).values({
+      workspaceId: other.id,
+      userId: maria.id,
+      role: 'member',
+      displayName: 'Maria',
+    });
+
+    const result = await eraseMember(
+      { db, logger, superadminIds: [] },
+      { workspaceId: ws.id, userId: maria.id, actor: actorOf(owner.id, 'owner') },
+    );
+
+    expect(result.userDeleted).toBe(false);
+    expect(await getUserByTgId(db, 2)).not.toBeNull();
+    // The membership in the *other* workspace is untouched.
+    const [otherMembership] = await db
+      .select()
+      .from(memberships)
+      .where(eq(memberships.workspaceId, other.id));
+    expect(otherMembership?.userId).toBe(maria.id);
+  });
+
+  it('keeps the users row when the member is a configured superadmin, even with no remaining membership', async () => {
+    const { ws, owner, maria } = await setupSchool();
+
+    const result = await eraseMember(
+      { db, logger, superadminIds: [2] },
+      { workspaceId: ws.id, userId: maria.id, actor: actorOf(owner.id, 'owner') },
+    );
+
+    expect(result.userDeleted).toBe(false);
+    expect(await getUserByTgId(db, 2)).not.toBeNull();
+  });
+
+  it('refuses when the owner tries to erase themselves — they must /transfer ownership first', async () => {
+    const { ws, owner } = await setupSchool();
+
+    await expect(
+      eraseMember(
+        { db, logger, superadminIds: [] },
+        { workspaceId: ws.id, userId: owner.id, actor: actorOf(owner.id, 'owner') },
+      ),
+    ).rejects.toMatchObject({ reason: 'owner_must_transfer' });
+
+    // Nothing was touched — the owner's own membership is still there.
+    const [membershipAfter] = await db.select().from(memberships).where(eq(memberships.userId, owner.id));
+    expect(membershipAfter?.role).toBe('owner');
+  });
+
+  it('refuses a non-owner actor (forbidden) without touching anything', async () => {
+    const { ws, maria } = await setupSchool();
+    const member2 = await upsertTelegramUser(db, { id: 3, first_name: 'Nina' });
+    await db
+      .insert(memberships)
+      .values({ workspaceId: ws.id, userId: member2.id, role: 'member', displayName: 'Nina' });
+
+    await expect(
+      eraseMember(
+        { db, logger, superadminIds: [] },
+        { workspaceId: ws.id, userId: maria.id, actor: actorOf(member2.id, 'member') },
+      ),
+    ).rejects.toMatchObject({ reason: 'forbidden' });
+
+    expect(await getUserByTgId(db, 2)).not.toBeNull();
+  });
+
+  it('refuses an unknown target membership (not_found)', async () => {
+    const { ws, owner } = await setupSchool();
+    const stranger = await upsertTelegramUser(db, { id: 999, first_name: 'Ghost' });
+
+    await expect(
+      eraseMember(
+        { db, logger, superadminIds: [] },
+        { workspaceId: ws.id, userId: stranger.id, actor: actorOf(owner.id, 'owner') },
+      ),
+    ).rejects.toMatchObject({ reason: 'not_found' });
+  });
+
+  it('is an instance of EraseMemberError with a readonly reason', async () => {
+    const { ws, owner } = await setupSchool();
+    try {
+      await eraseMember(
+        { db, logger, superadminIds: [] },
+        { workspaceId: ws.id, userId: owner.id, actor: actorOf(owner.id, 'owner') },
+      );
+      expect.unreachable('expected eraseMember to throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(EraseMemberError);
+      expect((err as EraseMemberError).reason).toBe('owner_must_transfer');
+    }
+  });
+});
+
+describe('eraseWorkspace', () => {
+  it('leaves no DB rows for the workspace and makes the bot leave every chat it was still active in', async () => {
+    const { ws, owner, maria, chat } = await setupSchool();
+
+    const pausedChatActive = await upsertChatOnAdd(db, {
+      tgChatId: -101,
+      title: 'Paused group',
+      type: 'supergroup',
+      workspaceId: ws.id,
+      addedByUserId: owner.id,
+      status: 'active',
+      pendingSince: null,
+      now: new Date('2026-09-23T12:00:00Z'),
+    });
+    const pausedChat = await pauseChatRow(db, pausedChatActive.id, new Date('2026-09-23T12:00:00Z'));
+    if (!pausedChat) throw new Error('setup: failed to pause the chat');
+
+    const leftChatActive = await upsertChatOnAdd(db, {
+      tgChatId: -102,
+      title: 'Already left',
+      type: 'supergroup',
+      workspaceId: ws.id,
+      addedByUserId: owner.id,
+      status: 'active',
+      pendingSince: null,
+      now: new Date('2026-09-23T12:00:00Z'),
+    });
+    const leftChat = await markChatLeft(db, leftChatActive.id, new Date('2026-09-23T12:00:00Z'));
+    if (!leftChat) throw new Error('setup: failed to mark the chat left');
+
+    await db.insert(messages).values({
+      chatId: chat.id,
+      tgMessageId: 1,
+      authorUserId: maria.id,
+      sentAt: new Date('2026-09-23T12:01:00Z'),
+      text: 'привет',
+    });
+    const [task] = await db
+      .insert(tasks)
+      .values({ workspaceId: ws.id, title: 'Task', origin: 'manual_group', assigneeUserId: maria.id })
+      .returning();
+    if (!task) throw new Error('setup: failed to insert task');
+    await db
+      .insert(taskEvents)
+      .values({ taskId: task.id, actorType: 'user', actorUserId: owner.id, type: 'created' });
+    await db.insert(proposals).values({
+      workspaceId: ws.id,
+      chatId: chat.id,
+      kind: 'create',
+      payload: { title: 'Task' },
+      confidence: 0.9,
+      policyDecision: 'shown',
+    });
+
+    const messenger = new FakeMessenger();
+    await eraseWorkspace(
+      { db, messenger, logger },
+      { workspaceId: ws.id, actor: actorOf(owner.id, 'owner', true) },
+    );
+
+    // The bot left every chat it was still active in (active/paused), not the one already left.
+    expect(messenger.left.sort()).toEqual([chat.tgChatId, pausedChat.tgChatId].sort());
+    expect(messenger.left).not.toContain(leftChat.tgChatId);
+
+    // No row scoped to this workspace remains.
+    expect(await db.select().from(chats).where(eq(chats.workspaceId, ws.id))).toHaveLength(0);
+    expect(await db.select().from(tasks).where(eq(tasks.workspaceId, ws.id))).toHaveLength(0);
+    expect(await db.select().from(proposals).where(eq(proposals.workspaceId, ws.id))).toHaveLength(0);
+    expect(await db.select().from(memberships).where(eq(memberships.workspaceId, ws.id))).toHaveLength(0);
+    expect(await db.select().from(messages).where(eq(messages.chatId, chat.id))).toHaveLength(0);
+    expect(await db.select().from(taskEvents).where(eq(taskEvents.taskId, task.id))).toHaveLength(0);
+  });
+
+  it('refuses a non-superadmin actor (even the owner) without touching anything', async () => {
+    const { ws, owner } = await setupSchool();
+    const messenger = new FakeMessenger();
+
+    await expect(
+      eraseWorkspace(
+        { db, messenger, logger },
+        { workspaceId: ws.id, actor: actorOf(owner.id, 'owner', false) },
+      ),
+    ).rejects.toMatchObject({ reason: 'forbidden' });
+
+    expect(messenger.left).toHaveLength(0);
+    // Both memberships from `setupSchool` (owner + Maria) are untouched.
+    expect(await db.select().from(memberships).where(eq(memberships.workspaceId, ws.id))).toHaveLength(2);
+  });
+
+  it('is an instance of EraseWorkspaceError', async () => {
+    const { ws, owner } = await setupSchool();
+    const messenger = new FakeMessenger();
+    try {
+      await eraseWorkspace(
+        { db, messenger, logger },
+        { workspaceId: ws.id, actor: actorOf(owner.id, 'owner') },
+      );
+      expect.unreachable('expected eraseWorkspace to throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(EraseWorkspaceError);
+      expect((err as EraseWorkspaceError).reason).toBe('forbidden');
+    }
+  });
+
+  it('continues erasing the DB even if leaving one chat fails on the Telegram side', async () => {
+    const { ws, owner } = await setupSchool();
+    const messenger = new FakeMessenger();
+    messenger.failNextWith(new MessengerError('forbidden', 'kicked already'));
+
+    await eraseWorkspace(
+      { db, messenger, logger },
+      { workspaceId: ws.id, actor: actorOf(owner.id, 'owner', true) },
+    );
+
+    expect(await db.select().from(chats).where(eq(chats.workspaceId, ws.id))).toHaveLength(0);
+  });
+});

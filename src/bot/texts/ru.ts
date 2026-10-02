@@ -647,6 +647,52 @@ export const texts = {
     /** At least one field was saved. */
     saved: 'Данные участника сохранены.',
   },
+  /**
+   * GDPR-style erasure (SPEC §19.3.3, plan.md Task 3.12): `src/domain/people/erase.ts`'s `eraseMember`
+   * (`/people` → a member's card → "Удалить данные") and `src/domain/workspaces/erase.ts`'s
+   * `eraseWorkspace` (`/admin` → "Удалить workspace полностью"). Both flows use the same double-
+   * confirmation shape `texts.taskCard`'s delete-forever flow established (SPEC §12.4).
+   */
+  erase: {
+    /** `tasks.assignee_name_text` for a task whose assignee's data was erased (`eraseMember`). */
+    anonymous: '[удалено]',
+    /** Button on `/people`'s per-member card (`renderPersonCard`) — the initial tap. */
+    memberButton: '🗑 Удалить данные',
+    /** First of the two required confirmations. `name` is the member's already-escaped display name. */
+    memberConfirm1(name: string): string {
+      return (
+        `Удалить все данные участника «${name}»? Будут удалены его сообщения, он будет убран из ` +
+        'участников, а задачи, где он исполнитель, — обезличены. Это действие нельзя отменить.'
+      );
+    },
+    /** The second (final) confirmation. */
+    memberConfirm2: 'Вы точно уверены? Отменить это действие будет невозможно.',
+    /** `eraseMember` refused with `'owner_must_transfer'` — shown instead of the confirmation screens. */
+    ownerMustTransfer:
+      'Нельзя удалить данные владельца школы. Сначала передайте права другому участнику: /transfer.',
+    /** `eraseMember` refused with `'not_found'` — the membership was removed by another update meanwhile. */
+    memberNotFound: 'Участник не найден.',
+    memberDone(messages: number, tasksAnonymized: number): string {
+      return (
+        `✅ Данные участника удалены: сообщений — ${String(messages)}, обезличено задач — ` +
+        `${String(tasksAnonymized)}.`
+      );
+    },
+    /** Button on `/admin`'s panel (superadmin only) — the initial tap for `eraseWorkspace`. */
+    workspaceButton: '🗑 Удалить workspace полностью',
+    /** First of the two required confirmations. */
+    workspaceConfirm1:
+      'Удалить ВСЕ данные этой школы — чаты, сообщения, задачи, участников? Бот покинет все чаты. ' +
+      'Это действие нельзя отменить.',
+    /** The second (final) confirmation. */
+    workspaceConfirm2:
+      'Вы точно уверены? Это необратимо удалит все данные школы без возможности восстановления.',
+    workspaceDone: '✅ Workspace полностью удалён. Бот покинул все чаты.',
+    /** Shared by both confirmation flows. */
+    confirmButton: 'Да, продолжить',
+    confirmForeverButton: 'Да, удалить навсегда',
+    cancelButton: '↩️ Отмена',
+  },
   privacy: {
     /**
      * SPEC §15.2 — published once per chat by `publishNoticeOnce`

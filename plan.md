@@ -541,7 +541,7 @@ describe('planTaskNotifications', () => {
   - `eraseMember(deps, { workspaceId, userId, actor }): Promise<{ messages: number; tasksAnonymized: number; userDeleted: boolean }>`;
   - `eraseWorkspace(deps, { workspaceId, actor }): Promise<void>` — только superadmin, бот также покидает все чаты workspace.
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
   1. `eraseMember(Мария)`:
      - её сообщения удалены;
      - в задачах, где она исполнитель, `assignee_user_id=null`, `assignee_name_text` берётся из `texts.erase.anonymous` («[удалено]»);
@@ -552,8 +552,8 @@ describe('planTaskNotifications', () => {
   2. Owner не может удалить себя (сначала `/transfer`).
   3. Нужно двойное подтверждение.
   4. `eraseWorkspace` → в БД нет строк этого workspace, `leaveChat` вызван для каждого активного чата.
-- [ ] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(privacy): add per-member and per-workspace data erasure`.
+- [x] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(privacy): add per-member and per-workspace data erasure`.
 
 ### Task 3.13: `pnpm feedback-report` (SPEC §20.4)
 

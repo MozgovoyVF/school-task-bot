@@ -2,9 +2,12 @@ import type { Bot } from 'grammy';
 import type { Clock } from '../../time/clock.js';
 import type { Env } from '../../config/env.js';
 import type { Db } from '../../db/client.js';
+import type { Logger } from '../../ops/logger.js';
+import type { Messenger, Buttons } from '../../domain/messenger.js';
 import type { WorkspaceRow } from '../../domain/workspaces/repo.js';
 import { aiStats, listRecentBatches } from '../../domain/ai/stats.js';
 import { reanalyze } from '../../domain/proposals/queries.js';
+import { eraseWorkspace, EraseWorkspaceError } from '../../domain/workspaces/erase.js';
 import { texts } from '../texts/ru.js';
 import type { BotContext } from '../context.js';
 import { renderAdminPanel } from '../views/admin.js';
@@ -12,6 +15,7 @@ import { renderAdminOwnerCodeButton } from '../views/transfer.js';
 import { renderAdminAiSettingsButton } from '../views/settings.js';
 import { renderDebugPanel } from '../views/debug.js';
 import { toInlineKeyboard } from '../keyboards/build.js';
+import { decodeCallback, encodeCallback } from '../keyboards/callbackCodec.js';
 
 const DEBUG_BATCH_LIMIT = 10;
 
@@ -19,8 +23,43 @@ export interface AdminHandlersDeps {
   config: Pick<Env, 'GIT_SHA'>;
   clock: Clock;
   db: Db;
+  logger: Logger;
+  messenger: Messenger;
   /** For `aiStats`'s day/month cost boundaries, `/debug`'s timestamp display and `reanalyze`'s chat lookup (all workspace-scoped, MVP's single default workspace — SPEC §5.2). */
   workspace: WorkspaceRow;
+}
+
+/**
+ * The `/admin` panel's "delete workspace entirely" button (Task 3.12, SPEC
+ * §19.3.3) — initial tap, first of the two required confirmations. `id` is
+ * unused (always `0`, the codec just requires one — same convention as
+ * `renderTransferPrompt`'s own `v1:o:dem:0`/`v1:o:rem:0`).
+ */
+function eraseWorkspaceButton(): Buttons {
+  return [
+    [{ text: texts.erase.workspaceButton, data: encodeCallback({ entity: 'a', action: 'wera', id: 0 }) }],
+  ];
+}
+
+function eraseWorkspaceConfirm1Buttons(): Buttons {
+  return [
+    [
+      { text: texts.erase.confirmButton, data: encodeCallback({ entity: 'a', action: 'werb', id: 0 }) },
+      { text: texts.erase.cancelButton, data: encodeCallback({ entity: 'a', action: 'werx', id: 0 }) },
+    ],
+  ];
+}
+
+function eraseWorkspaceConfirm2Buttons(): Buttons {
+  return [
+    [
+      {
+        text: texts.erase.confirmForeverButton,
+        data: encodeCallback({ entity: 'a', action: 'werc', id: 0 }),
+      },
+      { text: texts.erase.cancelButton, data: encodeCallback({ entity: 'a', action: 'werx', id: 0 }) },
+    ],
+  ];
 }
 
 /** `ctx.match`'s free-form argument text, split on whitespace, empty tokens dropped — shared by `/debug`'s optional chat id and `/reanalyze`'s chat id + optional N. */
@@ -84,7 +123,11 @@ export function registerAdminHandlers(bot: Bot<BotContext>, deps: AdminHandlersD
     });
     await ctx.reply(view.text, {
       parse_mode: 'HTML',
-      reply_markup: toInlineKeyboard([...renderAdminOwnerCodeButton(), ...renderAdminAiSettingsButton()]),
+      reply_markup: toInlineKeyboard([
+        ...renderAdminOwnerCodeButton(),
+        ...renderAdminAiSettingsButton(),
+        ...eraseWorkspaceButton(),
+      ]),
     });
   });
 
@@ -151,5 +194,80 @@ export function registerAdminHandlers(bot: Bot<BotContext>, deps: AdminHandlersD
         ? texts.reanalyze.requeued(result.batches, result.messages)
         : texts.reanalyze.created(result.messages);
     await ctx.reply(text, { parse_mode: 'HTML' });
+  });
+
+  // `/admin`'s "delete workspace entirely" button (Task 3.12, SPEC §19.3.3): `wera` → first confirm
+  // screen, `werb` → second confirm screen, `werc` → the actual `eraseWorkspace` call, `werx` → cancel,
+  // back to the live panel. Same three-step double-confirmation shape as `taskCallbacks.ts`'s
+  // `del`/`dla`/`dlb` and `people.ts`'s `era`/`erb`/`erc`. Registered on its own `/^v1:a:wer/` prefix,
+  // disjoint from `settings.ts`'s own `/^v1:a:ais:/` registration for the same entity — neither regex
+  // can ever match the other's actions, so there is no handler-ordering dependency between them.
+  bot.callbackQuery(/^v1:a:wer/, async (ctx) => {
+    if (ctx.chat?.type !== 'private') {
+      await ctx.answerCallbackQuery();
+      return;
+    }
+    const decoded = decodeCallback(ctx.callbackQuery.data);
+    if (!decoded) {
+      await ctx.answerCallbackQuery();
+      return;
+    }
+    if (!ctx.state.actor.isSuperadmin) {
+      await ctx.answerCallbackQuery({ text: texts.common.forbidden });
+      return;
+    }
+
+    const msg = ctx.callbackQuery.message;
+    async function editInto(text: string, buttons: Buttons): Promise<void> {
+      if (!msg) return;
+      await deps.messenger.edit(msg.chat.id, msg.message_id, text, { buttons });
+    }
+
+    if (decoded.action === 'wera') {
+      await ctx.answerCallbackQuery();
+      await editInto(texts.erase.workspaceConfirm1, eraseWorkspaceConfirm1Buttons());
+      return;
+    }
+
+    if (decoded.action === 'werb') {
+      await ctx.answerCallbackQuery();
+      await editInto(texts.erase.workspaceConfirm2, eraseWorkspaceConfirm2Buttons());
+      return;
+    }
+
+    if (decoded.action === 'werc') {
+      try {
+        await eraseWorkspace(
+          { db: deps.db, messenger: deps.messenger, logger: deps.logger },
+          { workspaceId: deps.workspace.id, actor: ctx.state.actor },
+        );
+        await ctx.answerCallbackQuery();
+        await editInto(texts.erase.workspaceDone, []);
+      } catch (err) {
+        if (!(err instanceof EraseWorkspaceError)) throw err;
+        await ctx.answerCallbackQuery({ text: texts.common.forbidden });
+      }
+      return;
+    }
+
+    // decoded.action === 'werx' — cancel, back to the live panel.
+    await ctx.answerCallbackQuery();
+    const uptimeSec = (deps.clock.now().getTime() - startedAt.getTime()) / 1000;
+    const stats = await aiStats(deps.db, { now: deps.clock.now(), tz: deps.workspace.timezone });
+    const view = renderAdminPanel({
+      gitSha: deps.config.GIT_SHA,
+      uptimeSec,
+      ai: {
+        costToday: stats.costToday,
+        costMonth: stats.costMonth,
+        last7: stats.last7,
+        precision: stats.precision,
+      },
+    });
+    await editInto(view.text, [
+      ...renderAdminOwnerCodeButton(),
+      ...renderAdminAiSettingsButton(),
+      ...eraseWorkspaceButton(),
+    ]);
   });
 }
