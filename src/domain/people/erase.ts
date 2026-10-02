@@ -1,7 +1,7 @@
 import { and, eq, sql } from 'drizzle-orm';
-import type { Db } from '../../db/client.js';
+import type { Db, DbOrTx } from '../../db/client.js';
 import type { Logger } from '../../ops/logger.js';
-import { memberships, proposals, tasks, users } from '../../db/schema/index.js';
+import { claimCodes, memberships, proposals, tasks, users } from '../../db/schema/index.js';
 // `domain/` importing `bot/texts` is a deliberate, pre-existing exception (see
 // `src/domain/chats/lifecycle.ts`'s own doc comment): `tasks.assignee_name_text`'s erased-assignee
 // placeholder is Russian user-facing copy, and SPEC §19.3.3/plan.md Task 3.12's brief pin it to
@@ -50,6 +50,44 @@ export interface EraseMemberResult {
   messages: number;
   tasksAnonymized: number;
   userDeleted: boolean;
+}
+
+/**
+ * Deletes `userId`'s own `users` row, but only if they now have no
+ * remaining workspace membership anywhere and are not a configured
+ * superadmin (SPEC §19.3.3's "not a superadmin" clause) — shared by
+ * {@link eraseMember} below and `src/domain/workspaces/erase.ts`'s
+ * `eraseWorkspace`, which both need this exact same orphan check (D43
+ * review finding I2: `eraseWorkspace` used to rely only on FK cascades and
+ * never deleted the `users` rows themselves). The caller must have already
+ * removed whatever membership row(s) made `userId` relevant to begin with.
+ *
+ * Deletes `claim_codes.created_by_user_id` rows for this user first: unlike
+ * every other FK to `users` (`set null`/`cascade`), that one is `ON DELETE
+ * no action` (D43 review finding C1 — a former Owner who issued a `/transfer`
+ * code before being demoted would otherwise make the `users` delete below
+ * fail with a raw FK violation, rolling back the whole erasure). A claim
+ * code is single-use and worthless once redeemed (`used_at` is already set
+ * by then, or it's simply expired/unused) — deleting it here is a safe,
+ * intentional cleanup, not data loss.
+ */
+export async function deleteUserIfOrphaned(
+  tx: DbOrTx,
+  userId: number,
+  superadminIds: number[],
+): Promise<boolean> {
+  const user = await getUserById(tx, userId);
+  if (!user || superadminIds.includes(user.tgUserId)) return false;
+
+  const [remaining] = await tx
+    .select({ count: sql<number>`count(*)::int` })
+    .from(memberships)
+    .where(eq(memberships.userId, userId));
+  if ((remaining?.count ?? 0) !== 0) return false;
+
+  await tx.delete(claimCodes).where(eq(claimCodes.createdByUserId, userId));
+  await tx.delete(users).where(eq(users.id, userId));
+  return true;
 }
 
 /**
@@ -163,19 +201,8 @@ export async function eraseMember(
     await tx.delete(memberships).where(eq(memberships.id, membership.id));
 
     // 8. Delete the `users` row too, but only if they now have no other workspace membership and are
-    // not a superadmin (SPEC §19.3.3 / plan.md brief).
-    const user = await getUserById(tx, input.userId);
-    let userDeleted = false;
-    if (user && !deps.superadminIds.includes(user.tgUserId)) {
-      const [remaining] = await tx
-        .select({ count: sql<number>`count(*)::int` })
-        .from(memberships)
-        .where(eq(memberships.userId, input.userId));
-      if ((remaining?.count ?? 0) === 0) {
-        await tx.delete(users).where(eq(users.id, input.userId));
-        userDeleted = true;
-      }
-    }
+    // not a superadmin (SPEC §19.3.3 / plan.md brief) — see `deleteUserIfOrphaned` above.
+    const userDeleted = await deleteUserIfOrphaned(tx, input.userId, deps.superadminIds);
 
     return {
       messages: deletedMessages.length,

@@ -2,8 +2,9 @@ import { and, eq, ne } from 'drizzle-orm';
 import type { Db } from '../../db/client.js';
 import type { Logger } from '../../ops/logger.js';
 import type { Messenger } from '../messenger.js';
-import { chats, workspaces } from '../../db/schema/index.js';
+import { chats, memberships, workspaces } from '../../db/schema/index.js';
 import { can, type Actor } from '../people/permissions.js';
+import { deleteUserIfOrphaned } from '../people/erase.js';
 
 export type EraseWorkspaceErrorReason = 'forbidden';
 
@@ -21,6 +22,17 @@ export interface EraseWorkspaceDeps {
   db: Db;
   messenger: Messenger;
   logger: Logger;
+  /**
+   * Telegram ids of configured superadmins — same convention as
+   * `src/domain/chats/lifecycle.ts`'s `ChatLifecycleDeps.superadminIds` and
+   * `src/domain/people/erase.ts`'s `EraseMemberDeps.superadminIds`. Threaded
+   * through to `deleteUserIfOrphaned` below (D43 review finding I2): a
+   * member's own `users` row should be deleted on workspace erasure under
+   * the exact same "no remaining membership, not a superadmin" rule
+   * `eraseMember` already applies, not left behind just because this path
+   * used to rely on FK cascades alone.
+   */
+  superadminIds: number[];
 }
 
 export interface EraseWorkspaceInput {
@@ -41,17 +53,21 @@ export interface EraseWorkspaceInput {
  * Telegram API call, and a `messenger.leaveChat` failure (e.g. the bot was
  * already removed from that chat) is logged (id only, CLAUDE.md §8) and does
  * not abort the rest of the erasure — the DB-side privacy obligation must
- * still complete even if one Telegram call fails.
+ * still complete even if one Telegram call fails for some chats.
  *
- * The deletion itself is two statements that rely on the schema's own FK
- * cascade (`src/db/schema/*.ts`): deleting `chats` cascades `messages`,
- * `analysis_batches` and chat-scoped `proposals`; deleting the `workspaces`
- * row itself then cascades `tasks` (and `task_events` via `tasks`'s own
- * cascade), any remaining `proposals`, `notifications`, `memberships` and
- * `claim_codes`. Both run in one transaction (brief: a half-erased workspace
- * would be a real privacy/correctness bug, not a cosmetic one). `users` rows
- * are deliberately left untouched — identity is global (`users.tg_user_id`
- * is unique across the whole bot), not scoped to one workspace.
+ * The deletion itself: `chats` is deleted first, relying on the schema's own
+ * FK cascade (`src/db/schema/*.ts`) to take `messages`, `analysis_batches`
+ * and chat-scoped `proposals` with it. The workspace's member user ids are
+ * captured *before* the `workspaces` row is deleted (which cascades `tasks`
+ * — and `task_events` via `tasks`'s own cascade —, any remaining
+ * `proposals`, `notifications`, `memberships` and `claim_codes`), so that
+ * each one can then be passed to `deleteUserIfOrphaned` (D43 review finding
+ * I2) once their membership here is gone: identity (`users`) is global, not
+ * workspace-scoped, so a member who still belongs to another workspace, or
+ * is a configured superadmin, correctly keeps their `users` row. Everything
+ * from the member-id read through the last `deleteUserIfOrphaned` call runs
+ * in one transaction (brief: a half-erased workspace would be a real
+ * privacy/correctness bug, not a cosmetic one).
  */
 export async function eraseWorkspace(deps: EraseWorkspaceDeps, input: EraseWorkspaceInput): Promise<void> {
   if (!can(input.actor, 'admin.tech')) {
@@ -71,13 +87,24 @@ export async function eraseWorkspace(deps: EraseWorkspaceDeps, input: EraseWorks
     }
   }
 
-  await deps.db.transaction(async (tx) => {
+  const usersDeleted = await deps.db.transaction(async (tx) => {
+    const members = await tx
+      .select({ userId: memberships.userId })
+      .from(memberships)
+      .where(eq(memberships.workspaceId, input.workspaceId));
+
     await tx.delete(chats).where(eq(chats.workspaceId, input.workspaceId));
     await tx.delete(workspaces).where(eq(workspaces.id, input.workspaceId));
+
+    let deleted = 0;
+    for (const member of members) {
+      if (await deleteUserIfOrphaned(tx, member.userId, deps.superadminIds)) deleted++;
+    }
+    return deleted;
   });
 
   deps.logger.info(
-    { workspaceId: input.workspaceId, chatsLeft: chatsToLeave.length },
+    { workspaceId: input.workspaceId, chatsLeft: chatsToLeave.length, usersDeleted },
     'eraseWorkspace: done',
   );
 }

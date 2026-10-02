@@ -20,7 +20,8 @@ import { decodeCallback, encodeCallback } from '../keyboards/callbackCodec.js';
 const DEBUG_BATCH_LIMIT = 10;
 
 export interface AdminHandlersDeps {
-  config: Pick<Env, 'GIT_SHA'>;
+  /** `SUPERADMIN_TG_IDS` is only needed for `eraseWorkspace`'s own `deleteUserIfOrphaned` check (`src/domain/workspaces/erase.ts`). */
+  config: Pick<Env, 'GIT_SHA' | 'SUPERADMIN_TG_IDS'>;
   clock: Clock;
   db: Db;
   logger: Logger;
@@ -238,7 +239,12 @@ export function registerAdminHandlers(bot: Bot<BotContext>, deps: AdminHandlersD
     if (decoded.action === 'werc') {
       try {
         await eraseWorkspace(
-          { db: deps.db, messenger: deps.messenger, logger: deps.logger },
+          {
+            db: deps.db,
+            messenger: deps.messenger,
+            logger: deps.logger,
+            superadminIds: deps.config.SUPERADMIN_TG_IDS,
+          },
           { workspaceId: deps.workspace.id, actor: ctx.state.actor },
         );
         await ctx.answerCallbackQuery();

@@ -9,10 +9,14 @@ import { upsertChatOnAdd, pauseChatRow, markChatLeft } from '../../../src/domain
 import type { Actor } from '../../../src/domain/people/permissions.js';
 import { eraseMember, EraseMemberError } from '../../../src/domain/people/erase.js';
 import { eraseWorkspace, EraseWorkspaceError } from '../../../src/domain/workspaces/erase.js';
+import { createClaimCode, redeemClaimCode } from '../../../src/domain/people/claim.js';
 import {
+  analysisBatches,
   chats,
+  claimCodes,
   memberships,
   messages,
+  notifications,
   proposals,
   taskEvents,
   tasks,
@@ -268,79 +272,222 @@ describe('eraseMember', () => {
       expect((err as EraseMemberError).reason).toBe('owner_must_transfer');
     }
   });
+
+  it(
+    'erases a former owner who issued a /transfer claim code before being demoted, without hitting the ' +
+      "claim_codes FK (D43 review C1: claim_codes.created_by_user_id is 'on delete no action', unlike " +
+      'every other FK to users)',
+    async () => {
+      const { ws, owner, maria } = await setupSchool();
+
+      // Mirrors /transfer -> demote -> the successor runs /claim: owner issues the code, Maria redeems
+      // it and becomes the new owner, owner is demoted to a plain member.
+      const { code } = await createClaimCode(db, {
+        workspaceId: ws.id,
+        createdByUserId: owner.id,
+        previousOwnerAction: 'demote',
+        now: new Date('2026-09-23T12:00:00Z'),
+      });
+      const redeemed = await redeemClaimCode(db, {
+        code,
+        userId: maria.id,
+        now: new Date('2026-09-23T12:01:00Z'),
+      });
+      expect(redeemed.ok).toBe(true);
+
+      // The claim code the ex-owner created is still there, pointing at their user row.
+      const codesBefore = await db.select().from(claimCodes).where(eq(claimCodes.createdByUserId, owner.id));
+      expect(codesBefore).toHaveLength(1);
+
+      // Erasing the now-plain-member ex-owner used to roll back the whole transaction with a raw FK
+      // violation on claim_codes.created_by_user_id — this must now succeed and actually delete them.
+      const result = await eraseMember(
+        { db, logger, superadminIds: [] },
+        { workspaceId: ws.id, userId: owner.id, actor: actorOf(maria.id, 'owner') },
+      );
+
+      expect(result.userDeleted).toBe(true);
+      expect(await getUserByTgId(db, 1)).toBeNull();
+      const codesAfter = await db.select().from(claimCodes).where(eq(claimCodes.createdByUserId, owner.id));
+      expect(codesAfter).toHaveLength(0);
+    },
+  );
+
+  it("does not touch a second workspace's data when erasing a member in the first", async () => {
+    const { ws, owner, maria, chat } = await setupSchool();
+
+    const [otherWs] = await db
+      .insert(workspaces)
+      .values({ name: 'Other School', timezone: 'Europe/Moscow' })
+      .returning();
+    if (!otherWs) throw new Error('setup: failed to insert other workspace');
+    const ownerB = await upsertTelegramUser(db, { id: 50, first_name: 'Petr' });
+    await db
+      .insert(memberships)
+      .values({ workspaceId: otherWs.id, userId: ownerB.id, role: 'owner', displayName: 'Petr' });
+    const chatB = await upsertChatOnAdd(db, {
+      tgChatId: -200,
+      title: 'Other group',
+      type: 'supergroup',
+      workspaceId: otherWs.id,
+      addedByUserId: ownerB.id,
+      status: 'active',
+      pendingSince: null,
+      now: new Date('2026-09-23T12:00:00Z'),
+    });
+    const [msgB] = await db
+      .insert(messages)
+      .values({
+        chatId: chatB.id,
+        tgMessageId: 1,
+        authorUserId: ownerB.id,
+        sentAt: new Date('2026-09-23T12:01:00Z'),
+        text: 'B message',
+      })
+      .returning();
+    if (!msgB) throw new Error('setup: failed to insert msgB');
+    const [taskB] = await db
+      .insert(tasks)
+      .values({ workspaceId: otherWs.id, title: 'B task', origin: 'manual_group', assigneeUserId: ownerB.id })
+      .returning();
+    if (!taskB) throw new Error('setup: failed to insert taskB');
+
+    await eraseMember(
+      { db, logger, superadminIds: [] },
+      { workspaceId: ws.id, userId: maria.id, actor: actorOf(owner.id, 'owner') },
+    );
+
+    // Workspace A's own chat is untouched by its own member's erasure.
+    const [chatAfter] = await db.select().from(chats).where(eq(chats.id, chat.id));
+    expect(chatAfter).toBeDefined();
+
+    // Workspace B's message and task are completely untouched.
+    const [msgBAfter] = await db.select().from(messages).where(eq(messages.id, msgB.id));
+    expect(msgBAfter).toBeDefined();
+    const [taskBAfter] = await db.select().from(tasks).where(eq(tasks.id, taskB.id));
+    expect(taskBAfter?.assigneeUserId).toBe(ownerB.id);
+    expect(await getUserByTgId(db, 50)).not.toBeNull();
+  });
 });
 
 describe('eraseWorkspace', () => {
-  it('leaves no DB rows for the workspace and makes the bot leave every chat it was still active in', async () => {
-    const { ws, owner, maria, chat } = await setupSchool();
+  it(
+    'leaves no DB rows for the workspace (including notifications, claim_codes, analysis_batches and ' +
+      "the workspace row itself), deletes orphaned members' users rows, and makes the bot leave every " +
+      'chat it was still active in',
+    async () => {
+      const { ws, owner, maria, chat } = await setupSchool();
 
-    const pausedChatActive = await upsertChatOnAdd(db, {
-      tgChatId: -101,
-      title: 'Paused group',
-      type: 'supergroup',
-      workspaceId: ws.id,
-      addedByUserId: owner.id,
-      status: 'active',
-      pendingSince: null,
-      now: new Date('2026-09-23T12:00:00Z'),
-    });
-    const pausedChat = await pauseChatRow(db, pausedChatActive.id, new Date('2026-09-23T12:00:00Z'));
-    if (!pausedChat) throw new Error('setup: failed to pause the chat');
+      const pausedChatActive = await upsertChatOnAdd(db, {
+        tgChatId: -101,
+        title: 'Paused group',
+        type: 'supergroup',
+        workspaceId: ws.id,
+        addedByUserId: owner.id,
+        status: 'active',
+        pendingSince: null,
+        now: new Date('2026-09-23T12:00:00Z'),
+      });
+      const pausedChat = await pauseChatRow(db, pausedChatActive.id, new Date('2026-09-23T12:00:00Z'));
+      if (!pausedChat) throw new Error('setup: failed to pause the chat');
 
-    const leftChatActive = await upsertChatOnAdd(db, {
-      tgChatId: -102,
-      title: 'Already left',
-      type: 'supergroup',
-      workspaceId: ws.id,
-      addedByUserId: owner.id,
-      status: 'active',
-      pendingSince: null,
-      now: new Date('2026-09-23T12:00:00Z'),
-    });
-    const leftChat = await markChatLeft(db, leftChatActive.id, new Date('2026-09-23T12:00:00Z'));
-    if (!leftChat) throw new Error('setup: failed to mark the chat left');
+      const leftChatActive = await upsertChatOnAdd(db, {
+        tgChatId: -102,
+        title: 'Already left',
+        type: 'supergroup',
+        workspaceId: ws.id,
+        addedByUserId: owner.id,
+        status: 'active',
+        pendingSince: null,
+        now: new Date('2026-09-23T12:00:00Z'),
+      });
+      const leftChat = await markChatLeft(db, leftChatActive.id, new Date('2026-09-23T12:00:00Z'));
+      if (!leftChat) throw new Error('setup: failed to mark the chat left');
 
-    await db.insert(messages).values({
-      chatId: chat.id,
-      tgMessageId: 1,
-      authorUserId: maria.id,
-      sentAt: new Date('2026-09-23T12:01:00Z'),
-      text: 'привет',
-    });
-    const [task] = await db
-      .insert(tasks)
-      .values({ workspaceId: ws.id, title: 'Task', origin: 'manual_group', assigneeUserId: maria.id })
-      .returning();
-    if (!task) throw new Error('setup: failed to insert task');
-    await db
-      .insert(taskEvents)
-      .values({ taskId: task.id, actorType: 'user', actorUserId: owner.id, type: 'created' });
-    await db.insert(proposals).values({
-      workspaceId: ws.id,
-      chatId: chat.id,
-      kind: 'create',
-      payload: { title: 'Task' },
-      confidence: 0.9,
-      policyDecision: 'shown',
-    });
+      await db.insert(messages).values({
+        chatId: chat.id,
+        tgMessageId: 1,
+        authorUserId: maria.id,
+        sentAt: new Date('2026-09-23T12:01:00Z'),
+        text: 'привет',
+      });
+      const [task] = await db
+        .insert(tasks)
+        .values({ workspaceId: ws.id, title: 'Task', origin: 'manual_group', assigneeUserId: maria.id })
+        .returning();
+      if (!task) throw new Error('setup: failed to insert task');
+      await db
+        .insert(taskEvents)
+        .values({ taskId: task.id, actorType: 'user', actorUserId: owner.id, type: 'created' });
+      await db.insert(proposals).values({
+        workspaceId: ws.id,
+        chatId: chat.id,
+        kind: 'create',
+        payload: { title: 'Task' },
+        confidence: 0.9,
+        policyDecision: 'shown',
+      });
+      await db.insert(notifications).values({
+        workspaceId: ws.id,
+        taskId: task.id,
+        recipientUserId: owner.id,
+        kind: 'due',
+        fireAt: new Date('2026-09-23T13:00:00Z'),
+        dedupeKey: `task:${String(task.id)}:due`,
+      });
+      await db.insert(analysisBatches).values({ chatId: chat.id, status: 'done' });
+      // Owner issued a /transfer code that was never redeemed — must not block their own users-row delete.
+      await createClaimCode(db, {
+        workspaceId: ws.id,
+        createdByUserId: owner.id,
+        previousOwnerAction: 'demote',
+        now: new Date('2026-09-23T12:00:00Z'),
+      });
 
+      const messenger = new FakeMessenger();
+      await eraseWorkspace(
+        { db, messenger, logger, superadminIds: [] },
+        { workspaceId: ws.id, actor: actorOf(owner.id, 'owner', true) },
+      );
+
+      // The bot left every chat it was still active in (active/paused), not the one already left.
+      expect(messenger.left.sort()).toEqual([chat.tgChatId, pausedChat.tgChatId].sort());
+      expect(messenger.left).not.toContain(leftChat.tgChatId);
+
+      // No row scoped to this workspace remains, including the workspace row itself.
+      expect(await db.select().from(workspaces).where(eq(workspaces.id, ws.id))).toHaveLength(0);
+      expect(await db.select().from(chats).where(eq(chats.workspaceId, ws.id))).toHaveLength(0);
+      expect(await db.select().from(tasks).where(eq(tasks.workspaceId, ws.id))).toHaveLength(0);
+      expect(await db.select().from(proposals).where(eq(proposals.workspaceId, ws.id))).toHaveLength(0);
+      expect(await db.select().from(memberships).where(eq(memberships.workspaceId, ws.id))).toHaveLength(0);
+      expect(await db.select().from(messages).where(eq(messages.chatId, chat.id))).toHaveLength(0);
+      expect(await db.select().from(taskEvents).where(eq(taskEvents.taskId, task.id))).toHaveLength(0);
+      expect(await db.select().from(notifications).where(eq(notifications.workspaceId, ws.id))).toHaveLength(
+        0,
+      );
+      expect(await db.select().from(claimCodes).where(eq(claimCodes.workspaceId, ws.id))).toHaveLength(0);
+      expect(await db.select().from(analysisBatches).where(eq(analysisBatches.chatId, chat.id))).toHaveLength(
+        0,
+      );
+
+      // Both members had no other workspace and were not superadmins (`superadminIds: []`) — their
+      // `users` rows are gone too (D43 review I2), including the claim code the owner created.
+      expect(await getUserByTgId(db, owner.tgUserId)).toBeNull();
+      expect(await getUserByTgId(db, maria.tgUserId)).toBeNull();
+    },
+  );
+
+  it("keeps a configured superadmin member's users row, but still deletes a non-superadmin member's", async () => {
+    const { ws, owner, maria } = await setupSchool();
     const messenger = new FakeMessenger();
+
     await eraseWorkspace(
-      { db, messenger, logger },
+      { db, messenger, logger, superadminIds: [owner.tgUserId] },
       { workspaceId: ws.id, actor: actorOf(owner.id, 'owner', true) },
     );
 
-    // The bot left every chat it was still active in (active/paused), not the one already left.
-    expect(messenger.left.sort()).toEqual([chat.tgChatId, pausedChat.tgChatId].sort());
-    expect(messenger.left).not.toContain(leftChat.tgChatId);
-
-    // No row scoped to this workspace remains.
-    expect(await db.select().from(chats).where(eq(chats.workspaceId, ws.id))).toHaveLength(0);
-    expect(await db.select().from(tasks).where(eq(tasks.workspaceId, ws.id))).toHaveLength(0);
-    expect(await db.select().from(proposals).where(eq(proposals.workspaceId, ws.id))).toHaveLength(0);
-    expect(await db.select().from(memberships).where(eq(memberships.workspaceId, ws.id))).toHaveLength(0);
-    expect(await db.select().from(messages).where(eq(messages.chatId, chat.id))).toHaveLength(0);
-    expect(await db.select().from(taskEvents).where(eq(taskEvents.taskId, task.id))).toHaveLength(0);
+    expect(await getUserByTgId(db, owner.tgUserId)).not.toBeNull();
+    expect(await getUserByTgId(db, maria.tgUserId)).toBeNull();
   });
 
   it('refuses a non-superadmin actor (even the owner) without touching anything', async () => {
@@ -349,7 +496,7 @@ describe('eraseWorkspace', () => {
 
     await expect(
       eraseWorkspace(
-        { db, messenger, logger },
+        { db, messenger, logger, superadminIds: [] },
         { workspaceId: ws.id, actor: actorOf(owner.id, 'owner', false) },
       ),
     ).rejects.toMatchObject({ reason: 'forbidden' });
@@ -364,7 +511,7 @@ describe('eraseWorkspace', () => {
     const messenger = new FakeMessenger();
     try {
       await eraseWorkspace(
-        { db, messenger, logger },
+        { db, messenger, logger, superadminIds: [] },
         { workspaceId: ws.id, actor: actorOf(owner.id, 'owner') },
       );
       expect.unreachable('expected eraseWorkspace to throw');
@@ -374,16 +521,101 @@ describe('eraseWorkspace', () => {
     }
   });
 
-  it('continues erasing the DB even if leaving one chat fails on the Telegram side', async () => {
+  it('continues erasing the DB even if leaving some chats fails on the Telegram side, for every remaining chat', async () => {
     const { ws, owner } = await setupSchool();
+
+    // Three active chats: the Telegram-side failure below is queued for only the *first* `leaveChat`
+    // call, so this proves one chat's failure does not stop the loop from reaching the other two.
+    const chatB = await upsertChatOnAdd(db, {
+      tgChatId: -201,
+      title: 'B',
+      type: 'supergroup',
+      workspaceId: ws.id,
+      addedByUserId: owner.id,
+      status: 'active',
+      pendingSince: null,
+      now: new Date('2026-09-23T12:00:00Z'),
+    });
+    const chatC = await upsertChatOnAdd(db, {
+      tgChatId: -202,
+      title: 'C',
+      type: 'supergroup',
+      workspaceId: ws.id,
+      addedByUserId: owner.id,
+      status: 'active',
+      pendingSince: null,
+      now: new Date('2026-09-23T12:00:00Z'),
+    });
+
     const messenger = new FakeMessenger();
     messenger.failNextWith(new MessengerError('forbidden', 'kicked already'));
 
     await eraseWorkspace(
-      { db, messenger, logger },
+      { db, messenger, logger, superadminIds: [] },
       { workspaceId: ws.id, actor: actorOf(owner.id, 'owner', true) },
     );
 
+    // The failing chat's `leaveChat` call still happened (it just threw, and was logged) — only the two
+    // that didn't fail actually recorded themselves in `messenger.left`.
+    expect(messenger.left.sort()).toEqual([chatB.tgChatId, chatC.tgChatId].sort());
+    // All three chats' DB rows are gone regardless of which `leaveChat` call failed.
     expect(await db.select().from(chats).where(eq(chats.workspaceId, ws.id))).toHaveLength(0);
+  });
+
+  it("leaves a second workspace's chats, messages, tasks and users completely untouched", async () => {
+    const { ws, owner } = await setupSchool();
+
+    const [otherWs] = await db
+      .insert(workspaces)
+      .values({ name: 'Other School', timezone: 'Europe/Moscow' })
+      .returning();
+    if (!otherWs) throw new Error('setup: failed to insert other workspace');
+    const ownerB = await upsertTelegramUser(db, { id: 60, first_name: 'Olga' });
+    await db
+      .insert(memberships)
+      .values({ workspaceId: otherWs.id, userId: ownerB.id, role: 'owner', displayName: 'Olga' });
+    const chatB = await upsertChatOnAdd(db, {
+      tgChatId: -300,
+      title: 'Other group',
+      type: 'supergroup',
+      workspaceId: otherWs.id,
+      addedByUserId: ownerB.id,
+      status: 'active',
+      pendingSince: null,
+      now: new Date('2026-09-23T12:00:00Z'),
+    });
+    const [msgB] = await db
+      .insert(messages)
+      .values({
+        chatId: chatB.id,
+        tgMessageId: 1,
+        authorUserId: ownerB.id,
+        sentAt: new Date('2026-09-23T12:01:00Z'),
+        text: 'B message',
+      })
+      .returning();
+    if (!msgB) throw new Error('setup: failed to insert msgB');
+    const [taskB] = await db
+      .insert(tasks)
+      .values({ workspaceId: otherWs.id, title: 'B task', origin: 'manual_group' })
+      .returning();
+    if (!taskB) throw new Error('setup: failed to insert taskB');
+
+    const messenger = new FakeMessenger();
+    await eraseWorkspace(
+      { db, messenger, logger, superadminIds: [] },
+      { workspaceId: ws.id, actor: actorOf(owner.id, 'owner', true) },
+    );
+
+    expect(messenger.left).not.toContain(chatB.tgChatId);
+    const [otherWsAfter] = await db.select().from(workspaces).where(eq(workspaces.id, otherWs.id));
+    expect(otherWsAfter).toBeDefined();
+    const [chatBAfter] = await db.select().from(chats).where(eq(chats.id, chatB.id));
+    expect(chatBAfter).toBeDefined();
+    const [msgBAfter] = await db.select().from(messages).where(eq(messages.id, msgB.id));
+    expect(msgBAfter).toBeDefined();
+    const [taskBAfter] = await db.select().from(tasks).where(eq(tasks.id, taskB.id));
+    expect(taskBAfter).toBeDefined();
+    expect(await getUserByTgId(db, 60)).not.toBeNull();
   });
 });
