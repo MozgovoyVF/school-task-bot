@@ -572,7 +572,7 @@ describe('planTaskNotifications', () => {
 
 **Файлы:** создать `tests/integration/e2e/taskLifecycle.test.ts`; изменить `src/bot/commands.ts`, `src/bot/views/help.ts`.
 
-- [ ] **Шаг 1: сквозной тест** (bot harness, `fixedClock`, FixtureClient; каждый шаг — `clock.set(...)` и `ticker.tickOnce()`):
+- [x] **Шаг 1: сквозной тест** (bot harness, `fixedClock`, FixtureClient; каждый шаг — `clock.set(...)` и `ticker.tickOnce()`):
   1. Среда, 12:00 МСК. Сообщение в группе «Маша, подготовь расписание к пятнице 18:00» → через 3 мин тик → карточка у owner → «✅ Создать».
   2. Мария (DM начат) **ничего не получает** — ни о назначении, ни напоминаний (D40).
   3. Четверг, 10:00 МСК → `pre_due` у owner.
@@ -581,9 +581,9 @@ describe('planTaskNotifications', () => {
   6. Мария пишет в группе «сделала» ответом на поручение → owner получает предложение закрыть задачу.
   7. Owner → «✅ Закрыть задачу» → задача `done`, запланированный `overdue` отменён. В субботу в 10:00 по этой задаче ничего не отправлено. Задача видна в `/archive`.
   8. Owner в поясе Asia/Yekaterinburg: сводка в 09:00 местного времени (`04:00Z`), в `03:59Z` её ещё нет.
-- [ ] **Шаг 2:** прогнать, исправить найденное. PASS.
-- [ ] **Шаг 3:** финальные `setMyCommands` для всех scope (SPEC §12.2, без `/my`, D40) и `/help` по ролям.
-- [ ] **Шаг 4: коммит и push:** `test(e2e): cover task lifecycle acceptance scenario`.
+- [x] **Шаг 2:** прогнать, исправить найденное. PASS.
+- [x] **Шаг 3:** финальные `setMyCommands` для всех scope (SPEC §12.2, без `/my`, D40) и `/help` по ролям.
+- [x] **Шаг 4: коммит и push:** `test(e2e): cover task lifecycle acceptance scenario`.
 - [ ] **Шаг 5: закрытие фазы.**
   1. `pnpm coverage` показывает не меньше 80% по `domain` и `ai/pipeline`.
   2. `docs/` и `CHANGELOG.md` обновлены.

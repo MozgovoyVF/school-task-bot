@@ -229,14 +229,13 @@ export const texts = {
      * `texts.help.*` (a distinct, command-reference text — see that
      * namespace) once the zone is saved.
      */
-    superadmin(): string {
+    superadmin(commandList: string): string {
       return [
         '👋 Здравствуйте! Я — Секретарь школы.',
         'Слежу за рабочими группами, нахожу поручения и договорённости и веду список задач.',
         '',
         'Доступные команды:',
-        '/admin — панель администратора',
-        '/help — эта справка',
+        commandList,
       ].join('\n');
     },
     /**
@@ -296,14 +295,12 @@ export const texts = {
    * and that menu can never drift apart.
    */
   help: {
-    /** `/help` for a superadmin. */
-    superadmin(): string {
-      return [
-        '📋 Доступные команды:',
-        '/admin — панель администратора',
-        '/timezone — часовой пояс',
-        '/help — эта справка',
-      ].join('\n');
+    /** `/help` for a superadmin. `commandList` is `src/bot/views/help.ts`'s rendering of
+     * `src/bot/commands.ts`'s `SUPERADMIN_COMMANDS` (the Owner's full list plus `/admin`/`/debug`/
+     * `/reanalyze`) — the same source `syncCommands` uses for a superadmin's own chat-scope menu, so this
+     * text can never list fewer commands than Telegram's menu actually offers them. */
+    superadmin(commandList: string): string {
+      return ['📋 Доступные команды:', commandList].join('\n');
     },
     /** `/help` for the workspace Owner. */
     owner(commandList: string): string {
