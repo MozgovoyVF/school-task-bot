@@ -75,6 +75,21 @@ manual task creation (`/task` in a group, `/new`, free DM text, forwards), `/set
 - Review-round findings across Tasks 3.1–3.12 (quiet-hours edge cases in the reminder chain,
   oversized-digest splitting, dead overdue chains after a quiet-summary cancel, claim-code and
   orphaned-user cleanup on erasure) — see individual task commits for detail.
+- **D47** (user decision, 2026-10-03, found during the `v0.4.0-rc.1` manual acceptance test): the
+  extractor could merge a brand-new instruction into an unrelated open task of similar topic as an
+  `update`, as long as the new instruction named a different person than the task's own assignee
+  (e.g. "Вероника, подготовь отчёт" wrongly merged into Masha's open "Подготовить отчёт" task).
+  `src/ai/schemas.ts`'s `update` action now carries `explicit_transfer`/`new_task_title`;
+  `src/ai/pipeline/resolve.ts` turns such an `update` into a brand-new `create` action instead,
+  unless the model flags an explicit hand-over (`explicit_transfer: true`, e.g. "передай
+  Веронике"); `src/ai/pipeline/processBatch.ts` plumbs the target task's current assignee into
+  `ResolveContext.targetTasks` for that comparison. Every `update`-kind card now also offers a
+  manual "➕ Создать новой задачей" escape hatch regardless of this rule
+  (`src/bot/views/proposalCard.ts`, `src/bot/texts/ru.ts`, `src/bot/keyboards/callbackCodec.ts`'s
+  new `asn` action, `src/bot/handlers/proposalCallbacks.ts`,
+  `src/domain/proposals/decide.ts`'s `createTaskFromUpdate`), including when the target is itself
+  a still-pending proposal (D44). New prompt `prompts/extractor.v3.md`
+  (`EXTRACTOR_PROMPT_VERSION`), 3 new synthetic examples in `prompts/examples.school_ru.json`.
 
 ### Known open points (flagged for the user, not blocking)
 

@@ -505,6 +505,147 @@ describe('proposal decision callbacks (v1:p:*)', () => {
     expect(lastAnswerText(harness)).toBe(texts.proposalDecide.targetGone);
   });
 
+  describe('D47 — "➕ Создать новой задачей" escape hatch on update-kind cards (plan.md Task 3.15)', () => {
+    it('creates a new task from newTaskTitle/changes.assignee, leaving the target task and its version untouched', async () => {
+      const harness = await createBotHarness();
+      await makeOwner(harness, OWNER);
+      const veronika = await upsertTelegramUser(harness.db, { id: 300, first_name: 'Veronika' });
+      await harness.db.insert(memberships).values({
+        workspaceId: harness.deps.workspace.id,
+        userId: veronika.id,
+        role: 'member',
+        displayName: 'Veronika',
+      });
+      const targetTask = await insertOpenTask(harness, {
+        title: 'Подготовить отчёт',
+        assigneeUserId: null,
+        assigneeNameText: 'Маша',
+      });
+      const proposal = await insertTargetProposal(harness, 'update', targetTask.id, {
+        changes: { assignee: { type: 'user', userId: veronika.id } },
+        newTaskTitle: 'Подготовить отчёт',
+      });
+      const data = encodeCallback({ entity: 'p', action: 'asn', id: proposal.id });
+
+      await harness.send(callback(OWNER, data, botKeyboardMessage(OWNER)));
+
+      const newTasks = await harness.db
+        .select()
+        .from(tasks)
+        .where(eq(tasks.workspaceId, harness.deps.workspace.id));
+      expect(newTasks).toHaveLength(2);
+      const created = newTasks.find((t) => t.id !== targetTask.id);
+      expect(created?.title).toBe('Подготовить отчёт');
+      expect(created?.assigneeUserId).toBe(veronika.id);
+
+      const [untouchedTarget] = await harness.db.select().from(tasks).where(eq(tasks.id, targetTask.id));
+      expect(untouchedTarget?.version).toBe(1);
+      expect(untouchedTarget?.assigneeNameText).toBe('Маша');
+
+      const decided = await getProposalRow(harness, proposal.id);
+      expect(decided?.status).toBe('accepted');
+
+      expect(lastEditTo(harness, OWNER.id).text).toBe(
+        `✅ Создано: T${String(created?.id)} «Подготовить отчёт»`,
+      );
+
+      // Repeat press is a no-op.
+      await harness.send(callback(OWNER, data, botKeyboardMessage(OWNER)));
+      expect(lastAnswerText(harness)).toBe(texts.proposalDecide.alreadyDecided);
+      const tasksAfterSecondPress = await harness.db
+        .select()
+        .from(tasks)
+        .where(eq(tasks.workspaceId, harness.deps.workspace.id));
+      expect(tasksAfterSecondPress).toHaveLength(2);
+    });
+
+    it("falls back to the target task's own title/assignee when payload carries neither", async () => {
+      const harness = await createBotHarness();
+      await makeOwner(harness, OWNER);
+      const maria = await upsertTelegramUser(harness.db, { id: 301, first_name: 'Maria' });
+      await harness.db.insert(memberships).values({
+        workspaceId: harness.deps.workspace.id,
+        userId: maria.id,
+        role: 'member',
+        displayName: 'Maria',
+      });
+      const targetTask = await insertOpenTask(harness, {
+        title: 'Исходное название',
+        assigneeUserId: maria.id,
+      });
+      const proposal = await insertTargetProposal(harness, 'update', targetTask.id, {
+        changes: { due: { dueAt: null, allDay: false, tz: null, inPast: false, invalid: false } },
+      });
+      const data = encodeCallback({ entity: 'p', action: 'asn', id: proposal.id });
+
+      await harness.send(callback(OWNER, data, botKeyboardMessage(OWNER)));
+
+      const newTasks = await harness.db
+        .select()
+        .from(tasks)
+        .where(eq(tasks.workspaceId, harness.deps.workspace.id));
+      const created = newTasks.find((t) => t.id !== targetTask.id);
+      expect(created?.title).toBe('Исходное название');
+      expect(created?.assigneeUserId).toBe(maria.id);
+    });
+
+    it('supports a target that is itself still a pending proposal (D44), using its own title as the fallback', async () => {
+      const harness = await createBotHarness();
+      await makeOwner(harness, OWNER);
+      const targetProposal = await insertCreateProposal(harness, { payload: { title: 'Задача из R#' } });
+      const dependent = await harness.db.transaction((tx) =>
+        insertProposal(tx, {
+          workspaceId: harness.deps.workspace.id,
+          chatId: null,
+          batchId: null,
+          kind: 'update',
+          category: null,
+          payload: defaultPayload({
+            title: undefined,
+            targetProposalId: targetProposal.id,
+          }),
+          targetTaskId: null,
+          confidence: 0.8,
+          policyDecision: 'shown',
+          policyReason: 'ok',
+          sourceMessageIds: [],
+          createdAt: harness.clock.now(),
+        }),
+      );
+      const data = encodeCallback({ entity: 'p', action: 'asn', id: dependent.id });
+
+      await harness.send(callback(OWNER, data, botKeyboardMessage(OWNER)));
+
+      const createdTasks = await harness.db
+        .select()
+        .from(tasks)
+        .where(eq(tasks.workspaceId, harness.deps.workspace.id));
+      expect(createdTasks).toHaveLength(1);
+      expect(createdTasks[0]?.title).toBe('Задача из R#');
+
+      const decidedDependent = await getProposalRow(harness, dependent.id);
+      expect(decidedDependent?.status).toBe('accepted');
+      // The target proposal itself is untouched by this decision.
+      const stillPendingTarget = await getProposalRow(harness, targetProposal.id);
+      expect(stillPendingTarget?.status).toBe('pending');
+    });
+
+    it('is forbidden for a member and creates no task', async () => {
+      const harness = await createBotHarness();
+      await makeOwner(harness, OWNER);
+      await makeMember(harness, MEMBER);
+      const targetTask = await insertOpenTask(harness);
+      const proposal = await insertTargetProposal(harness, 'update', targetTask.id);
+      const data = encodeCallback({ entity: 'p', action: 'asn', id: proposal.id });
+
+      await harness.send(callback(MEMBER, data, botKeyboardMessage(MEMBER)));
+
+      const allTasks = await harness.db.select().from(tasks);
+      expect(allTasks).toHaveLength(1); // only the pre-existing target task
+      expect(lastAnswerText(harness)).toBe(texts.common.forbidden);
+    });
+  });
+
   it('reacts with reactions.onAccept on the source message once the proposal is accepted', async () => {
     const harness = await createBotHarness();
     await makeOwner(harness, OWNER);

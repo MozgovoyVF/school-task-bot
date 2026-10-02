@@ -827,6 +827,9 @@ export const texts = {
     },
     applyButton: '✅ Применить',
     ignoreButton: '❌ Игнорировать',
+    /** D47 (plan.md Task 3.15): the manual escape hatch on every `update`-kind card — creates a brand-new
+     * task instead of applying the suggested change to the existing one. */
+    createAsNewButton: '➕ Создать новой задачей',
     /** `complete`-kind's single summary line; the `— «quote» (author)` evidence is omitted when `quote` is `null`. */
     completeLine(taskId: number, title: string, quote: string | null, author: string | null): string {
       const evidence = quote === null ? '' : ` — «${quote}»${author === null ? '' : ` (${author})`}`;

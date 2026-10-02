@@ -52,6 +52,24 @@ export const Action = z.discriminatedUnion('type', [
       assignee_ref: z.string().nullable().optional(),
       title: z.string().max(120).optional(),
     }),
+    // D47: whether this is an explicit hand-over of the target's assignee
+    // to someone else ("hand it to Veronika", "Veronika does it now instead
+    // of Masha") rather than a brand-new instruction that merely mentions the same
+    // topic as `target_ref` — `resolve.ts` uses this to decide whether a
+    // named-assignee conflict on the target becomes a new `create` action
+    // instead of applying as an `update` (plan.md decision D47). Optional
+    // here (unlike the wire schema below) so every fixture/example written
+    // before this field existed still parses; `resolve.ts` treats an absent
+    // value as `false` (the conservative default — not an explicit
+    // hand-over).
+    explicit_transfer: z.boolean().optional(),
+    // D47: the model's own title for the new task this `update` would
+    // become if the pipeline (or the Owner, via the card's manual escape
+    // hatch) decides to split it off from `target_ref` instead of applying
+    // it — same bounds as `create.title` (plan.md Task 3.15). Optional/
+    // nullable so old fixtures/examples without it still parse; absent is
+    // treated the same as `null` (fall back to the target's own title).
+    new_task_title: z.string().min(3).max(120).nullable().optional(),
     ...Base,
   }),
   z.object({ type: z.literal('complete'), target_ref: z.string().regex(/^[TR]\d+$/), ...Base }),
@@ -98,6 +116,11 @@ const ActionWire = z.discriminatedUnion('type', [
     type: z.literal('update'),
     target_ref: z.string().regex(/^[TR]\d+$/),
     changes: ChangesWire,
+    // D47 — see the local `Action` schema's `update` variant above for what
+    // these mean; required (not nullable/optional) here like every other
+    // wire field, since the wire schema always forces a value.
+    explicit_transfer: z.boolean(),
+    new_task_title: z.string().min(3).max(120).nullable(),
     ...Base,
   }),
   z.object({ type: z.literal('complete'), target_ref: z.string().regex(/^[TR]\d+$/), ...Base }),

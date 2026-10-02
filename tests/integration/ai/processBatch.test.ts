@@ -3,6 +3,7 @@ import { eq, asc, inArray } from 'drizzle-orm';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { getTestDb, truncateAll } from '../../helpers/db.js';
+import { EXTRACTOR_PROMPT_VERSION } from '../../../src/config/constants.js';
 import { fixedClock } from '../../helpers/clock.js';
 import { FakeMessenger } from '../../helpers/fakeMessenger.js';
 import { createLogger } from '../../../src/ops/logger.js';
@@ -242,7 +243,7 @@ describe('processBatch (plan.md Task 2.10)', () => {
     const batchAfter = await getBatch(batch.id);
     expect(batchAfter?.status).toBe('done');
     expect(batchAfter?.model).toBe('fixture/primary');
-    expect(batchAfter?.promptVersion).toBe('extractor.v2');
+    expect(batchAfter?.promptVersion).toBe(EXTRACTOR_PROMPT_VERSION);
     expect(batchAfter?.inputTokens).toBe(512);
     expect(batchAfter?.outputTokens).toBe(96);
     expect(Number(batchAfter?.costUsd)).toBeCloseTo(0.00081, 6);
@@ -405,6 +406,136 @@ describe('processBatch (plan.md Task 2.10)', () => {
     expect(created[0]?.kind).toBe('complete');
     expect(created[0]?.targetTaskId).toBe(task12.id);
     expect(created[0]?.sourceMessageIds).toEqual([m3.id]);
+  });
+
+  describe('D47 — new instruction vs update of an existing task (plan.md Task 3.15)', () => {
+    async function setupTargetTask(deps: AppDeps, now: Date) {
+      const maria = await makeMember(deps.workspace.id, 1, 'Мария');
+      const veronika = await makeMember(deps.workspace.id, 2, 'Вероника');
+      const owner = await makeMember(deps.workspace.id, 3, 'Директор', 'owner');
+      const [task] = await db
+        .insert(tasks)
+        .values({
+          id: 12,
+          workspaceId: deps.workspace.id,
+          title: 'Подготовить отчёт',
+          status: 'open',
+          assigneeUserId: maria.id,
+          origin: 'ai',
+          createdAt: now,
+          updatedAt: now,
+        })
+        .returning();
+      if (!task) throw new Error('failed to insert target task 12');
+      return { maria, veronika, owner, task };
+    }
+
+    function updateFixture(args: {
+      explicitTransfer: boolean;
+      newTaskTitle: string | null;
+      assigneeRef?: string;
+    }): CompletionResponse {
+      return {
+        content: JSON.stringify({
+          actions: [
+            {
+              type: 'update',
+              target_ref: 'T12',
+              changes: args.assigneeRef !== undefined ? { assignee_ref: args.assigneeRef } : {},
+              explicit_transfer: args.explicitTransfer,
+              new_task_title: args.newTaskTitle,
+              source_message_ids: ['M1'],
+              confidence: 0.85,
+              reasoning: 'test',
+            },
+          ],
+        }),
+        usage: { inputTokens: 300, outputTokens: 50, costUsd: 0.0003 },
+        model: 'fixture/primary',
+        raw: {},
+      };
+    }
+
+    it('splits into a new create proposal (not a dup of T12) when a different named assignee is not an explicit transfer', async () => {
+      const clock = fixedClock('2026-09-23T09:00:00Z');
+      const now = clock.now();
+      const fixture = updateFixture({
+        explicitTransfer: false,
+        newTaskTitle: 'Подготовить отчёт',
+        assigneeRef: 'P2',
+      });
+      const { extraction } = extractorFrom([fixture]);
+      const deps = await makeDeps(clock, extraction);
+      const { veronika, owner, task } = await setupTargetTask(deps, now);
+
+      const chat = await makeChat(deps.workspace.id, -510, now);
+      const msg = await insertMessage(chat.id, 1, owner.id, now, 'Вероника, подготовь отчёт');
+      const batch = await makeBatch(chat.id, [msg.id]);
+
+      const result = await processBatch(deps, batch, { mode: 'auto' });
+      expect(result).toEqual({ shown: 1, suppressed: 0 });
+
+      const created = await proposalsForBatch(batch.id);
+      expect(created).toHaveLength(1);
+      const proposal = created[0]!;
+      expect(proposal.kind).toBe('create');
+      expect(proposal.targetTaskId).toBeNull();
+      const payload = proposal.payload as Record<string, unknown>;
+      expect(payload.title).toBe('Подготовить отчёт');
+      expect(payload.assignee).toEqual({ type: 'user', userId: veronika.id });
+
+      // The target task itself is untouched, and the new proposal was never flagged as a duplicate of it
+      // (different assignee) — the whole point of D47.
+      const [targetAfter] = await db.select().from(tasks).where(eq(tasks.id, task.id));
+      expect(targetAfter?.title).toBe('Подготовить отчёт');
+      expect(targetAfter?.assigneeUserId).not.toBe(veronika.id);
+    });
+
+    it('stays an update (assignee change on T12) when explicit_transfer is true', async () => {
+      const clock = fixedClock('2026-09-23T09:00:00Z');
+      const now = clock.now();
+      const fixture = updateFixture({ explicitTransfer: true, newTaskTitle: null, assigneeRef: 'P2' });
+      const { extraction } = extractorFrom([fixture]);
+      const deps = await makeDeps(clock, extraction);
+      const { veronika, owner, task } = await setupTargetTask(deps, now);
+
+      const chat = await makeChat(deps.workspace.id, -511, now);
+      const msg = await insertMessage(chat.id, 1, owner.id, now, 'передай отчёт Веронике');
+      const batch = await makeBatch(chat.id, [msg.id]);
+
+      await processBatch(deps, batch, { mode: 'auto' });
+
+      const created = await proposalsForBatch(batch.id);
+      expect(created).toHaveLength(1);
+      const proposal = created[0]!;
+      expect(proposal.kind).toBe('update');
+      expect(proposal.targetTaskId).toBe(task.id);
+      const payload = proposal.payload as Record<string, unknown>;
+      expect(payload.changes).toMatchObject({ assignee: { type: 'user', userId: veronika.id } });
+    });
+
+    it('stays an update and carries payload.newTaskTitle when there is no assignee change', async () => {
+      const clock = fixedClock('2026-09-23T09:00:00Z');
+      const now = clock.now();
+      const fixture = updateFixture({ explicitTransfer: false, newTaskTitle: 'Подготовить отчёт' });
+      const { extraction } = extractorFrom([fixture]);
+      const deps = await makeDeps(clock, extraction);
+      const { owner, task } = await setupTargetTask(deps, now);
+
+      const chat = await makeChat(deps.workspace.id, -512, now);
+      const msg = await insertMessage(chat.id, 1, owner.id, now, 'отчёт перенесём на четверг');
+      const batch = await makeBatch(chat.id, [msg.id]);
+
+      await processBatch(deps, batch, { mode: 'auto' });
+
+      const created = await proposalsForBatch(batch.id);
+      expect(created).toHaveLength(1);
+      const proposal = created[0]!;
+      expect(proposal.kind).toBe('update');
+      expect(proposal.targetTaskId).toBe(task.id);
+      const payload = proposal.payload as Record<string, unknown>;
+      expect(payload.newTaskTitle).toBe('Подготовить отчёт');
+    });
   });
 
   it('rolls the whole transaction back when insertProposal fails on the second proposal: no proposals, messages stay pending, batch stays unfinished', async () => {

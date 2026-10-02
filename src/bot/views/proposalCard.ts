@@ -174,6 +174,14 @@ function buttonsFor(v: ProposalCardView): Buttons {
         { text: texts.proposalCard.editButton, data: encodeCallback({ entity: 'p', action: 'edt', id }) },
         { text: texts.proposalCard.ignoreButton, data: encodeCallback({ entity: 'p', action: 'rej', id }) },
       ]);
+      // D47 (plan.md Task 3.15): every `update`-kind card gets this escape hatch, not just the ones the
+      // pipeline's own D47 rule (`src/ai/pipeline/resolve.ts`) already split into a `create` proposal.
+      rows.push([
+        {
+          text: texts.proposalCard.createAsNewButton,
+          data: encodeCallback({ entity: 'p', action: 'asn', id }),
+        },
+      ]);
       break;
     case 'complete':
       rows.push([

@@ -30,7 +30,7 @@ import {
   type OpenProposalForLlm,
   type OpenTaskForLlm,
 } from './buildInput.js';
-import { resolveActions, type ResolveContext, type ResolvedAction } from './resolve.js';
+import { resolveActions, taskAssignee, type ResolveContext, type ResolvedAction } from './resolve.js';
 import { applyPolicy, type PolicyMode } from './policy.js';
 import { findPossibleDuplicate, isRepeatInBatch } from './dedup.js';
 
@@ -198,12 +198,19 @@ function toPromptAssignee(
   return found ? { kind: 'participant', code: found.code } : { kind: 'none' };
 }
 
+interface LoadedOpenTasks {
+  forLlm: OpenTaskForLlm[];
+  /** D47 (plan.md Task 3.15) — see `ResolveContext.targetTasks`'s own doc comment (`resolve.ts`) for why
+   * this is built from the same raw rows rather than reusing `forLlm`'s lossy `toPromptAssignee` projection. */
+  targetTasks: ResolveContext['targetTasks'];
+}
+
 async function loadOpenTasks(
   db: AppDeps['db'],
   workspaceId: number,
   participants: readonly ParticipantForLlm[],
   ownerUserId: number,
-): Promise<OpenTaskForLlm[]> {
+): Promise<LoadedOpenTasks> {
   const rows = await db
     .select()
     .from(tasks)
@@ -215,13 +222,15 @@ async function loadOpenTasks(
     // task is the one most likely to be referenced by a follow-up message.
     .orderBy(desc(tasks.updatedAt))
     .limit(PROMPT_MAX_OPEN_TASKS);
-  return rows.map((row) => ({
+  const forLlm = rows.map((row) => ({
     id: row.id,
     title: row.title,
     assignee: toPromptAssignee(row, participants, ownerUserId),
     dueAt: row.dueAt,
     dueAllDay: row.dueAllDay,
   }));
+  const targetTasks = new Map(rows.map((row) => [row.id, { title: row.title, assignee: taskAssignee(row) }]));
+  return { forLlm, targetTasks };
 }
 
 const OpenProposalPayload = z.object({ title: z.string() });
@@ -342,6 +351,9 @@ function buildPayload(
     if (action.changes.assignee !== undefined) changes.assignee = action.changes.assignee;
     if (action.changes.title !== undefined) changes.title = action.changes.title;
     base.changes = changes;
+    // D47 (plan.md Task 3.15): threaded through even when the pipeline itself kept this as a plain
+    // `update` — the card's manual "➕ Create as a new task" (texts.proposalCard.createAsNewButton) escape hatch needs it too.
+    if (action.newTaskTitle !== undefined) base.newTaskTitle = action.newTaskTitle;
     return base;
   }
 
@@ -429,7 +441,7 @@ export async function processBatch(
       now,
       workspaceTz: deps.workspace.timezone,
       participants,
-      openTasks,
+      openTasks: openTasks.forLlm,
       openProposals,
       context: contextForLlm,
       messages: newForLlm,
@@ -455,6 +467,7 @@ export async function processBatch(
     workspaceTz: deps.workspace.timezone,
     now,
     fuzzy: settings.fuzzyTimes,
+    targetTasks: openTasks.targetTasks,
   };
 
   const { actions, dropped } = resolveActions(extracted.result, resolveCtx);

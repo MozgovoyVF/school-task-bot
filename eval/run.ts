@@ -18,7 +18,11 @@ import {
   type OpenProposalForLlm,
   type OpenTaskForLlm,
 } from '../src/ai/pipeline/buildInput.js';
-import { resolveActions, type ResolveContext } from '../src/ai/pipeline/resolve.js';
+import {
+  resolveActions,
+  type AssigneeResolution as ResolvedAssignee,
+  type ResolveContext,
+} from '../src/ai/pipeline/resolve.js';
 import { applyPolicy } from '../src/ai/pipeline/policy.js';
 import { resolveDue } from '../src/time/resolveDue.js';
 import { loadPrompt, type PromptBundle } from '../src/ai/prompts.js';
@@ -178,6 +182,16 @@ function toPromptAssignee(code: string | null): PromptAssignee {
   if (code === 'ALL') return { kind: 'all' };
   if (code === 'OWNER') return { kind: 'owner' };
   return { kind: 'participant', code };
+}
+
+/** D47 (plan.md Task 3.15): an eval case's open-task assignee code -> `resolve.ts`'s own `AssigneeResolution`
+ * (for `ResolveContext.targetTasks`) — eval cases only ever carry a participant code for an open task's
+ * assignee (`EvalCase`'s schema has no free-text-name case), so unlike `processBatch.ts`'s real `taskAssignee`
+ * this never produces a `'text'` result. */
+function toResolvedAssignee(code: string | null): ResolvedAssignee {
+  if (code === null) return { type: 'none' };
+  if (code === 'ALL') return { type: 'all' };
+  return { type: 'user', userId: participantCodeToUserId(code) };
 }
 
 function parseOpenItemDue(due: string | null, zone: string): { dueAt: Date | null; dueAllDay: boolean } {
@@ -393,6 +407,7 @@ interface PipelineInput {
   now: Date;
   input: ExtractionInput;
   forResolve: ResolveContext['messages'];
+  targetTasks: ResolveContext['targetTasks'];
 }
 
 /**
@@ -425,6 +440,10 @@ function buildPipelineInput(evalCase: EvalCase, prompt: PromptBundle): PipelineI
     const { dueAt, dueAllDay } = parseOpenItemDue(t.due, evalCase.workspaceTz);
     return { id: i + 1, title: t.title, assignee: toPromptAssignee(t.assignee), dueAt, dueAllDay };
   });
+  // D47 (plan.md Task 3.15): `ResolveContext.targetTasks`, parallel to `openTasks` above (same `i + 1` ids).
+  const targetTasks = new Map(
+    evalCase.openTasks.map((t, i) => [i + 1, { title: t.title, assignee: toResolvedAssignee(t.assignee) }]),
+  );
   const openProposals: OpenProposalForLlm[] = evalCase.openProposals.map((p, i) => ({
     id: i + 1,
     title: p.title,
@@ -439,7 +458,7 @@ function buildPipelineInput(evalCase: EvalCase, prompt: PromptBundle): PipelineI
     prompt,
   );
 
-  return { now, input, forResolve };
+  return { now, input, forResolve, targetTasks };
 }
 
 /** Sum of every message's content length in a case's full rendered request — what the pre-flight cost estimate (brief step 3, broadened per review) prices. */
@@ -458,7 +477,7 @@ function computeResolvedExpectedDue(evalCase: EvalCase, settings: Settings): Arr
 }
 
 async function runCase(evalCase: EvalCase, pipeline: PipelineInput, ctx: RunCtx): Promise<EvalRow> {
-  const { now, input, forResolve } = pipeline;
+  const { now, input, forResolve, targetTasks } = pipeline;
 
   const extraction = ctx.providerFactory(evalCase);
   const startedAt = performance.now();
@@ -472,6 +491,7 @@ async function runCase(evalCase: EvalCase, pipeline: PipelineInput, ctx: RunCtx)
     workspaceTz: evalCase.workspaceTz,
     now,
     fuzzy: ctx.settings.fuzzyTimes,
+    targetTasks,
   };
 
   const { actions, dropped } = resolveActions(extracted.result, resolveCtx);

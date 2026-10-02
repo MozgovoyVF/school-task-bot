@@ -88,7 +88,16 @@ describe('proposal card (SPEC §11.1)', () => {
     expect(upd.text).toContain(
       '🔄 Перенос срока: T12 «Подготовить расписание» · было пт, 25 сен → стало пн, 28 сен',
     );
-    expect(upd.buttons.flat().map((b) => b.text)).toEqual(['✅ Применить', '✏️ Изменить', '❌ Игнорировать']);
+    expect(upd.buttons.flat().map((b) => b.text)).toEqual([
+      '✅ Применить',
+      '✏️ Изменить',
+      '❌ Игнорировать',
+      '➕ Создать новой задачей',
+    ]);
+    expect(upd.buttons.flat()).toContainEqual({
+      text: '➕ Создать новой задачей',
+      data: 'v1:p:asn:7',
+    });
 
     const done = renderProposalCard(
       {

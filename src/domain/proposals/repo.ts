@@ -70,6 +70,15 @@ export interface ProposalPayload {
     title?: string;
   };
   targetProposalId?: number;
+  /**
+   * D47 (plan.md Task 3.15): the model's own title for a new task this `update` proposal's card could be
+   * split into via the manual "➕ Create as a new task" (texts.proposalCard.createAsNewButton) escape hatch (`src/domain/proposals/decide.ts`'s
+   * `createTaskFromUpdate`) — same "not a DB column" precedent as `targetProposalId` above: `kind='update'`
+   * proposals only ever write to `changes`/`target_task_id`, there is no column for a *different* task's
+   * title. Only ever set for `kind='update'`; absent when the model sent no `new_task_title` (or sent
+   * `null`) — `createTaskFromUpdate` then falls back to the target's own current title.
+   */
+  newTaskTitle?: string;
   origin: 'ai' | 'manual_group' | 'manual_dm' | 'forward';
   noReaction?: boolean;
   quote: string | null;
@@ -278,6 +287,7 @@ export const ProposalPayloadSchema = z.object({
     .object({ due: DueSchema.optional(), assignee: AssigneeSchema.optional(), title: z.string().optional() })
     .optional(),
   targetProposalId: z.number().optional(),
+  newTaskTitle: z.string().optional(),
   origin: z.enum(['ai', 'manual_group', 'manual_dm', 'forward']),
   noReaction: z.boolean().optional(),
   quote: z.string().nullable(),

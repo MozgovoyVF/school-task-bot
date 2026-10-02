@@ -597,15 +597,15 @@ describe('planTaskNotifications', () => {
 
 **TDD (критичная задача: `ai/pipeline`, `domain/proposals`), ревью — Opus.** Файлы (ориентир): `prompts/extractor.v3.md` (копия v2 + правила D47; `prompt_version` → `extractor.v3`), `prompts/examples.school_ru.json` (синтетические примеры), `src/ai/schemas.ts`, `src/ai/pipeline/resolve.ts` и/или `processBatch.ts`, `src/ai/pipeline/dedup.ts`, `src/domain/proposals/decide.ts`, `src/bot/views/proposalCard.ts`, `src/bot/handlers/proposalCallbacks.ts`, `src/bot/keyboards/callbackCodec.ts`, `src/bot/texts/ru.ts`.
 
-- [ ] **Шаг 1: падающие тесты.**
+- [x] **Шаг 1: падающие тесты.**
   1. Пайплайн (fixtures): `update` на T# с исполнителем-человеком (user или text «Маша»), `changes.assignee` = другой человек, `explicit_transfer=false` → в БД предложение `kind='create'` (название = `new_task_title`, иначе название цели; исполнитель и срок — из `changes`, срок — из `changes.due`, иначе без срока), целевая задача не упоминается; dedup **не** отклоняет его как дубль той самой целевой задачи.
   2. То же с `explicit_transfer=true` → `kind='update'` со сменой исполнителя (как сейчас).
   3. Тот же исполнитель + новый срок, либо цель с исполнителем `all`/без исполнителя → остаётся `update`; `payload.newTaskTitle` сохранён.
   4. Карточка AI-`update` содержит кнопку «➕ Создать новой задачей» (`callback_data` через `callbackCodec`, ≤ 64 байт).
   5. Нажатие (`asNew`): атомарно (`UPDATE … WHERE status='pending' RETURNING`) предложение `accepted`, создана **новая** задача (название `newTaskTitle` ?? название цели; исполнитель `changes.assignee` ?? исполнитель цели; срок `changes.due` ?? нет; цитата/источник — из предложения), целевая задача и её напоминания не изменены; повторное нажатие — no-op; права проверяются по БД. Цель-предложение (`payload.targetProposalId`, D44) — тоже поддержано (название из `newTaskTitle` ?? payload цели).
-- [ ] **Шаг 2: реализация.** Схема: в `update` (local + wire) поля `explicit_transfer: boolean` и `new_task_title: string(3..120) | null` (wire — обязательные, nullable/boolean; local — с дефолтами, старые fixtures без полей остаются валидными). Промпт v3: правила D47 (1)–(3) + примеры. Реальные вызовы LLM/eval не запускать.
-- [ ] **Шаг 3:** `pnpm format && pnpm lint && pnpm typecheck && pnpm test` зелёные; CHANGELOG (Phase 3, Unreleased) дополнен.
-- [ ] **Шаг 4: коммит и push** в `phase-3-tasks` (PR #8 обновится сам).
+- [x] **Шаг 2: реализация.** Схема: в `update` (local + wire) поля `explicit_transfer: boolean` и `new_task_title: string(3..120) | null` (wire — обязательные, nullable/boolean; local — с дефолтами, старые fixtures без полей остаются валидными). Промпт v3: правила D47 (1)–(3) + примеры. Реальные вызовы LLM/eval не запускать.
+- [x] **Шаг 3:** `pnpm format && pnpm lint && pnpm typecheck && pnpm test` зелёные; CHANGELOG (Phase 3, Unreleased) дополнен.
+- [x] **Шаг 4: коммит и push** в `phase-3-tasks` (PR #8 обновится сам).
 
 ---
 ## Фаза 4 — Прод и переезд к руководителю (ветка `phase-4-prod`)

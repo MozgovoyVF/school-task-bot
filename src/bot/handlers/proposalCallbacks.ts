@@ -3,6 +3,7 @@ import { can } from '../../domain/people/permissions.js';
 import {
   acceptProposal,
   applyModification,
+  createTaskFromUpdate,
   markDuplicate,
   rejectProposal,
   type DecideDeps,
@@ -28,8 +29,10 @@ import type { BotContext } from '../context.js';
  * "edit" button) is a forward reference to Task 2.14's edit dialog — not handled here, falls through to
  * `next()` (inert until then, same pattern as `src/scheduler/jobs/cards.ts`'s `nbx` button). `dup` only
  * opens the mark-as-duplicate submenu; `dpm`/`dpa` (its two buttons) are the actual decision (fix round 1,
- * Important A). */
-const KNOWN_ACTIONS = new Set(['acc', 'rej', 'rjr', 'apl', 'dup', 'dpm', 'dpa']);
+ * Important A). `asn` (D47, plan.md Task 3.15) is the `update`-kind card's manual "➕ Create as a new task" (texts.proposalCard.createAsNewButton)
+ * escape hatch — always creates a brand-new task via `createTaskFromUpdate`, never applies the suggested
+ * change to the existing target. */
+const KNOWN_ACTIONS = new Set(['acc', 'rej', 'rjr', 'apl', 'dup', 'dpm', 'dpa', 'asn']);
 
 const REASON_BY_ARG: Record<string, RejectReason> = {
   nt: 'not_task',
@@ -125,6 +128,19 @@ export function registerProposalCallbackHandlers(bot: Bot<BotContext>, deps: Dec
             ? renderTaskCancelledCard(result.value.id, result.value.title)
             : renderTaskAppliedCard(result.value.id, result.value.title);
       await editCard(deps, ctx, view);
+      return;
+    }
+
+    if (decoded.action === 'asn') {
+      // D47 (plan.md Task 3.15): the manual "➕ Create as a new task" (texts.proposalCard.createAsNewButton) escape hatch — always creates a
+      // brand-new task from an `update`-kind proposal, same confirmation card as a plain accept.
+      const result = await createTaskFromUpdate(deps, { proposalId: decoded.id, actor: ctx.state.actor });
+      if (!result.ok) {
+        await ctx.answerCallbackQuery({ text: failureText(result.reason) });
+        return;
+      }
+      await ctx.answerCallbackQuery();
+      await editCard(deps, ctx, renderTaskCreatedCard(result.value.id, result.value.title));
       return;
     }
 

@@ -222,6 +222,11 @@ export async function extractSingle(
     workspaceTz: deps.workspace.timezone,
     now: input.now,
     fuzzy: settings.fuzzyTimes,
+    // D47 (plan.md Task 3.15): this flow always sends `openTasks: []` above
+    // (a manual single-message draft, D19 — always `kind: 'create'`), so no
+    // `update` action can ever target a `T#` here either; nothing to put in
+    // this map.
+    targetTasks: new Map(),
   };
   const { actions } = resolveActions(extracted.result, resolveCtx);
   const createAction = firstCreateAction(actions);
