@@ -10,6 +10,7 @@ import { ensureDefaultWorkspace, updateSettings } from '../../../src/domain/work
 import { upsertTelegramUser, markDmStarted, markDmBlocked } from '../../../src/domain/people/repo.js';
 import { notifyJob } from '../../../src/scheduler/jobs/notify.js';
 import { ensureSummariesJob } from '../../../src/scheduler/jobs/summary.js';
+import { MessengerError } from '../../../src/domain/messenger.js';
 import { memberships, notifications } from '../../../src/db/schema/index.js';
 import type { AppDeps } from '../../../src/deps.js';
 
@@ -216,6 +217,55 @@ describe('ensureSummariesJob (SPEC §13.4, plan.md Task 3.5)', () => {
     expect(tomorrow[0]?.id).not.toBe(todayId);
     expect(tomorrow[0]?.fireAt.toISOString()).toBe('2026-09-24T06:00:00.000Z');
     expect(tomorrow[0]?.recipientUserId).toBe(owner.id);
+  });
+
+  it('a mid-retry row (attempts>0, shifted fire_at) survives ensureSummariesJob — not cancelled/duplicated (review round 2, I1)', async () => {
+    const { ws, clock } = await setupOwner('Europe/Moscow', '2026-09-23T03:00:00Z');
+    const messenger = new FakeMessenger();
+    const deps = makeDeps(clock, ws, messenger);
+    await updateSettings(db, ws.id, { summary: { enabled: true, time: '09:00' } });
+
+    await ensureSummariesJob.run(deps); // bootstrap: schedules today's 06:00Z row
+    const before = await scheduledSummaries(ws.id);
+    expect(before).toHaveLength(1);
+    const todayId = before[0]?.id;
+    expect(before[0]?.fireAt.toISOString()).toBe('2026-09-23T06:00:00.000Z'); // 09:00 MSK
+
+    clock.set('2026-09-23T06:00:00Z');
+    messenger.failNextWith(new MessengerError('network', 'connection reset'));
+    await notifyJob.run(deps);
+
+    const afterFailure = await scheduledSummaries(ws.id);
+    expect(afterFailure).toHaveLength(1);
+    expect(afterFailure[0]?.id).toBe(todayId);
+    expect(afterFailure[0]?.attempts).toBe(1);
+    // Shifted by the 1-minute backoff — no longer lines up with settings.summary.time (09:00 MSK) at all.
+    expect(afterFailure[0]?.fireAt.toISOString()).toBe('2026-09-23T06:01:00.000Z');
+
+    // ensureSummariesJob must not read the shifted fire_at as stale: no cancel, no second row inserted.
+    await ensureSummariesJob.run(deps);
+
+    const afterEnsure = await scheduledSummaries(ws.id);
+    expect(afterEnsure).toHaveLength(1);
+    expect(afterEnsure[0]?.id).toBe(todayId);
+    expect(afterEnsure[0]?.status).toBe('scheduled');
+
+    const [row] = await db
+      .select()
+      .from(notifications)
+      .where(eq(notifications.id, todayId as number));
+    expect(row?.status).toBe('scheduled');
+    expect(row?.attempts).toBe(1);
+
+    // The retry itself still succeeds once its (shifted) fire_at is reached.
+    clock.set('2026-09-23T06:01:00Z');
+    await notifyJob.run(deps);
+    expect(messenger.sent).toHaveLength(1);
+    const [sentRow] = await db
+      .select()
+      .from(notifications)
+      .where(eq(notifications.id, todayId as number));
+    expect(sentRow?.status).toBe('sent');
   });
 
   it('is idempotent within one tick: running it twice in a row does not create a duplicate', async () => {

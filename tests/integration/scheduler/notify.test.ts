@@ -560,6 +560,71 @@ describe('notifyJob (SPEC §13.1, plan.md Task 3.3)', () => {
     expect(next?.fireAt.toISOString()).not.toBe(new Date('2026-09-21T07:00:00Z').toISOString());
   });
 
+  it(
+    'resolveNotification safety net: a scheduled row still pointing at a no-longer-owner recipient is ' +
+      'cancelled, not sent (D40, review round 2, I3 part 1)',
+    async () => {
+      const { ws, owner, clock } = await setupOwner();
+      const task = await insertTask(ws.id);
+      const messenger = new FakeMessenger();
+      const deps = makeDeps(db, clock, ws, messenger);
+
+      const n = await insertNotification({
+        workspaceId: ws.id,
+        taskId: task.id,
+        recipientUserId: owner.id,
+        kind: 'due',
+        fireAt: new Date(clock.now().getTime() - 60_000),
+      });
+
+      // Simulates an ownership transfer that happened without this row ever being replanned/cancelled —
+      // `owner` (the row's own recipient) is demoted to a plain member, and a new owner takes over.
+      await db.update(memberships).set({ role: 'member' }).where(eq(memberships.userId, owner.id));
+      const newOwner = await upsertTelegramUser(db, { id: 99, first_name: 'Boris' });
+      await markDmStarted(db, newOwner.id, clock.now());
+      await db
+        .insert(memberships)
+        .values({ workspaceId: ws.id, userId: newOwner.id, role: 'owner', displayName: 'Boris' });
+
+      await notifyJob.run(deps);
+
+      expect(messenger.sent).toHaveLength(0);
+      const [after] = await db.select().from(notifications).where(eq(notifications.id, n.id));
+      expect(after?.status).toBe('cancelled');
+    },
+  );
+
+  it(
+    'resolveNotification safety net also catches a "summary" row (no task) left pointing at a former ' +
+      'owner (D40, review round 2, I3 part 1)',
+    async () => {
+      const { ws, owner, clock } = await setupOwner();
+      const messenger = new FakeMessenger();
+      const deps = makeDeps(db, clock, ws, messenger);
+
+      const n = await insertNotification({
+        workspaceId: ws.id,
+        taskId: null,
+        recipientUserId: owner.id,
+        kind: 'summary',
+        fireAt: new Date(clock.now().getTime() - 60_000),
+      });
+
+      await db.update(memberships).set({ role: 'member' }).where(eq(memberships.userId, owner.id));
+      const newOwner = await upsertTelegramUser(db, { id: 99, first_name: 'Boris' });
+      await markDmStarted(db, newOwner.id, clock.now());
+      await db
+        .insert(memberships)
+        .values({ workspaceId: ws.id, userId: newOwner.id, role: 'owner', displayName: 'Boris' });
+
+      await notifyJob.run(deps);
+
+      expect(messenger.sent).toHaveLength(0);
+      const [after] = await db.select().from(notifications).where(eq(notifications.id, n.id));
+      expect(after?.status).toBe('cancelled');
+    },
+  );
+
   it('forbidden (403): flips users.dm_blocked and cancels every scheduled notification for that user', async () => {
     const { ws, owner, clock } = await setupOwner();
     const task = await insertTask(ws.id);

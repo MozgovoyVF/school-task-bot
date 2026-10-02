@@ -10,7 +10,7 @@ import type { Actor } from '../../../src/domain/people/permissions.js';
 import { eraseMember, EraseMemberError } from '../../../src/domain/people/erase.js';
 import { eraseWorkspace, EraseWorkspaceError } from '../../../src/domain/workspaces/erase.js';
 import { createClaimCode, redeemClaimCode } from '../../../src/domain/people/claim.js';
-import { acceptProposal } from '../../../src/domain/proposals/decide.js';
+import { acceptProposal, applyModification } from '../../../src/domain/proposals/decide.js';
 import { fixedClock } from '../../helpers/clock.js';
 import type { Env } from '../../../src/config/env.js';
 import {
@@ -735,6 +735,136 @@ describe('eraseMember', () => {
     expect(legacyAfter?.sourceQuote).toBe('Цитата без привязанного автора');
     expect(legacyAfter?.description).toBe('Описание не трогаем');
   });
+
+  it(
+    'anonymizes payload.assignee when it names the erased member, so acceptProposal afterward does not ' +
+      'violate the assignee_user_id FK (review round 2, I2)',
+    async () => {
+      const { ws, owner, maria, chat } = await setupSchool();
+
+      const [pendingProposal] = await db
+        .insert(proposals)
+        .values({
+          workspaceId: ws.id,
+          chatId: chat.id,
+          kind: 'create',
+          payload: {
+            title: 'Проверить дневники',
+            reasoning: 'placeholder',
+            origin: 'ai',
+            quote: null,
+            quoteAuthorName: null,
+            assignee: { type: 'user', userId: maria.id },
+          },
+          confidence: 0.9,
+          policyDecision: 'shown',
+          status: 'pending',
+        })
+        .returning();
+      if (!pendingProposal) throw new Error('setup: failed to insert pendingProposal');
+
+      // Maria has no other membership, so erasing her also deletes her `users` row — the FK that
+      // `acceptProposal` would otherwise violate below if `payload.assignee` still pointed at her.
+      await eraseMember(
+        { db, logger, superadminIds: [] },
+        { workspaceId: ws.id, userId: maria.id, actor: actorOf(owner.id, 'owner') },
+      );
+      expect(await getUserByTgId(db, 2)).toBeNull();
+
+      const [pendingAfter] = await db.select().from(proposals).where(eq(proposals.id, pendingProposal.id));
+      const payloadAfter = pendingAfter?.payload as Record<string, unknown>;
+      expect(payloadAfter.assignee).toEqual({ type: 'text', name: texts.erase.anonymous });
+
+      const deps = {
+        db,
+        clock: fixedClock('2026-09-24T09:00:00Z'),
+        config: {} as Env,
+        messenger: new FakeMessenger(),
+        logger,
+        workspace: ws,
+        taskHooks: [],
+      };
+      const result = await acceptProposal(deps, {
+        proposalId: pendingProposal.id,
+        actor: actorOf(owner.id, 'owner'),
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error('expected acceptProposal to succeed');
+      expect(result.value.assigneeUserId).toBeNull();
+      expect(result.value.assigneeNameText).toBe(texts.erase.anonymous);
+    },
+  );
+
+  it(
+    'anonymizes payload.changes.assignee on a pending update-kind proposal when it names the erased ' +
+      'member, independently of payload.assignee (review round 2, I2)',
+    async () => {
+      const { ws, owner, maria, chat } = await setupSchool();
+
+      const [targetTask] = await db
+        .insert(tasks)
+        .values({
+          workspaceId: ws.id,
+          title: 'Собрать подписи',
+          origin: 'manual_group',
+          status: 'open',
+          createdByUserId: owner.id,
+        })
+        .returning();
+      if (!targetTask) throw new Error('setup: failed to insert targetTask');
+
+      const [pendingEdit] = await db
+        .insert(proposals)
+        .values({
+          workspaceId: ws.id,
+          chatId: chat.id,
+          kind: 'update',
+          targetTaskId: targetTask.id,
+          payload: {
+            reasoning: 'placeholder',
+            origin: 'ai',
+            quote: null,
+            quoteAuthorName: null,
+            changes: { assignee: { type: 'user', userId: maria.id } },
+          },
+          confidence: 0.9,
+          policyDecision: 'shown',
+          status: 'pending',
+        })
+        .returning();
+      if (!pendingEdit) throw new Error('setup: failed to insert pendingEdit');
+
+      await eraseMember(
+        { db, logger, superadminIds: [] },
+        { workspaceId: ws.id, userId: maria.id, actor: actorOf(owner.id, 'owner') },
+      );
+      expect(await getUserByTgId(db, 2)).toBeNull();
+
+      const [pendingAfter] = await db.select().from(proposals).where(eq(proposals.id, pendingEdit.id));
+      const payloadAfter = pendingAfter?.payload as { changes: { assignee: unknown } };
+      expect(payloadAfter.changes.assignee).toEqual({ type: 'text', name: texts.erase.anonymous });
+
+      const deps = {
+        db,
+        clock: fixedClock('2026-09-24T09:00:00Z'),
+        config: {} as Env,
+        messenger: new FakeMessenger(),
+        logger,
+        workspace: ws,
+        taskHooks: [],
+      };
+      const result = await applyModification(deps, {
+        proposalId: pendingEdit.id,
+        actor: actorOf(owner.id, 'owner'),
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error('expected applyModification to succeed');
+      expect(result.value.assigneeUserId).toBeNull();
+      expect(result.value.assigneeNameText).toBe(texts.erase.anonymous);
+    },
+  );
 });
 
 describe('eraseWorkspace', () => {

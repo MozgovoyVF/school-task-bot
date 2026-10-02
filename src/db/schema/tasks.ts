@@ -86,7 +86,10 @@ export const taskEvents = pgTable('task_events', {
   actorUserId: bigint('actor_user_id', { mode: 'number' }).references(() => users.id, {
     onDelete: 'set null',
   }),
-  // e.g. created, updated, status_changed, review_requested, review_accepted, review_returned, snoozed, deleted…
+  // `created`, `updated` or `status_changed` — the only three `TaskService` (`src/domain/tasks/service.ts`)
+  // currently writes via `insertTaskEvent`. D40 removed the whole review flow, so `review_requested`/
+  // `review_accepted`/`review_returned` no longer apply; `deleteForever` deliberately writes no event at
+  // all (nothing left to attach it to once the task row is gone).
   type: text('type').notNull(),
   diff: jsonb('diff'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

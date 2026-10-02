@@ -95,9 +95,15 @@ export const ensureSummariesJob: Job = {
           ),
         );
 
+      // A row already mid-retry (`attempts > 0` — `notifyJob`'s `recordSendFailure` pushed its `fireAt`
+      // forward by the backoff) stays valid regardless of its now-shifted time-of-day, as long as it's
+      // still in the future: SPEC §13.1's same-day retry chain must survive this job's own next tick,
+      // not get read as stale and replaced (review round 2, I1). A fresh (`attempts === 0`) row still needs
+      // the `timeOfDay` match — that's what lets a `/settings` time change retarget it same-day.
       const valid = scheduled.find(
         (row) =>
-          row.fireAt.getTime() > now.getTime() && timeOfDay(row.fireAt, zone) === settings.summary.time,
+          row.fireAt.getTime() > now.getTime() &&
+          (row.attempts > 0 || timeOfDay(row.fireAt, zone) === settings.summary.time),
       );
 
       if (valid) {

@@ -195,6 +195,38 @@ export async function eraseMember(
         and (payload ->> 'quoteAuthorUserId')::bigint = ${input.userId}
     `);
 
+    // 1c. Rewrite `payload.assignee`/`payload.changes.assignee` (jsonb) wherever either one is
+    // `{type:'user', userId: <this member>}` — same anonymisation step 3 below already applies to an
+    // *existing* task's own assignee columns, reused here (`texts.erase.anonymous`) so a pending proposal
+    // naming this member as assignee can't later feed their now-possibly-deleted id straight into
+    // `tasks.assignee_user_id` via `acceptProposal` (`buildCreateInput`/`buildUpdatePatch`,
+    // `src/domain/proposals/decide.ts`) and fail on the FK, leaving the card stuck forever (review round 2,
+    // I2). Scoped by workspace and matched by stored user id, regardless of `status`
+    // (pending/accepted/rejected/expired) — same reasoning as 1b above: a later `acceptProposal` on a
+    // still-pending row is what breaks, not just an already-decided one. `{type:'none'}`/`{type:'text', ...}`/
+    // `{type:'all'}` shapes are left untouched by the `->>'type' = 'user'` guard. The two fields are rewritten
+    // independently — a pending edit's `payload.changes.assignee` can differ from its own `payload.assignee`.
+    await tx.execute(sql`
+      update proposals
+      set payload = jsonb_set(
+        payload, '{assignee}',
+        jsonb_build_object('type', 'text', 'name', ${texts.erase.anonymous}::text)
+      )
+      where workspace_id = ${input.workspaceId}
+        and payload -> 'assignee' ->> 'type' = 'user'
+        and (payload -> 'assignee' ->> 'userId')::bigint = ${input.userId}
+    `);
+    await tx.execute(sql`
+      update proposals
+      set payload = jsonb_set(
+        payload, '{changes,assignee}',
+        jsonb_build_object('type', 'text', 'name', ${texts.erase.anonymous}::text)
+      )
+      where workspace_id = ${input.workspaceId}
+        and payload -> 'changes' -> 'assignee' ->> 'type' = 'user'
+        and (payload -> 'changes' -> 'assignee' ->> 'userId')::bigint = ${input.userId}
+    `);
+
     // 2. Remove this member's message ids from every `proposals.source_message_ids` array — this one
     // (unlike 1a/1b above) still needs the `messages` rows to exist, so it must run before step 6 deletes
     // them.

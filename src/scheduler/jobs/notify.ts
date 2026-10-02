@@ -2,7 +2,7 @@ import { and, asc, eq, lte } from 'drizzle-orm';
 import type { AppDeps } from '../../deps.js';
 import type { Tx } from '../../db/client.js';
 import { notifications } from '../../db/schema/index.js';
-import { getUserById, markDmBlocked, type UserRow } from '../../domain/people/repo.js';
+import { getOwner, getUserById, markDmBlocked, type UserRow } from '../../domain/people/repo.js';
 import { getSettings } from '../../domain/workspaces/repo.js';
 import { getTaskById, type TaskRow } from '../../domain/tasks/repo.js';
 import {
@@ -231,6 +231,19 @@ async function resolveNotification(
 ): Promise<ResolvedNotification | null> {
   const recipient = await getUserById(tx, row.recipientUserId);
   if (recipient === null) {
+    await cancelNotification(tx, row.id, null);
+    return null;
+  }
+
+  // D40: every notification goes to the Owner, always — but `row.recipientUserId` was fixed at planning
+  // time (`remindersHook`/`ensureSummariesJob`) and nothing replans or cancels existing rows when
+  // ownership changes mid-flight (review round 2, I3). This safety net catches whatever
+  // `afterOwnerChanged`'s own replan (`src/domain/people/ownerChanged.ts`) didn't — a row planned *after*
+  // the last replan but *before* a subsequent transfer, or simply a workspace with no Owner at all right
+  // now. Runs for every kind, `summary` included: `ensureSummariesJob` only ever looks at the *current*
+  // owner's own rows, so it would never find (or cancel) a stale row still pointing at a former one.
+  const owner = await getOwner(tx, deps.workspace.id);
+  if (owner === null || recipient.id !== owner.user.id) {
     await cancelNotification(tx, row.id, null);
     return null;
   }
