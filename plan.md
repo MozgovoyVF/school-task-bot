@@ -586,11 +586,11 @@ describe('planTaskNotifications', () => {
 - [x] **Шаг 2:** прогнать, исправить найденное. PASS.
 - [x] **Шаг 3:** финальные `setMyCommands` для всех scope (SPEC §12.2, без `/my`, D40) и `/help` по ролям.
 - [x] **Шаг 4: коммит и push:** `test(e2e): cover task lifecycle acceptance scenario`.
-- [ ] **Шаг 5: закрытие фазы.**
-  1. `pnpm coverage` показывает не меньше 80% по `domain` и `ai/pipeline`.
+- [x] **Шаг 5: закрытие фазы.**
+  1. `pnpm coverage` показывает не меньше 80% по `domain` и `ai/pipeline` (2026-10-03 на `246ea03`: 888 тестов, statements 92.35%, branches 83.33%, functions 98.77%, lines 96.59% по `coverage.include` D43).
   2. `docs/` и `CHANGELOG.md` обновлены.
   3. RC `v0.4.0-rc.1` → dev (👤 ручная проверка сценария в тестовой группе) — выявила D47 → Task 3.15 → RC `v0.4.0-rc.2` → dev → 👤 повторная проверка.
-  4. PR `Phase 3: tasks, reminders and assignees` → 👤 → merge → тег `v0.4.0`.
+  4. PR `Phase 3: tasks, reminders and assignees` → 👤 → merge → тег `v0.4.0`. Выполнено 2026-10-03: PR #8 смержен (`246ea03`), тег `v0.4.0`. 👤 Пункты 1–3 повторной проверки на `rc.2` пройдены; сквозной сценарий напоминаний (п. 4) пользователь проверит позже на dev.
 
 
 ### Task 3.15: Новое поручение vs перенос существующей задачи (D47, приёмка v0.4.0-rc.1)
