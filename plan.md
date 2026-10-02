@@ -561,13 +561,12 @@ describe('planTaskNotifications', () => {
 
 **Интерфейсы:** Produces `feedbackStats(db, { since: Date; withText: boolean }): Promise<{ byCategory: Record<string, { shown: number; accepted: number; rejected: number }>; rejectReasons: Record<string, number>; editedFields: Record<string, number>; confidenceBuckets: Array<{ from: number; to: number; accepted: number; rejected: number }>; samples?: Array<{ title: string; quote: string | null; decision: string }> }>`.
 
-- [ ] **Шаг 1: падающий тест.**
+- [x] **Шаг 1: падающий тест.**
   - Засеянные решения дают правильные частоты.
   - Без `withText` в результате нет строк с текстом: проверяется, что в `JSON.stringify` нет названий задач.
-- [ ] **Шаг 2:** FAIL.
-- [ ] **Шаг 3: реализация.** Вывод — Markdown в stdout. Флаг `--with-text` печатает предупреждение «только для локального разбора».
-- [ ] **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(eval): add feedback report from owner decisions`.
+- [x] **Шаг 2:** FAIL. **Шаг 3: реализация.** Вывод — Markdown в stdout. Флаг `--with-text` печатает предупреждение «только для локального разбора».
+- [x] **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(eval): add feedback report from owner decisions`.
 
 ### Task 3.14: Сквозной сценарий, меню команд, закрытие фазы
 
