@@ -7,6 +7,8 @@ import { ensureDefaultWorkspace } from '../../../src/domain/workspaces/repo.js';
 import { upsertTelegramUser, markDmStarted } from '../../../src/domain/people/repo.js';
 import { upsertChatOnAdd } from '../../../src/domain/chats/repo.js';
 import { afterOwnerChanged } from '../../../src/domain/people/ownerChanged.js';
+import { createTaskService, type CreateTaskInput } from '../../../src/domain/tasks/service.js';
+import { remindersHook } from '../../../src/domain/notifications/schedule.js';
 import { chats, memberships, notifications, tasks } from '../../../src/db/schema/index.js';
 import { MessengerError } from '../../../src/domain/messenger.js';
 import { FakeMessenger } from '../../helpers/fakeMessenger.js';
@@ -19,6 +21,19 @@ beforeEach(() => truncateAll(db));
 // `Env`, but nothing it actually reads for this hook's body ever touches `config` — same `{} as Env`
 // convention `tests/integration/domain/erase.test.ts` already uses for the same reason.
 const config = {} as Env;
+
+const baseTaskInput = (overrides: Partial<CreateTaskInput> = {}): CreateTaskInput => ({
+  workspaceId: 0,
+  title: 'Собрать подписи',
+  description: null,
+  assignee: { type: 'none' },
+  due: { at: null, allDay: false, tz: null },
+  priority: 'normal',
+  origin: 'manual_dm',
+  proposalId: null,
+  source: { chatId: null, tgMessageId: null, link: null, quote: null, quoteAuthorUserId: null },
+  ...overrides,
+});
 
 describe('afterOwnerChanged', () => {
   it('keeps logging the owner change (Task 1.5) and, alongside that, requests pending approvals (Task 1.6)', async () => {
@@ -284,6 +299,128 @@ describe('afterOwnerChanged', () => {
       const fresh = rows.find((r) => r.status === 'scheduled');
       expect(fresh).toBeDefined();
       expect(fresh?.recipientUserId).toBe(ownerB.id);
+    },
+  );
+
+  it(
+    "a self-claim (new owner === old owner) does not silently drop the task's reminders (review round 3, " +
+      'C1): remindersHook recomputes the exact same dedupe keys with no task-version bump, which must ' +
+      'revive the just-cancelled rows, not lose them to an ON CONFLICT DO NOTHING',
+    async () => {
+      const clock = fixedClock('2026-09-15T07:00:00Z');
+      const workspace = await ensureDefaultWorkspace(db, { name: 'School', timezone: 'Europe/Moscow' });
+
+      const owner = await upsertTelegramUser(db, { id: 1, first_name: 'Anna' });
+      await markDmStarted(db, owner.id, clock.now());
+      await db
+        .insert(memberships)
+        .values({ workspaceId: workspace.id, userId: owner.id, role: 'owner', displayName: 'Anna' });
+
+      // Goes through the real `remindersHook` (via `TaskService.create`) so the dedupe keys below are the
+      // ones it would actually produce — not hand-rolled ones that happen to never collide.
+      const service = createTaskService({ clock, config, taskHooks: [remindersHook] });
+      const task = await db.transaction((tx) =>
+        service.create(
+          tx,
+          baseTaskInput({
+            workspaceId: workspace.id,
+            due: { at: new Date('2026-09-20T10:00:00+03:00'), allDay: false, tz: 'Europe/Moscow' },
+          }),
+          { type: 'user', userId: owner.id },
+        ),
+      );
+
+      const before = await db.select().from(notifications).where(eq(notifications.taskId, task.id));
+      expect(before.length).toBeGreaterThan(0);
+      expect(before.every((r) => r.status === 'scheduled')).toBe(true);
+      const dedupeKeysBefore = before.map((r) => r.dedupeKey).sort();
+
+      // The self-claim itself: same workspace, same (already) owner — no membership change at all.
+      const messenger = new FakeMessenger();
+      const logger = createLogger({ level: 'silent' });
+      const syncCommands = vi.fn().mockResolvedValue(undefined);
+      await afterOwnerChanged({ db, logger, messenger, clock, config, syncCommands }, workspace.id);
+
+      const after = await db.select().from(notifications).where(eq(notifications.taskId, task.id));
+      expect(after).toHaveLength(before.length);
+      expect(after.every((r) => r.status === 'scheduled')).toBe(true);
+      expect(after.every((r) => r.recipientUserId === owner.id)).toBe(true);
+      expect(after.map((r) => r.dedupeKey).sort()).toEqual(dedupeKeysBefore);
+    },
+  );
+
+  it(
+    "an A→B→A round trip with no task edit in between restores A's reminders instead of losing " +
+      'them to the same dedupe-key collision (review round 3, C1)',
+    async () => {
+      const clock = fixedClock('2026-09-15T07:00:00Z');
+      const workspace = await ensureDefaultWorkspace(db, { name: 'School', timezone: 'Europe/Moscow' });
+
+      const ownerA = await upsertTelegramUser(db, { id: 1, first_name: 'Anna' });
+      await markDmStarted(db, ownerA.id, clock.now());
+      const [membershipA] = await db
+        .insert(memberships)
+        .values({ workspaceId: workspace.id, userId: ownerA.id, role: 'owner', displayName: 'Anna' })
+        .returning();
+      if (!membershipA) throw new Error('setup: failed to insert membershipA');
+
+      const service = createTaskService({ clock, config, taskHooks: [remindersHook] });
+      const task = await db.transaction((tx) =>
+        service.create(
+          tx,
+          baseTaskInput({
+            workspaceId: workspace.id,
+            due: { at: new Date('2026-09-20T10:00:00+03:00'), allDay: false, tz: 'Europe/Moscow' },
+          }),
+          { type: 'user', userId: ownerA.id },
+        ),
+      );
+
+      const originalRows = await db.select().from(notifications).where(eq(notifications.taskId, task.id));
+      expect(originalRows.length).toBeGreaterThan(0);
+      const originalDedupeKeys = originalRows.map((r) => r.dedupeKey).sort();
+
+      // A -> B: B has also started a DM, so this leg actually plans fresh rows for B (a genuinely
+      // different recipient, no dedupe-key collision on this leg) and cancels every one of A's.
+      const ownerB = await upsertTelegramUser(db, { id: 2, first_name: 'Boris' });
+      await markDmStarted(db, ownerB.id, clock.now());
+      await db.update(memberships).set({ role: 'member' }).where(eq(memberships.id, membershipA.id));
+      const [membershipB] = await db
+        .insert(memberships)
+        .values({ workspaceId: workspace.id, userId: ownerB.id, role: 'owner', displayName: 'Boris' })
+        .returning();
+      if (!membershipB) throw new Error('setup: failed to insert membershipB');
+
+      const messenger = new FakeMessenger();
+      const logger = createLogger({ level: 'silent' });
+      const syncCommands = vi.fn().mockResolvedValue(undefined);
+      await afterOwnerChanged({ db, logger, messenger, clock, config, syncCommands }, workspace.id);
+
+      const afterAtoB = await db.select().from(notifications).where(eq(notifications.taskId, task.id));
+      const originalAfterAtoB = afterAtoB.filter((r) => originalRows.some((o) => o.id === r.id));
+      expect(originalAfterAtoB.every((r) => r.status === 'cancelled')).toBe(true);
+      const scheduledForB = afterAtoB.filter((r) => r.status === 'scheduled');
+      expect(scheduledForB.length).toBeGreaterThan(0);
+      expect(scheduledForB.every((r) => r.recipientUserId === ownerB.id)).toBe(true);
+
+      // B -> A: no task edit happened in between, so this leg recomputes *exactly* A's original dedupe
+      // keys — the collision the fix must handle.
+      await db.update(memberships).set({ role: 'member' }).where(eq(memberships.id, membershipB.id));
+      await db.update(memberships).set({ role: 'owner' }).where(eq(memberships.id, membershipA.id));
+
+      await afterOwnerChanged({ db, logger, messenger, clock, config, syncCommands }, workspace.id);
+
+      const finalRows = await db.select().from(notifications).where(eq(notifications.taskId, task.id));
+
+      // B's own rows get cancelled too (SPEC §13.2: any change cancels everything for the task).
+      const finalForB = finalRows.filter((r) => scheduledForB.some((b) => b.id === r.id));
+      expect(finalForB.every((r) => r.status === 'cancelled')).toBe(true);
+
+      // A's reminders must be back — not silently dropped by the dedupe-key collision.
+      const finalScheduled = finalRows.filter((r) => r.status === 'scheduled');
+      expect(finalScheduled.length).toBeGreaterThan(0);
+      expect(finalScheduled.every((r) => r.recipientUserId === ownerA.id)).toBe(true);
+      expect(finalScheduled.map((r) => r.dedupeKey).sort()).toEqual(originalDedupeKeys);
     },
   );
 });
