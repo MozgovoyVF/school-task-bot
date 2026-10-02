@@ -20,23 +20,24 @@ manual task creation (`/task` in a group, `/new`, free DM text, forwards), `/set
   (D7).
 - `src/domain/notifications/schedule.ts` — recomputes a task's pending reminders on every
   create/edit/complete/cancel/snooze, replacing stale rows atomically.
-- `src/scheduler/jobs/reminders.ts` — delivery job: retries, per-recipient grouping, quiet-hours
-  deferral, `FOR UPDATE SKIP LOCKED` claiming.
-- `src/domain/notifications/snooze.ts`, `src/bot/views/reminderView.ts` — `done`/`snooze` buttons
+- `src/scheduler/jobs/notify.ts` — reminder delivery job: retries, per-recipient grouping,
+  quiet-hours deferral, `FOR UPDATE SKIP LOCKED` claiming.
+- `src/domain/notifications/snooze.ts`, `src/bot/views/reminder.ts` — `done`/`snooze` buttons
   on a delivered reminder (quick-pick snooze durations), own dedupe key (D6:
   `snooze:{task}:{recipient}:{fireAtISO}`).
-- `src/scheduler/jobs/summary.ts`, `src/bot/views/summaryView.ts` — daily morning summary for the
-  Owner (SPEC §14), its own dedupe key (D6: `summary:{workspace}:{recipient}:{date}`).
+- `src/scheduler/jobs/summary.ts`, `src/bot/views/summary.ts` — daily morning summary for the
+  Owner (SPEC §13.4), its own dedupe key (D6: `summary:{workspace}:{recipient}:{date}`).
 - `src/bot/views/taskCard.ts`, `src/bot/handlers/taskCallbacks.ts` — the task card (status, due,
   assignee, quote) with edit/archive/(soft-)delete actions and a task-events audit trail.
-- `src/domain/tasks/queries.ts`, `src/bot/handlers/taskLists.ts` — `/tasks`, `/today`,
+- `src/domain/tasks/queries.ts`, `src/bot/handlers/lists.ts` — `/tasks`, `/today`,
   `/overdue`, `/archive` with filters and pagination.
 - `src/domain/tasks/search.ts`, `src/domain/tasks/stats.ts`, `/search`, `/stats` — free-text task
   search and per-assignee statistics.
 - `src/bot/handlers/taskCommand.ts`, `/new`, `src/bot/handlers/dmFreeText.ts`,
-  `src/bot/handlers/forwards.ts` — manual task creation from a group `/task` reply/text, a DM
-  dialog, free DM text, and forwarded messages, each capturing the quote and its author for later
-  erasure (see `domain/people/erase.ts` below).
+  `src/ai/pipeline/extractSingle.ts`, `src/bot/handlers/forwards.ts` — manual task creation from a
+  group `/task` reply/text, a DM dialog, free DM text (single-message LLM extraction), and
+  forwarded messages, each capturing the quote and its author for later erasure (see
+  `domain/people/erase.ts` below).
 - `src/bot/handlers/settings.ts`, `/settings` (Owner) and extended `/admin` — AI model/batch
   tuning and workspace settings editing in-chat.
 - `src/domain/people/erase.ts` (`eraseMember`) and `src/domain/workspaces/erase.ts`
@@ -47,26 +48,30 @@ manual task creation (`/task` in a group, `/new`, free DM text, forwards), `/set
   join through `messages` stopped matching once 30-day retention deleted the row), the quote
   author's display name redacted too (`texts.erase.redactedQuoteAuthor`, D46 extension,
   2026-10-02), claim codes and now-orphaned `users` rows cleaned up, an owner must `/transfer`
-  first.
-- `eval/feedback-report.ts`, `pnpm feedback-report` (SPEC §20.4) — accept/reject/edit rates and
+  first. Migrations `0002_narrow_azazel.sql` (D40 column drops) and `0003_red_mauler.sql`
+  (`tasks.quote_author_user_id`, D46).
+- `scripts/feedback-report.ts`, `pnpm feedback-report` (SPEC §20.4) — accept/reject/edit rates and
   common edit fields from the proposal decision history.
-- `tests/e2e/taskLifecycle.test.ts` — end-to-end acceptance scenario covering reminder buttons and
-  the snooze dialog across a full task lifecycle.
+- `tests/integration/e2e/taskLifecycle.test.ts` — end-to-end acceptance scenario covering reminder
+  buttons and the snooze dialog across a full task lifecycle.
 
 ### Removed
 
 - **D40** (user decision, 2026-09-27): all notifications now go to the Owner only. Removed:
-  assignment DMs, the assignee's "beру в работу"/"готово" buttons, the review flow
+  assignment DMs, the assignee's «беру в работу»/«готово» buttons, the review flow
   (готово → owner принять/вернуть), assignee reminders and summary, `/my`,
   `memberships.notify_assignments`, `tasks.review_*` columns, `reminders.notifyAssignees` and
   `summary.forMembers` from the settings schema. Task 3.9 (the assignee-facing review flow) was
   dropped outright. The assignee remains a plain task field (card, filter, `/stats`); `/task` from
   a Member in a group still reaches the Owner as a proposal.
 
-### Fixed
+### Changed
 
 - `/tasks`, `/today`, `/overdue`, `/new`, `/archive`, `/search`, `/stats` and `/settings` — the
   stub "coming soon" replies added at the end of Phase 2 are now real handlers.
+
+### Fixed
+
 - Review-round findings across Tasks 3.1–3.12 (quiet-hours edge cases in the reminder chain,
   oversized-digest splitting, dead overdue chains after a quiet-summary cancel, claim-code and
   orphaned-user cleanup on erasure) — see individual task commits for detail.
@@ -81,6 +86,9 @@ manual task creation (`/task` in a group, `/new`, free DM text, forwards), `/set
   `payload.quoteAuthorUserId`) is scoped to the current workspace; a cross-workspace pending
   proposal by the same erased user could in theory retain a dangling id (rare, multi-workspace
   scenario, parked as backlog per existing precedent elsewhere in `erase.ts`).
+- Changing `settings.reminders.*` times or the Owner's `/timezone` does not replan reminders
+  already scheduled for existing tasks (SPEC §13.2 only requires replanning on task changes) —
+  they keep firing at the old time/zone until the task itself is next edited.
 
 ## [0.3.0] — 2026-10-01
 
