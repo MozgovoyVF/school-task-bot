@@ -475,10 +475,15 @@ describe('eraseMember', () => {
     );
 
     const [pendingAfter] = await db.select().from(proposals).where(eq(proposals.id, pendingProposal.id));
-    expect((pendingAfter?.payload as Record<string, unknown>).quote).toBe(texts.erase.redactedQuote);
+    const pendingPayload = pendingAfter?.payload as Record<string, unknown>;
+    expect(pendingPayload.quote).toBe(texts.erase.redactedQuote);
+    // D46 extension (2026-10-02): the quote author's display name is redacted too, not just the quote.
+    expect(pendingPayload.quoteAuthorName).toBe(texts.erase.redactedQuoteAuthor);
 
     const [acceptedAfter] = await db.select().from(proposals).where(eq(proposals.id, acceptedProposal.id));
-    expect((acceptedAfter?.payload as Record<string, unknown>).quote).toBe(texts.erase.redactedQuote);
+    const acceptedPayload = acceptedAfter?.payload as Record<string, unknown>;
+    expect(acceptedPayload.quote).toBe(texts.erase.redactedQuote);
+    expect(acceptedPayload.quoteAuthorName).toBe(texts.erase.redactedQuoteAuthor);
   });
 
   it(
@@ -580,6 +585,8 @@ describe('eraseMember', () => {
       // D46 fix round 2: `quoteAuthorUserId` must be cleared regardless of whether `quote` itself is
       // null — otherwise it keeps pointing at Maria's now-deleted `users` row.
       expect(payloadAfter.quoteAuthorUserId).toBeNull();
+      // D46 extension: no author name was stored, so none is fabricated either.
+      expect(payloadAfter.quoteAuthorName).toBeNull();
 
       const deps = {
         db,
@@ -598,6 +605,46 @@ describe('eraseMember', () => {
       expect(result.ok).toBe(true);
       if (!result.ok) throw new Error('expected acceptProposal to succeed');
       expect(result.value.quoteAuthorUserId).toBeNull();
+    },
+  );
+
+  it(
+    "redacts payload.quoteAuthorName even when payload.quote is null (D46 extension) — processBatch's " +
+      'buildQuote derives the name from the author independently of whether the message had text',
+    async () => {
+      const { ws, owner, maria, chat } = await setupSchool();
+
+      const [proposal] = await db
+        .insert(proposals)
+        .values({
+          workspaceId: ws.id,
+          chatId: chat.id,
+          kind: 'create',
+          payload: {
+            title: 'Задача без текста',
+            reasoning: 'placeholder',
+            origin: 'ai',
+            quote: null,
+            quoteAuthorName: 'Maria',
+            quoteAuthorUserId: maria.id,
+          },
+          confidence: 0.9,
+          policyDecision: 'shown',
+          status: 'pending',
+        })
+        .returning();
+      if (!proposal) throw new Error('setup: failed to insert proposal');
+
+      await eraseMember(
+        { db, logger, superadminIds: [] },
+        { workspaceId: ws.id, userId: maria.id, actor: actorOf(owner.id, 'owner') },
+      );
+
+      const [after] = await db.select().from(proposals).where(eq(proposals.id, proposal.id));
+      const payloadAfter = after?.payload as Record<string, unknown>;
+      expect(payloadAfter.quote).toBeNull();
+      expect(payloadAfter.quoteAuthorUserId).toBeNull();
+      expect(payloadAfter.quoteAuthorName).toBe(texts.erase.redactedQuoteAuthor);
     },
   );
 
@@ -651,7 +698,9 @@ describe('eraseMember', () => {
     expect(taskAfter?.description).toBe('Не трогать');
 
     const [proposalAfter] = await db.select().from(proposals).where(eq(proposals.id, proposal.id));
-    expect((proposalAfter?.payload as Record<string, unknown>).quote).toBe('Цитата директора');
+    const proposalPayloadAfter = proposalAfter?.payload as Record<string, unknown>;
+    expect(proposalPayloadAfter.quote).toBe('Цитата директора');
+    expect(proposalPayloadAfter.quoteAuthorName).toBe('Anna');
   });
 
   it('leaves a legacy task (quote_author_user_id IS NULL) untouched — no retroactive backfill (D46)', async () => {

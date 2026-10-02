@@ -660,6 +660,12 @@ export const texts = {
      * and `eraseMember` redacts whichever ones name the erased member.
      */
     redactedQuote: '[удалено по запросу]',
+    /**
+     * `proposals.payload.quoteAuthorName` redaction (D46 extension, 2026-10-02): replaces the erased quote
+     * author's display name captured at proposal creation, so cards rendered later no longer show it.
+     * `tasks` has no such name column, so this is used only for proposals.
+     */
+    redactedQuoteAuthor: 'участник удалён',
     /** Button on `/people`'s per-member card (`renderPersonCard`) — the initial tap. */
     memberButton: '🗑 Удалить данные',
     /** First of the two required confirmations. `name` is the member's already-escaped display name. */

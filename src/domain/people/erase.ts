@@ -170,6 +170,13 @@ export async function eraseMember(
     // that case too, reintroducing the dangling-id FK violation `acceptProposal` was supposed to be safe
     // from. Only the inner `{quote}` rewrite still needs that guard, so it never fabricates a
     // `redactedQuote` string where there was no quote to begin with.
+    //
+    // D46 extension (2026-10-02): also replaces `payload.quoteAuthorName` — the author's display name
+    // captured at creation, which `cards.ts` renders straight onto the card — with
+    // `texts.erase.redactedQuoteAuthor`. Like the `quoteAuthorUserId` null-out it is independent of
+    // `quote`: `processBatch`'s `buildQuote` derives the name from the author, not from the text, so a
+    // `quote: null` row can still carry the real name. It is guarded only by its own presence, so no
+    // placeholder name is fabricated on a row that never stored one (e.g. `dmFreeText`'s `null`).
     await tx.execute(sql`
       update proposals
       set payload = jsonb_set(
@@ -179,7 +186,11 @@ export async function eraseMember(
           else payload
         end,
         '{quoteAuthorUserId}', 'null'::jsonb
-      )
+      ) || case
+        when payload ->> 'quoteAuthorName' is not null
+        then jsonb_build_object('quoteAuthorName', ${texts.erase.redactedQuoteAuthor}::text)
+        else '{}'::jsonb
+      end
       where workspace_id = ${input.workspaceId}
         and (payload ->> 'quoteAuthorUserId')::bigint = ${input.userId}
     `);
