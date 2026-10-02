@@ -181,6 +181,7 @@ function buildCreateInput(
       tgMessageId: source.tgMessageId,
       link: source.link,
       quote: payload.quote,
+      quoteAuthorUserId: payload.quoteAuthorUserId ?? null,
     },
   };
 }

@@ -280,7 +280,7 @@ function buildNewTaskConversation(deps: NewTaskDeps) {
             priority,
             origin: 'manual_dm',
             proposalId: null,
-            source: { chatId: null, tgMessageId: null, link: null, quote: null },
+            source: { chatId: null, tgMessageId: null, link: null, quote: null, quoteAuthorUserId: null },
           },
           { type: 'user', userId: creatorUserId },
         ),

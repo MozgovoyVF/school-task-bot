@@ -197,6 +197,8 @@ describe('processBatch (plan.md Task 2.10)', () => {
     expect(payload.origin).toBe('ai');
     expect(payload.quote).toBe('Маша, подготовь расписание к пятнице');
     expect(payload.quoteAuthorName).toBe('Директор');
+    // D46: the quote's own author by internal `users.id`, straight off the source message.
+    expect(payload.quoteAuthorUserId).toBe(owner.id);
 
     // The real, reviewed `resolveDue` (Task 2.5) is the source of truth for
     // what "к пятнице" resolves to — asserted by calling it the same way

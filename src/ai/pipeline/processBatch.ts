@@ -287,6 +287,9 @@ function targetProposalIdOf(action: ResolvedAction): number | undefined {
 interface QuoteInfo {
   quote: string | null;
   quoteAuthorName: string | null;
+  /** D46: the quote's own author by internal `users.id`, straight off the source `MessageRow` — no new
+   * lookup needed (`ProposalPayload.quoteAuthorUserId`'s own doc comment has the full rationale). */
+  quoteAuthorUserId: number | null;
 }
 
 function buildQuote(
@@ -296,11 +299,11 @@ function buildQuote(
 ): QuoteInfo {
   const firstId = action.sourceMessageIds[0];
   const row = firstId !== undefined ? messagesById.get(firstId) : undefined;
-  if (!row) return { quote: null, quoteAuthorName: null };
+  if (!row) return { quote: null, quoteAuthorName: null, quoteAuthorUserId: null };
   const quote = row.text !== null ? truncate(row.text, QUOTE_MAX_CHARS) : null;
   const quoteAuthorName =
     row.authorUserId !== null ? (displayNameByUserId.get(row.authorUserId) ?? null) : null;
-  return { quote, quoteAuthorName };
+  return { quote, quoteAuthorName, quoteAuthorUserId: row.authorUserId };
 }
 
 function buildPayload(
@@ -314,6 +317,7 @@ function buildPayload(
     origin: 'ai',
     quote: quote.quote,
     quoteAuthorName: quote.quoteAuthorName,
+    quoteAuthorUserId: quote.quoteAuthorUserId,
   };
   if (noReaction === true) base.noReaction = true;
 

@@ -72,6 +72,11 @@ export function registerForwardsHandler(bot: Bot<BotContext>, deps: ForwardsDeps
         sourceMessageIds: [],
         quote: truncateQuote(buffer.firstText),
         quoteAuthorName: buffer.firstAuthorName,
+        // D46: always `null` — Telegram's `forward_origin` (`forwardOriginName(msg)`) has no reliably
+        // resolvable internal `users.id` (it may be an external, non-member person or a hidden name); a
+        // known, intentional limitation (same pre-existing gap as `forward_origin_name` elsewhere), not a
+        // bug to fix here.
+        quoteAuthorUserId: null,
         createdByUserId: buffer.authorUserId,
         now,
       });

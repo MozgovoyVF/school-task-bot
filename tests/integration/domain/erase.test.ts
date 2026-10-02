@@ -96,6 +96,7 @@ describe('eraseMember', () => {
         sourceChatId: chat.id,
         sourceTgMessageId: mariaMessage.tgMessageId,
         sourceQuote: 'Сделаю расписание к пятнице',
+        quoteAuthorUserId: maria.id,
         createdByUserId: owner.id,
       })
       .returning();
@@ -149,7 +150,7 @@ describe('eraseMember', () => {
     const [taskAfter] = await db.select().from(tasks).where(eq(tasks.id, task.id));
     expect(taskAfter?.assigneeUserId).toBeNull();
     expect(taskAfter?.assigneeNameText).toBe(texts.erase.anonymous);
-    expect(taskAfter?.sourceQuote).toBeNull();
+    expect(taskAfter?.sourceQuote).toBe(texts.erase.redactedQuote);
 
     // A task she was never involved with is untouched.
     const [untouchedAfter] = await db.select().from(tasks).where(eq(tasks.id, untouchedTask.id));
@@ -367,6 +368,200 @@ describe('eraseMember', () => {
     const [taskBAfter] = await db.select().from(tasks).where(eq(tasks.id, taskB.id));
     expect(taskBAfter?.assigneeUserId).toBe(ownerB.id);
     expect(await getUserByTgId(db, 50)).not.toBeNull();
+  });
+
+  // D46: regression coverage for D43 review round 2's parked Important I1 — the old `source_quote`
+  // redaction joined through `messages` on `(chat_id, tg_message_id, author_user_id)`, which silently
+  // stopped matching once the `messages` row was gone (30-day retention). `quote_author_user_id` fixes
+  // this by not depending on `messages` at all.
+  it("redacts a task's source_quote by quote_author_user_id even after its source messages row has already been deleted (post-retention)", async () => {
+    const { ws, owner, maria, chat } = await setupSchool();
+
+    const [mariaMessage] = await db
+      .insert(messages)
+      .values({
+        chatId: chat.id,
+        tgMessageId: 20,
+        authorUserId: maria.id,
+        sentAt: new Date('2026-09-23T12:01:00Z'),
+        text: 'Куплю материалы на той неделе',
+      })
+      .returning();
+    if (!mariaMessage) throw new Error('setup: failed to insert mariaMessage');
+
+    const [task] = await db
+      .insert(tasks)
+      .values({
+        workspaceId: ws.id,
+        title: 'Купить материалы',
+        description: 'Описание задачи — не трогать',
+        origin: 'ai',
+        sourceChatId: chat.id,
+        sourceTgMessageId: mariaMessage.tgMessageId,
+        sourceQuote: 'Куплю материалы на той неделе',
+        quoteAuthorUserId: maria.id,
+        createdByUserId: owner.id,
+      })
+      .returning();
+    if (!task) throw new Error('setup: failed to insert task');
+
+    // Simulate the 30-day retention sweep (`chats/retention.ts`): the source message is gone before
+    // `eraseMember` ever runs, so the old join-based redaction would no longer find anything to clear.
+    await db.delete(messages).where(eq(messages.id, mariaMessage.id));
+
+    await eraseMember(
+      { db, logger, superadminIds: [] },
+      { workspaceId: ws.id, userId: maria.id, actor: actorOf(owner.id, 'owner') },
+    );
+
+    const [taskAfter] = await db.select().from(tasks).where(eq(tasks.id, task.id));
+    expect(taskAfter?.sourceQuote).toBe(texts.erase.redactedQuote);
+    // `description` is a different field entirely (D46: not touched by this redaction).
+    expect(taskAfter?.description).toBe('Описание задачи — не трогать');
+  });
+
+  it("redacts proposals.payload.quote by payload.quoteAuthorUserId regardless of the proposal's status", async () => {
+    const { ws, owner, maria, chat } = await setupSchool();
+
+    const [pendingProposal] = await db
+      .insert(proposals)
+      .values({
+        workspaceId: ws.id,
+        chatId: chat.id,
+        kind: 'create',
+        payload: {
+          title: 'Подготовить зал',
+          reasoning: 'placeholder',
+          origin: 'ai',
+          quote: 'Подготовлю зал к утру',
+          quoteAuthorName: 'Maria',
+          quoteAuthorUserId: maria.id,
+        },
+        confidence: 0.9,
+        policyDecision: 'shown',
+        status: 'pending',
+      })
+      .returning();
+    if (!pendingProposal) throw new Error('setup: failed to insert pendingProposal');
+
+    const [acceptedProposal] = await db
+      .insert(proposals)
+      .values({
+        workspaceId: ws.id,
+        chatId: chat.id,
+        kind: 'create',
+        payload: {
+          title: 'Купить призы',
+          reasoning: 'placeholder',
+          origin: 'ai',
+          quote: 'Куплю призы к концерту',
+          quoteAuthorName: 'Maria',
+          quoteAuthorUserId: maria.id,
+        },
+        confidence: 0.9,
+        policyDecision: 'shown',
+        status: 'accepted',
+        decidedByUserId: owner.id,
+      })
+      .returning();
+    if (!acceptedProposal) throw new Error('setup: failed to insert acceptedProposal');
+
+    await eraseMember(
+      { db, logger, superadminIds: [] },
+      { workspaceId: ws.id, userId: maria.id, actor: actorOf(owner.id, 'owner') },
+    );
+
+    const [pendingAfter] = await db.select().from(proposals).where(eq(proposals.id, pendingProposal.id));
+    expect((pendingAfter?.payload as Record<string, unknown>).quote).toBe(texts.erase.redactedQuote);
+
+    const [acceptedAfter] = await db.select().from(proposals).where(eq(proposals.id, acceptedProposal.id));
+    expect((acceptedAfter?.payload as Record<string, unknown>).quote).toBe(texts.erase.redactedQuote);
+  });
+
+  it("leaves a task's and a proposal's quote untouched when their quote author is a different member", async () => {
+    const { ws, owner, maria, chat } = await setupSchool();
+
+    const [task] = await db
+      .insert(tasks)
+      .values({
+        workspaceId: ws.id,
+        title: 'Задача директора',
+        description: 'Не трогать',
+        origin: 'ai',
+        sourceChatId: chat.id,
+        sourceTgMessageId: 30,
+        sourceQuote: 'Цитата директора',
+        quoteAuthorUserId: owner.id,
+        createdByUserId: owner.id,
+      })
+      .returning();
+    if (!task) throw new Error('setup: failed to insert task');
+
+    const [proposal] = await db
+      .insert(proposals)
+      .values({
+        workspaceId: ws.id,
+        chatId: chat.id,
+        kind: 'create',
+        payload: {
+          title: 'Задача директора',
+          reasoning: 'placeholder',
+          origin: 'ai',
+          quote: 'Цитата директора',
+          quoteAuthorName: 'Anna',
+          quoteAuthorUserId: owner.id,
+        },
+        confidence: 0.9,
+        policyDecision: 'shown',
+        status: 'pending',
+      })
+      .returning();
+    if (!proposal) throw new Error('setup: failed to insert proposal');
+
+    await eraseMember(
+      { db, logger, superadminIds: [] },
+      { workspaceId: ws.id, userId: maria.id, actor: actorOf(owner.id, 'owner') },
+    );
+
+    const [taskAfter] = await db.select().from(tasks).where(eq(tasks.id, task.id));
+    expect(taskAfter?.sourceQuote).toBe('Цитата директора');
+    expect(taskAfter?.description).toBe('Не трогать');
+
+    const [proposalAfter] = await db.select().from(proposals).where(eq(proposals.id, proposal.id));
+    expect((proposalAfter?.payload as Record<string, unknown>).quote).toBe('Цитата директора');
+  });
+
+  it('leaves a legacy task (quote_author_user_id IS NULL) untouched — no retroactive backfill (D46)', async () => {
+    const { ws, owner, maria, chat } = await setupSchool();
+
+    const [legacyTask] = await db
+      .insert(tasks)
+      .values({
+        workspaceId: ws.id,
+        title: 'Старая задача',
+        description: 'Описание не трогаем',
+        assigneeUserId: maria.id,
+        origin: 'ai',
+        sourceChatId: chat.id,
+        sourceTgMessageId: 40,
+        sourceQuote: 'Цитата без привязанного автора',
+        quoteAuthorUserId: null,
+        createdByUserId: owner.id,
+      })
+      .returning();
+    if (!legacyTask) throw new Error('setup: failed to insert legacyTask');
+
+    await eraseMember(
+      { db, logger, superadminIds: [] },
+      { workspaceId: ws.id, userId: maria.id, actor: actorOf(owner.id, 'owner') },
+    );
+
+    const [legacyAfter] = await db.select().from(tasks).where(eq(tasks.id, legacyTask.id));
+    // She was still anonymized as the assignee (unrelated field)...
+    expect(legacyAfter?.assigneeUserId).toBeNull();
+    // ...but the legacy quote, with no recorded author, is left exactly as is.
+    expect(legacyAfter?.sourceQuote).toBe('Цитата без привязанного автора');
+    expect(legacyAfter?.description).toBe('Описание не трогаем');
   });
 });
 

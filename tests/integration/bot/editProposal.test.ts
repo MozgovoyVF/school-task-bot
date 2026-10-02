@@ -57,6 +57,7 @@ function defaultPayload(overrides: Partial<ProposalPayload> = {}): ProposalPaylo
     origin: 'ai',
     quote: null,
     quoteAuthorName: null,
+    quoteAuthorUserId: null,
     ...overrides,
   };
 }

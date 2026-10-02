@@ -114,6 +114,7 @@ function defaultPayload(overrides: Partial<ProposalPayload> = {}): ProposalPaylo
     origin: 'ai',
     quote: 'Маша, подготовь расписание к пятнице',
     quoteAuthorName: 'Анна',
+    quoteAuthorUserId: null,
     ...overrides,
   };
 }

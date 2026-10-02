@@ -653,6 +653,13 @@ export const texts = {
   erase: {
     /** `tasks.assignee_name_text` for a task whose assignee's data was erased (`eraseMember`). */
     anonymous: '[удалено]',
+    /**
+     * `tasks.source_quote`/`proposals.payload.quote` redaction by quote author (D46, plan.md's
+     * `quote_author_user_id`/`payload.quoteAuthorUserId`), distinct from {@link anonymous} above, which is
+     * only for `assignee_name_text` — a quote and an assignment are independent facts about the same task,
+     * and `eraseMember` redacts whichever ones name the erased member.
+     */
+    redactedQuote: '[удалено по запросу]',
     /** Button on `/people`'s per-member card (`renderPersonCard`) — the initial tap. */
     memberButton: '🗑 Удалить данные',
     /** First of the two required confirmations. `name` is the member's already-escaped display name. */

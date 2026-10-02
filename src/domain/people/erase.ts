@@ -1,4 +1,4 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, isNotNull, sql } from 'drizzle-orm';
 import type { Db, DbOrTx } from '../../db/client.js';
 import type { Logger } from '../../ops/logger.js';
 import { claimCodes, memberships, proposals, tasks, users } from '../../db/schema/index.js';
@@ -106,10 +106,27 @@ export async function deleteUserIfOrphaned(
  *
  * Every multi-table write below runs inside one transaction: a half-applied
  * erasure (e.g. messages gone but the membership row still present) would be
- * a privacy/correctness bug, not a cosmetic one. Steps 1–2 run before step 6
- * deletes the member's own `messages` rows, since both still need to join
- * against them. Only ids/counts are logged (CLAUDE.md §8 — never names,
- * usernames or message text at `info` level or above).
+ * a privacy/correctness bug, not a cosmetic one. Only ids/counts are logged
+ * (CLAUDE.md §8 — never names, usernames or message text at `info` level or
+ * above).
+ *
+ * Steps 1a/1b (quote redaction) used to be a single step that cleared
+ * `tasks.source_quote` via a join through `messages` on `(chat_id,
+ * tg_message_id, author_user_id)` — D43 review round 2's parked Important
+ * I1 finding: that join silently stopped matching anything once the
+ * `messages` row was gone (30-day retention, `chats/retention.ts`), so
+ * `eraseMember` quietly stopped redacting the quote at all, well before the
+ * erasure guarantee (SPEC §19.3.3) it exists to satisfy. D46 (user decision)
+ * fixes this by tracking the quote's own author separately from the
+ * message it came from — `tasks.quote_author_user_id` and
+ * `proposals.payload.quoteAuthorUserId`, populated at creation time — so
+ * steps 1a/1b below match on that id directly and no longer depend on
+ * `messages` still existing. Legacy rows written before this migration have
+ * `quote_author_user_id IS NULL`/no `quoteAuthorUserId` key at all: D46
+ * explicitly does not backfill them, so their quotes are left unredacted —
+ * an accepted, known limitation, not a bug. Step 2 (`source_message_ids`
+ * cleanup) is unrelated and still needs the member's `messages` rows to
+ * exist, so it still runs before step 6 deletes them.
  */
 export async function eraseMember(
   deps: EraseMemberDeps,
@@ -124,22 +141,34 @@ export async function eraseMember(
     if (!membership) throw new EraseMemberError('not_found');
     if (membership.role === 'owner') throw new EraseMemberError('owner_must_transfer');
 
-    // 1. Clear `source_quote` on tasks sourced from one of this member's messages. The `messages` rows
-    // themselves still exist at this point (deleted in step 6), so the join below can still match them.
+    // 1a. Redact `tasks.source_quote` wherever this member is the quote's own author
+    // (`quote_author_user_id`, D46) — matches by that id directly, independent of whether the source
+    // `messages` row still exists. The task row itself (including `description`) is not touched.
+    await tx
+      .update(tasks)
+      .set({ sourceQuote: texts.erase.redactedQuote })
+      .where(
+        and(
+          eq(tasks.workspaceId, input.workspaceId),
+          eq(tasks.quoteAuthorUserId, input.userId),
+          isNotNull(tasks.sourceQuote),
+        ),
+      );
+
+    // 1b. Redact `proposals.payload.quote` (jsonb) wherever `payload.quoteAuthorUserId` (D46) matches this
+    // member — regardless of `status` (pending/accepted/rejected/expired), same spirit as step 2 below,
+    // which also doesn't filter by status. `payload->>'quoteAuthorUserId'` is `NULL` for a legacy row with
+    // no such key, so the cast/comparison below simply never matches it (no backfill, D46).
     await tx.execute(sql`
-      update tasks t
-      set source_quote = null
-      from messages m
-      inner join chats c on c.id = m.chat_id
-      where t.workspace_id = ${input.workspaceId}
-        and c.workspace_id = ${input.workspaceId}
-        and m.author_user_id = ${input.userId}
-        and m.chat_id = t.source_chat_id
-        and m.tg_message_id = t.source_tg_message_id
+      update proposals
+      set payload = jsonb_set(payload, '{quote}', to_jsonb(${texts.erase.redactedQuote}::text))
+      where workspace_id = ${input.workspaceId}
+        and (payload ->> 'quoteAuthorUserId')::bigint = ${input.userId}
     `);
 
-    // 2. Remove this member's message ids from every `proposals.source_message_ids` array — same
-    // "while the `messages` rows still exist" ordering requirement as step 1.
+    // 2. Remove this member's message ids from every `proposals.source_message_ids` array — this one
+    // (unlike 1a/1b above) still needs the `messages` rows to exist, so it must run before step 6 deletes
+    // them.
     await tx.execute(sql`
       update proposals p
       set source_message_ids = (

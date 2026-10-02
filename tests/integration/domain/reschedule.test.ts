@@ -21,7 +21,7 @@ const baseInput = (overrides: Partial<CreateTaskInput> = {}): CreateTaskInput =>
   priority: 'normal',
   origin: 'manual_dm',
   proposalId: null,
-  source: { chatId: null, tgMessageId: null, link: null, quote: null },
+  source: { chatId: null, tgMessageId: null, link: null, quote: null, quoteAuthorUserId: null },
   ...overrides,
 });
 

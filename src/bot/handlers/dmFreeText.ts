@@ -67,6 +67,10 @@ export function registerDmFreeTextHandler(bot: Bot<BotContext>, deps: DmFreeText
       sourceMessageIds: [],
       quote: truncateQuote(text),
       quoteAuthorName: null,
+      // D46: the quote is the Owner's own DM text (D40: this handler is Owner-only) — `userId` is the
+      // actual author, even though `quoteAuthorName` stays `null` here (an unrelated, pre-existing
+      // display-only decision for this handler, not touched by this change).
+      quoteAuthorUserId: userId,
       createdByUserId: userId,
       now,
     });

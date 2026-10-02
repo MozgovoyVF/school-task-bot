@@ -95,6 +95,7 @@ function basePayload(overrides: Partial<ProposalPayload> = {}): ProposalPayload 
     origin: 'ai',
     quote: 'Маша, подготовь расписание',
     quoteAuthorName: 'Анна',
+    quoteAuthorUserId: null,
     ...overrides,
   };
 }
@@ -478,6 +479,7 @@ describe('cardsJob', () => {
         origin: 'ai',
         quote: null,
         quoteAuthorName: null,
+        quoteAuthorUserId: null,
         changes: {
           due: {
             dueAt: '2026-09-28T20:59:00Z', // 23:59 МСК, пн 28 сен
@@ -530,6 +532,7 @@ describe('cardsJob', () => {
         origin: 'ai',
         quote: null,
         quoteAuthorName: null,
+        quoteAuthorUserId: null,
         changes: {
           due: {
             dueAt: '2026-09-28T20:59:00Z', // 23:59 МСК, пн 28 сен
@@ -574,6 +577,7 @@ describe('cardsJob', () => {
         origin: 'ai',
         quote: null,
         quoteAuthorName: null,
+        quoteAuthorUserId: null,
         targetProposalId: 999, // truncateAll's restart identity guarantees no proposal ever gets this id
         changes: { title: 'Другое название' },
       },
@@ -619,6 +623,7 @@ describe('cardsJob', () => {
         origin: 'ai',
         quote: null,
         quoteAuthorName: null,
+        quoteAuthorUserId: null,
         targetProposalId: target.id,
         changes: { title: 'Другое название' },
       },
@@ -663,6 +668,7 @@ describe('cardsJob', () => {
         origin: 'ai',
         quote: null,
         quoteAuthorName: null,
+        quoteAuthorUserId: null,
         targetProposalId: target.id,
         changes: { title: 'Новое название' },
       },
@@ -700,6 +706,7 @@ describe('cardsJob', () => {
         origin: 'ai',
         quote: null,
         quoteAuthorName: null,
+        quoteAuthorUserId: null,
         targetProposalId: target.id,
       },
     });
@@ -742,6 +749,7 @@ describe('cardsJob', () => {
         origin: 'ai',
         quote: null,
         quoteAuthorName: null,
+        quoteAuthorUserId: null,
         targetProposalId: target.id,
       },
     });
@@ -776,6 +784,7 @@ describe('cardsJob', () => {
         origin: 'ai',
         quote: null,
         quoteAuthorName: null,
+        quoteAuthorUserId: null,
         targetProposalId: target.id,
         changes: { title: 'Другое название' },
       },

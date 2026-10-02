@@ -75,6 +75,17 @@ export interface ProposalPayload {
   quote: string | null;
   quoteAuthorName: string | null;
   /**
+   * The quote's own author, by internal `users.id` (D46) — a jsonb-only field with no DB column of its
+   * own, same precedent as `quoteAuthorName` above. Populated at creation from whoever actually said the
+   * quoted text (`processBatch`'s `MessageRow.authorUserId`, `/task`'s reply author or its own invoker, a
+   * DM free-text draft's own Owner-invoker); always `null` for a DM forward (`forwards.ts`) — Telegram's
+   * `forward_origin` has no reliably resolvable internal id. `eraseMember` (`src/domain/people/erase.ts`)
+   * redacts `quote` to `texts.erase.redactedQuote` wherever this matches the member being erased, and does
+   * so independently of `messages` retention (`chats/retention.ts`) — the whole reason this field exists
+   * instead of `eraseMember` re-deriving the author via `source_message_ids`/`messages` at erasure time.
+   */
+  quoteAuthorUserId: number | null;
+  /**
    * Fields the Owner changed in the editProposal dialog (`src/bot/conversations/editProposal.ts`, plan.md
    * Task 2.14) before accepting, keyed by field name (`title`/`assignee`/`due`/`priority`/`description`) —
    * SPEC §20.4's before/after pairs. Written by `editProposal.ts` itself, in a best-effort follow-up write
@@ -157,6 +168,9 @@ export interface CreateManualProposalInput {
   sourceMessageIds: number[];
   quote: string | null;
   quoteAuthorName: string | null;
+  /** See `ProposalPayload.quoteAuthorUserId`'s own doc comment (D46) — each of this function's three
+   * call sites resolves this differently; see their own call-site comments. */
+  quoteAuthorUserId: number | null;
   /** Not persisted on `proposals` (no such column) — accepted only so callers have one place to pass it
    * through for a future audit log, and for a `debug` log line here. */
   createdByUserId: number;
@@ -198,6 +212,7 @@ export async function createManualProposal(
     noReaction: true,
     quote: input.quote,
     quoteAuthorName: input.quoteAuthorName,
+    quoteAuthorUserId: input.quoteAuthorUserId,
   };
 
   const [row] = await db
@@ -260,6 +275,7 @@ export const ProposalPayloadSchema = z.object({
   noReaction: z.boolean().optional(),
   quote: z.string().nullable(),
   quoteAuthorName: z.string().nullable(),
+  quoteAuthorUserId: z.number().nullable(),
   ownerEdits: z.record(z.string(), OwnerEditSchema).optional(),
 });
 

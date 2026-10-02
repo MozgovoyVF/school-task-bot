@@ -19,6 +19,9 @@ function truncateQuote(text: string): string {
 interface QuotedSource {
   text: string;
   quoteAuthorName: string | null;
+  /** D46: the quote's own author by internal `users.id` — the replied-to message's author for a reply,
+   * the invoker themselves for the typed-args fallback (same split `quoteAuthorName` above already makes). */
+  quoteAuthorUserId: number | null;
   sourceMessageIds: number[];
 }
 
@@ -41,6 +44,7 @@ async function resolveSource(
   msg: Message,
   commandArgs: string | null,
   invokerDisplayName: string,
+  invokerUserId: number,
 ): Promise<QuotedSource | null> {
   const original = msg.reply_to_message;
   if (original && !original.forum_topic_created) {
@@ -48,6 +52,7 @@ async function resolveSource(
     if (text === null) return null;
 
     let quoteAuthorName: string | null = null;
+    let quoteAuthorUserId: number | null = null;
     if (original.from && !original.from.is_bot) {
       const author = await upsertTelegramUser(deps.db, original.from);
       const membership = await ensureMembership(deps.db, {
@@ -56,14 +61,20 @@ async function resolveSource(
         displayName: defaultDisplayName(original.from.first_name),
       });
       quoteAuthorName = membership.displayName;
+      quoteAuthorUserId = author.id;
     }
 
     const existing = await getMessageByTgId(deps.db, chat.id, original.message_id);
-    return { text, quoteAuthorName, sourceMessageIds: existing ? [existing.id] : [] };
+    return { text, quoteAuthorName, quoteAuthorUserId, sourceMessageIds: existing ? [existing.id] : [] };
   }
 
   if (commandArgs === null) return null;
-  return { text: commandArgs, quoteAuthorName: invokerDisplayName, sourceMessageIds: [] };
+  return {
+    text: commandArgs,
+    quoteAuthorName: invokerDisplayName,
+    quoteAuthorUserId: invokerUserId,
+    sourceMessageIds: [],
+  };
 }
 
 /**
@@ -92,7 +103,7 @@ export async function handleTaskCommand(
     displayName: defaultDisplayName(msg.from.first_name),
   });
 
-  const source = await resolveSource(deps, chat, msg, commandArgs, membership.displayName);
+  const source = await resolveSource(deps, chat, msg, commandArgs, membership.displayName, invoker.id);
   if (source === null) {
     deps.logger.debug(
       { chatId: chat.id },
@@ -117,6 +128,7 @@ export async function handleTaskCommand(
     sourceMessageIds: source.sourceMessageIds,
     quote: truncateQuote(source.text),
     quoteAuthorName: source.quoteAuthorName,
+    quoteAuthorUserId: source.quoteAuthorUserId,
     createdByUserId: invoker.id,
     now,
   });

@@ -23,7 +23,14 @@ export interface CreateTaskInput {
   priority: 'low' | 'normal' | 'high';
   origin: 'ai' | 'manual_group' | 'manual_dm' | 'forward';
   proposalId: number | null;
-  source: { chatId: number | null; tgMessageId: number | null; link: string | null; quote: string | null };
+  source: {
+    chatId: number | null;
+    tgMessageId: number | null;
+    link: string | null;
+    quote: string | null;
+    /** D46: the quote's own author by internal `users.id` — threaded straight onto `tasks.quote_author_user_id` so `eraseMember` (`src/domain/people/erase.ts`) can redact `source_quote` without depending on the `messages` row still existing. */
+    quoteAuthorUserId: number | null;
+  };
 }
 
 /** Who caused a task write, for `task_events.actor_type`/`actor_user_id` (plan.md Task 2.13). `'apple'` is
@@ -199,6 +206,7 @@ export function createTaskService(deps: Pick<AppDeps, 'clock' | 'config' | 'task
         sourceTgMessageId: input.source.tgMessageId,
         sourceLink: input.source.link,
         sourceQuote: quote,
+        quoteAuthorUserId: input.source.quoteAuthorUserId,
         createdByUserId: createdByColumn(actor),
         createdAt: now,
         updatedAt: now,
