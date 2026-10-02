@@ -108,6 +108,30 @@ describe('/settings (plan.md Task 3.11)', () => {
     await harness.send(callback(OWNER, a('trs'), botKeyboardMessage(OWNER)));
     expect((await getSettings(harness.db, harness.deps.workspace.id)).privacyNoticeText).toBeNull();
   });
+
+  // Review round I1: a notice containing `<`/`>`/`&` must not break Telegram's HTML parser — stored
+  // as-is (the raw Owner-typed text, so `/admin`'s own debug views etc. still see the real value), but
+  // escaped by `renderNoticeSection` (`src/bot/views/settings.ts`) every time it re-renders the section.
+  it('escapes the stored notice text when re-rendering the section', async () => {
+    const harness = await createBotHarness();
+    await makeOwner(harness, OWNER);
+
+    await harness.send(dmText(OWNER, '/settings'));
+    await harness.send(callback(OWNER, a('ont'), botKeyboardMessage(OWNER)));
+    await harness.send(callback(OWNER, a('ted'), botKeyboardMessage(OWNER)));
+    await harness.send(dmText(OWNER, 'Keep <b>calm</b> & read /privacy'));
+
+    expect((await getSettings(harness.db, harness.deps.workspace.id)).privacyNoticeText).toBe(
+      'Keep <b>calm</b> & read /privacy',
+    );
+
+    // Re-open the section: its header embeds the stored text directly into an HTML-parsed message, so it
+    // must come back escaped, not as the raw, Telegram-breaking markup.
+    await harness.send(callback(OWNER, a('ont'), botKeyboardMessage(OWNER)));
+    const lastReply = harness.replies(OWNER.id).at(-1);
+    expect(lastReply).toContain('Keep &lt;b&gt;calm&lt;/b&gt; &amp; read /privacy');
+    expect(lastReply).not.toContain('Keep <b>calm</b> & read /privacy');
+  });
 });
 
 describe('/admin "AI settings" (plan.md Task 3.11)', () => {
@@ -141,5 +165,19 @@ describe('/admin "AI settings" (plan.md Task 3.11)', () => {
     expect(harness.replies(SUPERADMIN.id).at(-1)).toBe(
       texts.adminSettings.unknownKey('ai.thresholds.unknown'),
     );
+  });
+
+  // Review round I2: SPEC §16 only grants a superadmin ai.*/batch.* via /admin — every other settings
+  // path must be rejected here even though it exists on `Settings` and would otherwise be a perfectly
+  // valid patch (the Owner's own /settings menu is where those belong).
+  it('rejects a path outside ai.*/batch.*, even one that exists on Settings', async () => {
+    const harness = await createBotHarness();
+
+    await harness.send(dmText(SUPERADMIN, '/admin'));
+    await harness.send(callback(SUPERADMIN, a('ais'), botKeyboardMessage(SUPERADMIN)));
+
+    await harness.send(dmText(SUPERADMIN, 'quiet.enabled true'));
+    expect(harness.replies(SUPERADMIN.id).at(-1)).toBe(texts.adminSettings.outOfScope('quiet.enabled'));
+    expect((await getSettings(harness.db, harness.deps.workspace.id)).quiet.enabled).toBe(false);
   });
 });

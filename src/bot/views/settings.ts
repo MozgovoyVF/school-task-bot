@@ -8,6 +8,7 @@ import type { Settings } from '../../domain/settings/schema.js';
 import { RU_ZONES, zoneLabel } from '../../time/zones.js';
 import { texts, RU_WEEKDAYS_SHORT } from '../texts/ru.js';
 import { encodeCallback } from '../keyboards/callbackCodec.js';
+import { escapeHtml } from './escape.js';
 
 export interface SettingsView {
   text: string;
@@ -180,12 +181,18 @@ export function renderAdminAiSettingsButton(): Buttons {
   return [[btn(texts.admin.aiSettingsButton, 'ais')]];
 }
 
+/**
+ * `current` is the Owner's own free-text override (`settings.privacyNoticeText`, untrusted — CLAUDE.md §8:
+ * every message goes through `parse_mode: 'HTML'`, so raw user text must be escaped first, same convention
+ * `proposalCard.ts`/every other `bot/views/*` file uses). `defaultText` (`texts.privacy.chatNotice`) is a
+ * trusted literal from `ru.ts` and is never escaped, same as everywhere else it's rendered.
+ */
 export function renderNoticeSection(current: string | null, defaultText: string): SettingsView {
   const buttons: Buttons = [[btn(texts.settings.noticeEditButton, 'ted')]];
   if (current !== null) buttons.push([btn(texts.settings.noticeResetButton, 'trs')]);
   buttons.push([btn(texts.settings.backButton, 'ntb')]);
   return {
-    text: texts.settings.noticeHeader(current !== null, current ?? defaultText),
+    text: texts.settings.noticeHeader(current !== null, current !== null ? escapeHtml(current) : defaultText),
     buttons,
   };
 }

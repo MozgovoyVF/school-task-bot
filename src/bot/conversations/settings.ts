@@ -426,6 +426,10 @@ function buildSettingsConversation(deps: SettingsDeps) {
 
 const ADMIN_SETTING_PATH_RE = /^[a-zA-Z]+(?:\.[a-zA-Z]+)*$/;
 
+/** SPEC §16: the admin REPL (`buildAdminSettingsConversation` below) only ever accepts a path whose first
+ * segment is one of these — `ai.*`/`batch.*`, nothing else (review round, I2). */
+const ADMIN_SETTING_ALLOWED_ROOTS = new Set(['ai', 'batch']);
+
 function parseAdminSettingValue(raw: string): unknown {
   if (raw === 'true') return true;
   if (raw === 'false') return false;
@@ -505,6 +509,14 @@ function buildAdminSettingsConversation(deps: SettingsDeps) {
       const parsed = parseAdminSetting(line);
       if (parsed === null) {
         await textCtx.reply(texts.adminSettings.invalidFormat, { parse_mode: 'HTML' });
+        continue;
+      }
+
+      // SPEC §16: only a superadmin may change `ai.*`/`batch.*`, via `/admin` — only those two
+      // top-level branches, not every settings path `buildPatchFromPath` could otherwise reach
+      // (review round, I2: the first implementation accepted any existing path, e.g. `quiet.enabled`).
+      if (!ADMIN_SETTING_ALLOWED_ROOTS.has(parsed.path.split('.')[0] ?? '')) {
+        await textCtx.reply(texts.adminSettings.outOfScope(parsed.path), { parse_mode: 'HTML' });
         continue;
       }
 

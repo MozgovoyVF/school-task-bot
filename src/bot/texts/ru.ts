@@ -417,7 +417,7 @@ export const texts = {
    */
   adminSettings: {
     intro: [
-      'Отправляйте строки вида «ключ значение», например:',
+      'Здесь можно менять только параметры ai.* и batch.*. Отправляйте строки вида «ключ значение», например:',
       '<code>ai.thresholds.low 0.3</code>',
       '<code>ai.thresholds.high 0.7</code>',
       '<code>ai.thresholds.modify 0.5</code>',
@@ -435,6 +435,11 @@ export const texts = {
     invalidFormat: 'Не понял формат. Ожидается «ключ значение», например «ai.thresholds.low 0.3».',
     unknownKey(path: string): string {
       return `Неизвестный параметр: <code>${escapeHtml(path)}</code>.`;
+    },
+    /** `path`'s first segment is not `ai`/`batch` (SPEC §16, review round I2) — distinct from
+     * `unknownKey` (an `ai.*`/`batch.*` path that doesn't actually exist on `Settings`). */
+    outOfScope(path: string): string {
+      return `Здесь можно менять только ai.* и batch.*: <code>${escapeHtml(path)}</code> недоступен.`;
     },
     rejected(path: string): string {
       return `Значение для <code>${escapeHtml(path)}</code> не подходит — настройки не изменены.`;
