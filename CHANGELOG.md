@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-10-03
+
 Phase 3 (tasks, reminders and assignees — Owner-only per D40): pre-due/due/overdue reminder
 scheduling and delivery with quiet-hours grouping, retry and `done`/snooze buttons, a daily
 morning summary, full task cards (status, edit, archive, delete), task lists with filters and
