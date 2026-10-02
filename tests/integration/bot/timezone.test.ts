@@ -6,6 +6,11 @@ import { texts, formatZoneLabel } from '../../../src/bot/texts/ru.js';
 import { RU_ZONES, zoneLabel } from '../../../src/time/zones.js';
 import { decodeCallback } from '../../../src/bot/keyboards/callbackCodec.js';
 import { users } from '../../../src/db/schema/index.js';
+import { formatCommandList } from '../../../src/bot/views/help.js';
+import { SUPERADMIN_COMMANDS } from '../../../src/bot/commands.js';
+
+const superadminHelpText = texts.help.superadmin(formatCommandList(SUPERADMIN_COMMANDS));
+const superadminStartText = texts.start.superadmin(formatCommandList(SUPERADMIN_COMMANDS));
 
 const SUPERADMIN = { id: 900000001, firstName: 'Anna' };
 const STRANGER = { id: 42, firstName: 'Ivan' };
@@ -62,7 +67,7 @@ describe('/start (first run)', () => {
     expect(harness.replies(SUPERADMIN.id)).toEqual([
       texts.timezone.prompt,
       texts.timezone.saved(formatZoneLabel(zoneLabel('Europe/Moscow', at))),
-      texts.help.superadmin(),
+      superadminHelpText,
     ]);
     expect(harness.calls.some((c) => c.method === 'answerCallbackQuery')).toBe(true);
   });
@@ -123,7 +128,7 @@ describe('/start (first run)', () => {
 
     await harness.send(dmText(SUPERADMIN, '/start'));
 
-    expect(harness.replies(SUPERADMIN.id)).toEqual([texts.start.superadmin()]);
+    expect(harness.replies(SUPERADMIN.id)).toEqual([superadminStartText]);
   });
 });
 
@@ -133,8 +138,8 @@ describe('/help', () => {
 
     await harness.send(dmText(SUPERADMIN, '/help'));
 
-    expect(harness.replies(SUPERADMIN.id)).toEqual([texts.help.superadmin()]);
-    expect(texts.help.superadmin()).not.toBe(texts.start.superadmin());
+    expect(harness.replies(SUPERADMIN.id)).toEqual([superadminHelpText]);
+    expect(superadminHelpText).not.toBe(superadminStartText);
   });
 });
 

@@ -42,6 +42,14 @@ const messages: ResolveContext['messages'] = new Map([
 
 const OWNER_USER_ID = 999;
 
+// D47 (plan.md Task 3.15): T12's current assignee is P1 (userId 111) — most
+// pre-existing tests below don't touch `changes.assignee`, so this entry is
+// inert for them (the D47 conversion only fires when `changes.assignee` is
+// itself present and resolves to a *different* specific person).
+const targetTasks: ResolveContext['targetTasks'] = new Map([
+  [12, { title: 'Исходное название задачи', assignee: { type: 'user', userId: 111 } }],
+]);
+
 const ctx: ResolveContext = {
   refs,
   messages,
@@ -49,6 +57,7 @@ const ctx: ResolveContext = {
   workspaceTz: WORKSPACE_TZ,
   now: NOW,
   fuzzy,
+  targetTasks,
 };
 
 const NO_DUE = { due_local: null, time_hint: 'none' as const, due_text: null };
@@ -271,5 +280,140 @@ describe('resolveActions — due dates (SPEC §10)', () => {
     const { actions } = resolveActions(result, ctx);
     const action = actions[0];
     if (action?.kind === 'update') expect(action.changes.due).toBeUndefined();
+  });
+});
+
+describe('resolveActions — D47 new-instruction-vs-update split (plan.md Task 3.15)', () => {
+  it('splits into a new create when the target has a specific assignee and changes.assignee names someone else', () => {
+    const result = extraction([
+      updateAction({
+        changes: { assignee_ref: 'P2' },
+        explicit_transfer: false,
+        new_task_title: null,
+      }),
+    ]);
+    const { actions } = resolveActions(result, ctx);
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({
+      kind: 'create',
+      category: 'assignment',
+      title: 'Исходное название задачи',
+      description: null,
+      assignee: { type: 'user', userId: 222 },
+      priority: 'normal',
+    });
+    if (actions[0]?.kind === 'create') {
+      expect(actions[0].due.dueAt).toBeNull();
+      expect('target' in actions[0]).toBe(false);
+    }
+  });
+
+  it('uses new_task_title as the synthesized create title when the model provided one', () => {
+    const result = extraction([
+      updateAction({
+        changes: { assignee_ref: 'P2' },
+        explicit_transfer: false,
+        new_task_title: 'Подготовить отчёт',
+      }),
+    ]);
+    const { actions } = resolveActions(result, ctx);
+    expect(actions[0]).toMatchObject({ kind: 'create', title: 'Подготовить отчёт' });
+  });
+
+  it('uses changes.due for the synthesized create when the model provided one', () => {
+    const result = extraction([
+      updateAction({
+        changes: {
+          assignee_ref: 'P2',
+          due: { due_local: '2026-09-25T18:00', time_hint: 'none', due_text: null },
+        },
+        explicit_transfer: false,
+      }),
+    ]);
+    const { actions } = resolveActions(result, ctx);
+    const action = actions[0];
+    expect(action?.kind).toBe('create');
+    if (action?.kind === 'create') {
+      expect(action.due.dueAt?.toISOString()).toBe('2026-09-25T13:00:00.000Z');
+    }
+  });
+
+  it('stays an update (with the assignee change applied) when explicit_transfer is true', () => {
+    const result = extraction([
+      updateAction({
+        changes: { assignee_ref: 'P2' },
+        explicit_transfer: true,
+        new_task_title: 'Подготовить отчёт',
+      }),
+    ]);
+    const { actions } = resolveActions(result, ctx);
+    expect(actions[0]).toMatchObject({
+      kind: 'update',
+      target: { taskId: 12 },
+      changes: { assignee: { type: 'user', userId: 222 } },
+    });
+  });
+
+  it('stays an update and threads new_task_title through when there is no assignee change', () => {
+    const result = extraction([
+      updateAction({
+        changes: { due: { due_local: '2026-09-25T18:00', time_hint: 'none', due_text: null } },
+        explicit_transfer: false,
+        new_task_title: 'Подготовить отчёт',
+      }),
+    ]);
+    const { actions } = resolveActions(result, ctx);
+    expect(actions[0]).toMatchObject({ kind: 'update', newTaskTitle: 'Подготовить отчёт' });
+  });
+
+  it('stays an update when the new assignee resolves to the same person as the target', () => {
+    const result = extraction([updateAction({ changes: { assignee_ref: 'P1' }, explicit_transfer: false })]);
+    const { actions } = resolveActions(result, ctx);
+    expect(actions[0]).toMatchObject({
+      kind: 'update',
+      changes: { assignee: { type: 'user', userId: 111 } },
+    });
+  });
+
+  it('stays an update when the target has no specific assignee (all/none)', () => {
+    const noneCtx: ResolveContext = {
+      ...ctx,
+      targetTasks: new Map([[12, { title: 'Исходное название задачи', assignee: { type: 'none' } }]]),
+    };
+    const result = extraction([updateAction({ changes: { assignee_ref: 'P2' }, explicit_transfer: false })]);
+    const { actions } = resolveActions(result, noneCtx);
+    expect(actions[0]).toMatchObject({
+      kind: 'update',
+      changes: { assignee: { type: 'user', userId: 222 } },
+    });
+  });
+
+  it('splits when the target assignee is a free-text name and the new assignee is a different specific person', () => {
+    const textCtx: ResolveContext = {
+      ...ctx,
+      targetTasks: new Map([[12, { title: 'Сделать отчёт', assignee: { type: 'text', name: 'Маша' } }]]),
+    };
+    const result = extraction([updateAction({ changes: { assignee_ref: 'P2' }, explicit_transfer: false })]);
+    const { actions } = resolveActions(result, textCtx);
+    expect(actions[0]).toMatchObject({
+      kind: 'create',
+      title: 'Сделать отчёт',
+      assignee: { type: 'user', userId: 222 },
+    });
+  });
+
+  it('does not split when the target proposal (R#) is the target, even with a different changes.assignee', () => {
+    const result = extraction([
+      updateAction({ target_ref: 'R5', changes: { assignee_ref: 'P2' }, explicit_transfer: false }),
+    ]);
+    const { actions } = resolveActions(result, ctx);
+    expect(actions[0]).toMatchObject({ kind: 'update', target: { proposalId: 5 } });
+  });
+
+  it('stays an update (defensive) when the target task has no entry in ctx.targetTasks', () => {
+    const emptyCtx: ResolveContext = { ...ctx, targetTasks: new Map() };
+    const result = extraction([updateAction({ changes: { assignee_ref: 'P2' }, explicit_transfer: false })]);
+    const { actions } = resolveActions(result, emptyCtx);
+    expect(actions[0]).toMatchObject({ kind: 'update' });
   });
 });

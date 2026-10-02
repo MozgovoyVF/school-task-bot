@@ -50,6 +50,7 @@ function basePayload(overrides: Partial<ProposalPayload> = {}): ProposalPayload 
     origin: 'ai',
     quote: 'цитата',
     quoteAuthorName: 'Анна',
+    quoteAuthorUserId: null,
     ...overrides,
   };
 }

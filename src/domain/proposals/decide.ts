@@ -6,10 +6,11 @@ import { can, type Actor } from '../people/permissions.js';
 import { getChatById } from '../chats/repo.js';
 import { getSettings } from '../workspaces/repo.js';
 import { messageLink } from '../../bot/views/links.js';
-import type { AssigneeResolution } from '../../ai/pipeline/resolve.js';
+import { taskAssignee, type AssigneeResolution } from '../../ai/pipeline/resolve.js';
 import { createTaskService, type ActorRef, type CreateTaskInput } from '../tasks/service.js';
 import { getTaskById, type TaskRow } from '../tasks/repo.js';
 import {
+  getProposalById,
   parseProposalPayload,
   type ProposalPayload,
   type ProposalPayloadDue,
@@ -181,6 +182,7 @@ function buildCreateInput(
       tgMessageId: source.tgMessageId,
       link: source.link,
       quote: payload.quote,
+      quoteAuthorUserId: payload.quoteAuthorUserId ?? null,
     },
   };
 }
@@ -378,4 +380,100 @@ export async function applyModification(
     const updated = await taskService.setStatus(tx, task.id, status, ref);
     return { ok: true, value: updated };
   });
+}
+
+/** `createTaskFromUpdate`'s title/assignee fallback (D47's "otherwise, the target's own title") — the
+ * target's current title/assignee, read from whichever of a task row or a target proposal's own payload
+ * (D44) is the one this `update` actually points at. */
+function updateTargetFallback(
+  targetTask: TaskRow | null,
+  targetProposalPayload: ProposalPayload | null,
+): {
+  title: string;
+  assignee: AssigneeResolution;
+} {
+  if (targetTask) return { title: targetTask.title, assignee: taskAssignee(targetTask) };
+  return {
+    title: targetProposalPayload?.title ?? '',
+    assignee: targetProposalPayload?.assignee ?? { type: 'none' },
+  };
+}
+
+/**
+ * The card's manual "➕ Create as a new task" (texts.proposalCard.createAsNewButton) escape hatch (D47, plan.md Task 3.15, point 2): available on
+ * every `update`-kind card regardless of whether the D47 pipeline rule itself (`src/ai/pipeline/resolve.ts`)
+ * already split it into a `create` proposal — the Owner can always choose this instead of
+ * `applyModification`'s plain apply. Claims the proposal exactly like `applyModification` (same
+ * `allowedKinds: ['update']`, `nextStatus: 'accepted'`, atomic no-op on a repeat press), but instead of
+ * patching the target task, creates a **brand-new** task from it in the same transaction — the target task
+ * (and its reminders, which only `TaskService.update`/`setStatus` would touch) is never read for a write,
+ * only for its title/assignee fallback. Covers a target that is itself still a pending proposal
+ * (`payload.targetProposalId`, D44) the same way: falls back to that proposal's own `payload.title`/
+ * `assignee` instead of a task's.
+ */
+export async function createTaskFromUpdate(
+  deps: DecideDeps,
+  a: { proposalId: number; actor: Actor },
+): Promise<DecisionResult<TaskRow>> {
+  if (!can(a.actor, 'proposal.decide') || a.actor.userId === null) return { ok: false, reason: 'forbidden' };
+
+  const taskService = createTaskService(deps);
+  let accepted: ProposalRow | null = null;
+
+  const result = await runDecision<TaskRow>(deps, async (tx) => {
+    const now = deps.clock.now();
+    const claim = await claimProposal(tx, {
+      proposalId: a.proposalId,
+      actor: a.actor,
+      now,
+      nextStatus: 'accepted',
+      allowedKinds: ['update'],
+    });
+    if (!claim.ok) return claim;
+    accepted = claim.value;
+    const proposal = claim.value;
+
+    const payload = parseProposalPayload(proposal.payload);
+    if (!payload) {
+      throw new Error(`createTaskFromUpdate: unparsable payload for proposal ${String(proposal.id)}`);
+    }
+
+    let targetTask: TaskRow | null = null;
+    let targetProposalPayload: ProposalPayload | null = null;
+    if (proposal.targetTaskId !== null) {
+      targetTask = await getTaskById(tx, proposal.targetTaskId);
+      if (!targetTask) return { ok: false, reason: 'target_gone' };
+    } else if (payload.targetProposalId !== undefined) {
+      const targetProposal = await getProposalById(tx, payload.targetProposalId);
+      if (!targetProposal) return { ok: false, reason: 'target_gone' };
+      targetProposalPayload = parseProposalPayload(targetProposal.payload);
+    } else {
+      return { ok: false, reason: 'target_gone' };
+    }
+
+    const fallback = updateTargetFallback(targetTask, targetProposalPayload);
+    const source = await loadSource(tx, proposal);
+    const input: CreateTaskInput = {
+      workspaceId: proposal.workspaceId,
+      title: payload.newTaskTitle ?? fallback.title,
+      description: null,
+      assignee: payload.changes?.assignee ?? fallback.assignee,
+      due: dueFromPayload(payload.changes?.due),
+      priority: 'normal',
+      origin: payload.origin,
+      proposalId: proposal.id,
+      source: {
+        chatId: source.chatId,
+        tgMessageId: source.tgMessageId,
+        link: source.link,
+        quote: payload.quote,
+        quoteAuthorUserId: payload.quoteAuthorUserId ?? null,
+      },
+    };
+    const task = await taskService.create(tx, input, actorRef(a.actor));
+    return { ok: true, value: task };
+  });
+
+  if (result.ok && accepted) await reactOnAccept(deps, accepted);
+  return result;
 }

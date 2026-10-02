@@ -26,12 +26,24 @@ import { registerChatsHandlers } from './handlers/chats.js';
 import { registerPeopleHandlers } from './handlers/people.js';
 import { registerPrivacyHandlers } from './handlers/privacy.js';
 import { registerGroupHandlers } from './handlers/group.js';
+import { registerDmFreeTextHandler } from './handlers/dmFreeText.js';
+import { registerForwardsHandler } from './handlers/forwards.js';
 import { registerProposalCallbackHandlers } from './handlers/proposalCallbacks.js';
+import { registerReminderCallbackHandlers } from './handlers/reminderCallbacks.js';
+import { registerTaskCallbackHandlers } from './handlers/taskCallbacks.js';
 import { registerInboxHandlers } from './handlers/inbox.js';
+import { registerListHandlers } from './handlers/lists.js';
+import { registerSearchHandlers } from './handlers/search.js';
+import { registerStatsHandlers } from './handlers/stats.js';
 import { registerStubCommandHandlers } from './handlers/stubs.js';
 import { registerTimezoneConversation } from './conversations/timezone.js';
 import { registerEditPersonConversation } from './conversations/editPerson.js';
 import { registerEditProposalConversation } from './conversations/editProposal.js';
+import { registerEditTaskConversation } from './conversations/editTask.js';
+import { registerSnoozeInputConversation } from './conversations/snoozeInput.js';
+import { registerNewTaskConversation } from './conversations/newTask.js';
+import { registerSettingsConversations } from './conversations/settings.js';
+import { registerSettingsHandlers } from './handlers/settings.js';
 
 /**
  * The subset of `AppDeps` (`src/deps.ts`) that bot construction and its
@@ -114,8 +126,20 @@ export function createBot(
   registerTimezoneConversation(bot, deps);
   registerEditPersonConversation(bot, deps);
   registerEditProposalConversation(bot, deps);
+  // Must be registered before `registerTaskCallbackHandlers` below, same ordering convention as
+  // `registerEditProposalConversation` relative to `registerProposalCallbackHandlers` — its own `v1:t:edt:`
+  // entry callback gets first crack at that action (though `taskCallbacks.ts`'s own `next()` fallthrough
+  // for unknown actions would still reach it either way).
+  registerEditTaskConversation(bot, deps);
+  // Must be registered before `registerReminderCallbackHandlers` below — its own `v1:n:inp:` entry
+  // callback needs first crack at that action, same ordering reason `registerEditProposalConversation`
+  // above is registered ahead of `registerProposalCallbackHandlers` for its `v1:p:edt:` entry callback.
+  registerSnoozeInputConversation(bot, deps);
+  registerNewTaskConversation(bot, deps);
+  registerSettingsConversations(bot, deps);
   registerDmHandlers(bot);
   registerAdminHandlers(bot, deps, startedAt);
+  registerSettingsHandlers(bot);
   registerTransferHandlers(bot, deps);
   registerChatMemberHandlers(bot, deps);
   registerChatsHandlers(bot, deps);
@@ -134,10 +158,23 @@ export function createBot(
   registerInboxHandlers(bot, deps);
   // Same ordering constraint as `/privacy`/`/inbox` above — must run before `registerGroupHandlers`,
   // whose `bot.on('message', ...)` would otherwise swallow these DM commands first (see that file's own
-  // doc comment, and `stubs.ts`'s).
+  // doc comment, and `stubs.ts`'s). `registerListHandlers` (Task 3.7's `/tasks`/`/today`/`/overdue`/
+  // `/archive`) and `registerSearchHandlers`/`registerStatsHandlers` (Task 3.8's `/search`/`/stats`) share
+  // the exact same constraint, for the exact same reason — registered here too, ahead of both
+  // `registerGroupHandlers` and the now-narrower `registerStubCommandHandlers`.
+  registerListHandlers(bot, deps);
+  registerSearchHandlers(bot, deps);
+  registerStatsHandlers(bot, deps);
+  // `bot.chatType('private')`-scoped (grammY auto-continues for any other chat type), so — unlike the
+  // handlers above — these two have no ordering constraint relative to `registerGroupHandlers`; kept here
+  // anyway, alongside the rest of this DM-feature cluster (plan.md Task 3.10).
+  registerDmFreeTextHandler(bot, deps);
+  registerForwardsHandler(bot, deps);
   registerStubCommandHandlers(bot);
   registerGroupHandlers(bot, deps);
   registerProposalCallbackHandlers(bot, deps);
+  registerReminderCallbackHandlers(bot, deps);
+  registerTaskCallbackHandlers(bot, deps);
 
   bot.catch((err) => {
     void deps.errors.report(err.error, { updateId: err.ctx.update.update_id });

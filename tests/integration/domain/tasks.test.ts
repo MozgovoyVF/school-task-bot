@@ -20,7 +20,7 @@ const baseInput = (overrides: Partial<CreateTaskInput> = {}): CreateTaskInput =>
   priority: 'normal',
   origin: 'manual_dm',
   proposalId: null,
-  source: { chatId: null, tgMessageId: null, link: null, quote: null },
+  source: { chatId: null, tgMessageId: null, link: null, quote: null, quoteAuthorUserId: null },
   ...overrides,
 });
 
@@ -58,7 +58,7 @@ describe('TaskService', () => {
         baseInput({
           workspaceId: ws.id,
           title: longTitle,
-          source: { chatId: null, tgMessageId: null, link: null, quote: longQuote },
+          source: { chatId: null, tgMessageId: null, link: null, quote: longQuote, quoteAuthorUserId: null },
         }),
         { type: 'system' },
       ),

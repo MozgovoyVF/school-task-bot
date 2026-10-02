@@ -24,6 +24,7 @@ function basePayload(overrides: Partial<ProposalPayload> = {}): ProposalPayload 
     origin: 'ai',
     quote: null,
     quoteAuthorName: null,
+    quoteAuthorUserId: null,
     ...overrides,
   };
 }
@@ -123,7 +124,13 @@ describe('listPendingProposals', () => {
         batchId: null,
         kind: 'complete',
         category: null,
-        payload: { reasoning: 'test', origin: 'ai', quote: null, quoteAuthorName: null },
+        payload: {
+          reasoning: 'test',
+          origin: 'ai',
+          quote: null,
+          quoteAuthorName: null,
+          quoteAuthorUserId: null,
+        },
         targetTaskId: task.id,
         confidence: 0.9,
         policyDecision: 'shown',

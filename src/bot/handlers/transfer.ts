@@ -24,8 +24,11 @@ export interface TransferHandlersDeps {
   clock: Clock;
   logger: Logger;
   messenger: Messenger;
-  /** Only `SUPERADMIN_TG_IDS` is needed — used to bind the `syncCommands` callback handed to `afterOwnerChanged` (Task 1.11). */
-  config: Pick<Env, 'SUPERADMIN_TG_IDS'>;
+  /** `SUPERADMIN_TG_IDS` binds the `syncCommands` callback handed to `afterOwnerChanged` (Task 1.11); the
+   * full `Env` (not just that one field, review round 2, I3) is also threaded straight through to
+   * `afterOwnerChanged` itself, whose `OwnerChangedDeps.config` needs a real `Env` to satisfy
+   * `remindersHook.afterChange`'s own `deps` parameter type. */
+  config: Env;
 }
 
 /**
@@ -139,6 +142,7 @@ export function registerTransferHandlers(bot: Bot<BotContext>, deps: TransferHan
         logger: deps.logger,
         messenger: deps.messenger,
         clock: deps.clock,
+        config: deps.config,
         // Binds the real syncCommands (bot-layer, does real Telegram I/O) to this update's `ctx.api`
         // and the claimed workspace — `afterOwnerChanged` (domain/) only ever sees a no-arg callback.
         syncCommands: () =>

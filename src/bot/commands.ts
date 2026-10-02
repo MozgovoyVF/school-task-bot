@@ -85,8 +85,12 @@ export const OWNER_COMMANDS: BotCommand[] = [
   cmd('claim', texts.commands.claim),
 ];
 
-/** A superadmin's own DM chat scope: the Owner's full list plus the technical commands only a superadmin gets. */
-const SUPERADMIN_COMMANDS: BotCommand[] = [
+/**
+ * A superadmin's own DM chat scope: the Owner's full list plus the technical commands only a superadmin
+ * gets. Exported (alongside `OWNER_COMMANDS`/`DM_COMMANDS`) for `src/bot/views/help.ts`'s `/start`/`/help`
+ * superadmin text, so that text can never drift from what `syncCommands` actually publishes below.
+ */
+export const SUPERADMIN_COMMANDS: BotCommand[] = [
   ...OWNER_COMMANDS,
   cmd('admin', texts.commands.admin),
   cmd('debug', texts.commands.debug),

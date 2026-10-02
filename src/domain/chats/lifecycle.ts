@@ -17,9 +17,15 @@ import { getOwner, getUserById, getUserByTgId } from '../people/repo.js';
 // handler in the loop at all. Neither import touches grammY or does any
 // I/O of its own (`bot/texts/ru.ts` is plain strings, `chatApproval.ts` is a
 // pure render), so CLAUDE.md §7's actual rule ("domain must not depend on
-// grammY; send through `Messenger`") still holds.
+// grammY; send through `Messenger`") still holds. `bot/views/escape.ts`'s
+// `escapeHtml` is imported for the same reason (Task 3.11 review fix, I1):
+// `publishNoticeOnce`'s own notice text can now be an Owner-authored
+// `settings.privacyNoticeText` override (`/settings`'s "chat notice text"
+// section), sent via `Messenger.send` with `parse_mode: 'HTML'` — an
+// unescaped `<`/`>`/`&` in that override would break Telegram's HTML parser.
 import { texts } from '../../bot/texts/ru.js';
 import { renderChatApprovalCard, type ChatApprovalView } from '../../bot/views/chatApproval.js';
+import { escapeHtml } from '../../bot/views/escape.js';
 import {
   claimNoticeSlot,
   claimPendingChatForAutoLeave,
@@ -376,7 +382,12 @@ export async function publishNoticeOnce(deps: ChatLifecycleDeps, chat: ChatRow):
   if (!claimed) return;
 
   const settings = chat.workspaceId != null ? await getSettings(deps.db, chat.workspaceId) : null;
-  const noticeText = settings?.privacyNoticeText ?? texts.privacy.chatNotice;
+  const customNotice = settings?.privacyNoticeText ?? null;
+  // `customNotice` is Owner-authored free text (`/settings`'s "chat notice text" section, Task 3.11) —
+  // escaped before going into an HTML-parsed message, same convention as `renderNoticeSection`'s own
+  // re-render of this same value (`src/bot/views/settings.ts`). `texts.privacy.chatNotice` is a trusted
+  // literal and is never escaped, same as everywhere else it's rendered.
+  const noticeText = customNotice !== null ? escapeHtml(customNotice) : texts.privacy.chatNotice;
 
   try {
     await deps.messenger.send(chat.tgChatId, noticeText);

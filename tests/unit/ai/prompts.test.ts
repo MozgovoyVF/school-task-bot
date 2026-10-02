@@ -30,7 +30,8 @@ describe('loadPrompt (D27)', () => {
   it('loads examples.school_ru.json, and every example parses as a valid ExtractionResult', () => {
     const bundle = loadPrompt({ name: 'extractor', version: 'extractor.v1', profile: 'school_ru' });
     expect(bundle.examples.length).toBeGreaterThanOrEqual(8);
-    expect(bundle.examples.length).toBeLessThanOrEqual(10);
+    // D47 (plan.md Task 3.15) added 3 more synthetic examples (13 total) — bumped from 10.
+    expect(bundle.examples.length).toBeLessThanOrEqual(14);
     for (const example of bundle.examples) {
       const parsed: unknown = JSON.parse(example.assistant);
       const result = parseExtraction(parsed);

@@ -1,6 +1,6 @@
 import type { BotCommand } from 'grammy/types';
 import { texts } from '../texts/ru.js';
-import { DM_COMMANDS, OWNER_COMMANDS } from '../commands.js';
+import { DM_COMMANDS, OWNER_COMMANDS, SUPERADMIN_COMMANDS } from '../commands.js';
 import type { Actor } from '../context.js';
 
 export interface HelpView {
@@ -15,7 +15,7 @@ export interface HelpView {
  * list a command the role doesn't really have, or omit one it does (final
  * Phase 1 review's I2 fix).
  */
-function formatCommandList(commands: readonly BotCommand[]): string {
+export function formatCommandList(commands: readonly BotCommand[]): string {
   return commands.map((c) => `/${c.command} — ${c.description}`).join('\n');
 }
 
@@ -25,7 +25,7 @@ function formatCommandList(commands: readonly BotCommand[]): string {
  * picker (`src/bot/handlers/dm.ts` decides that based on `users.timezone`).
  */
 export function renderStart(actor: Actor): HelpView {
-  if (actor.isSuperadmin) return { text: texts.start.superadmin() };
+  if (actor.isSuperadmin) return { text: texts.start.superadmin(formatCommandList(SUPERADMIN_COMMANDS)) };
   if (actor.role === 'owner') return { text: texts.start.owner(formatCommandList(OWNER_COMMANDS)) };
   if (actor.role === 'member') return { text: texts.start.member(formatCommandList(DM_COMMANDS)) };
   return { text: texts.start.stranger() };
@@ -45,7 +45,7 @@ export function renderStart(actor: Actor): HelpView {
  * introduction to what they can now do.
  */
 export function renderHelp(actor: Actor): HelpView {
-  if (actor.isSuperadmin) return { text: texts.help.superadmin() };
+  if (actor.isSuperadmin) return { text: texts.help.superadmin(formatCommandList(SUPERADMIN_COMMANDS)) };
   if (actor.role === 'owner') return { text: texts.help.owner(formatCommandList(OWNER_COMMANDS)) };
   if (actor.role === 'member') return { text: texts.help.member(formatCommandList(DM_COMMANDS)) };
   return { text: texts.help.stranger() };

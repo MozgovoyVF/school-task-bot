@@ -2,7 +2,17 @@ import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { DbOrTx, Tx } from '../../db/client.js';
 import { proposals } from '../../db/schema/index.js';
-import type { AssigneeResolution, Category } from '../../ai/pipeline/resolve.js';
+import type { AssigneeResolution, Category, ResolvedAction } from '../../ai/pipeline/resolve.js';
+import type { ResolvedDue } from '../../time/resolveDue.js';
+
+/**
+ * `proposals.category`'s full DB range (plan.md Task 3.10): `'manual'` is a sibling of {@link Category},
+ * not a member of it — the same ad hoc widening `src/scheduler/jobs/cards.ts`'s own
+ * `ProposalCardView.category` already anticipated (`Category | 'manual' | null`) before this task ever
+ * wrote a `'manual'` row. `ai/pipeline/resolve.ts`'s `Category` stays the AI extractor's own 5-value
+ * categorization and is not touched by this widening.
+ */
+export type ProposalCategoryColumn = Category | 'manual';
 
 export type ProposalRow = typeof proposals.$inferSelect;
 
@@ -60,10 +70,37 @@ export interface ProposalPayload {
     title?: string;
   };
   targetProposalId?: number;
+  /**
+   * D47 (plan.md Task 3.15): the model's own title for a new task this `update` proposal's card could be
+   * split into via the manual "➕ Create as a new task" (texts.proposalCard.createAsNewButton) escape hatch (`src/domain/proposals/decide.ts`'s
+   * `createTaskFromUpdate`) — same "not a DB column" precedent as `targetProposalId` above: `kind='update'`
+   * proposals only ever write to `changes`/`target_task_id`, there is no column for a *different* task's
+   * title. Only ever set for `kind='update'`; absent when the model sent no `new_task_title` (or sent
+   * `null`) — `createTaskFromUpdate` then falls back to the target's own current title.
+   */
+  newTaskTitle?: string;
   origin: 'ai' | 'manual_group' | 'manual_dm' | 'forward';
   noReaction?: boolean;
   quote: string | null;
   quoteAuthorName: string | null;
+  /**
+   * The quote's own author, by internal `users.id` (D46) — a jsonb-only field with no DB column of its
+   * own, same precedent as `quoteAuthorName` above. Populated at creation from whoever actually said the
+   * quoted text (`processBatch`'s `MessageRow.authorUserId`, `/task`'s reply author or its own invoker, a
+   * DM free-text draft's own Owner-invoker); always `null` for a DM forward (`forwards.ts`) — Telegram's
+   * `forward_origin` has no reliably resolvable internal id. `eraseMember` (`src/domain/people/erase.ts`)
+   * redacts `quote` to `texts.erase.redactedQuote` wherever this matches the member being erased, and does
+   * so independently of `messages` retention (`chats/retention.ts`) — the whole reason this field exists
+   * instead of `eraseMember` re-deriving the author via `source_message_ids`/`messages` at erasure time.
+   *
+   * Optional (not just nullable) on the *parse* side only (D46 fix round 1): every row written before
+   * this field existed has no such key in its jsonb at all, and `ProposalPayloadSchema.safeParse` must
+   * accept that or every pre-existing proposal becomes unparsable (`parseProposalPayload` returning
+   * `null` for all of them). Every read site already treats it as possibly-absent (`?? null`). Every
+   * *write* site (`CreateManualProposalInput`, `processBatch`'s `QuoteInfo`) still requires it — only
+   * old rows need the absence tolerated, never a row written from here on.
+   */
+  quoteAuthorUserId?: number | null;
   /**
    * Fields the Owner changed in the editProposal dialog (`src/bot/conversations/editProposal.ts`, plan.md
    * Task 2.14) before accepting, keyed by field name (`title`/`assignee`/`due`/`priority`/`description`) —
@@ -80,7 +117,7 @@ export interface NewProposal {
   chatId: number | null;
   batchId: number | null;
   kind: 'create' | 'update' | 'complete' | 'cancel';
-  category: Category | null;
+  category: ProposalCategoryColumn | null;
   payload: ProposalPayload;
   targetTaskId: number | null;
   confidence: number;
@@ -126,6 +163,95 @@ export async function getProposalById(db: DbOrTx, id: number): Promise<ProposalR
   return row ?? null;
 }
 
+function serializeManualDue(due: ResolvedDue): ProposalPayloadDue {
+  return {
+    dueAt: due.dueAt !== null ? due.dueAt.toISOString() : null,
+    allDay: due.allDay,
+    tz: due.tz,
+    inPast: due.inPast,
+    invalid: due.invalid,
+  };
+}
+
+export interface CreateManualProposalInput {
+  workspaceId: number;
+  /** `null` for a DM-origin draft (`manual_dm`/`forward`) — proposals.chat_id is nullable for exactly this
+   * case (see the schema's own D5 comment). */
+  chatId: number | null;
+  /** `extractSingle`'s (`src/ai/pipeline/extractSingle.ts`) resolved draft — always `kind: 'create'`, D19. */
+  action: Extract<ResolvedAction, { kind: 'create' }>;
+  origin: 'manual_group' | 'manual_dm' | 'forward';
+  sourceMessageIds: number[];
+  quote: string | null;
+  quoteAuthorName: string | null;
+  /** See `ProposalPayload.quoteAuthorUserId`'s own doc comment (D46) — each of this function's three
+   * call sites resolves this differently; see their own call-site comments. */
+  quoteAuthorUserId: number | null;
+  /** Not persisted on `proposals` (no such column) — accepted only so callers have one place to pass it
+   * through for a future audit log, and for a `debug` log line here. */
+  createdByUserId: number;
+  /** CLAUDE.md §8: never `new Date()` — the caller's already-captured `now`. */
+  now: Date;
+}
+
+/**
+ * Inserts one manually-triggered `create` proposal (plan.md Task 3.10): `/task` in a group, DM free text,
+ * or a DM forward batch (D18), as opposed to the AI batch pipeline's own `processBatch`/`insertProposal`
+ * call site. `category='manual'` (not one of `action.category`'s five AI values — SPEC's card marks it
+ * manual via `payload.origin !== 'ai'`, independent of this column), `policyDecision='shown'` always
+ * (D19: the auto-pipeline's confidence thresholds never apply to a manual request — CLAUDE.md: a missed
+ * task is worse than a false positive), `batchId: null` (not tied to any `analysis_batches` row —
+ * `extractSingle`'s own cost tracking writes its own, separate `kind='manual'` row). `noReaction: true` on
+ * every row this writes: `/task`'s own ✍ acknowledgement (`src/bot/handlers/taskCommand.ts`) already marks
+ * the source message, so the card outbox's usual 👀 (`reactions.onDetect`, `src/scheduler/jobs/cards.ts`)
+ * would otherwise double up on it once the card is actually delivered — harmless for a DM-origin draft
+ * (`chatId: null`), which never gets a source reaction in the first place. Takes a plain `DbOrTx` rather than
+ * `insertProposal`'s stricter `Tx`: none of this task's three call sites need atomicity with another write,
+ * so this inserts directly instead of forcing an otherwise-pointless `db.transaction(...)` wrapper on every
+ * caller.
+ */
+export async function createManualProposal(
+  db: DbOrTx,
+  input: CreateManualProposalInput,
+): Promise<ProposalRow> {
+  const { action } = input;
+  const payload: ProposalPayload = {
+    title: action.title,
+    description: action.description,
+    category: action.category,
+    assignee: action.assignee,
+    due: serializeManualDue(action.due),
+    dueText: action.due.dueText,
+    priority: action.priority,
+    reasoning: action.reasoning,
+    origin: input.origin,
+    noReaction: true,
+    quote: input.quote,
+    quoteAuthorName: input.quoteAuthorName,
+    quoteAuthorUserId: input.quoteAuthorUserId,
+  };
+
+  const [row] = await db
+    .insert(proposals)
+    .values({
+      workspaceId: input.workspaceId,
+      chatId: input.chatId,
+      batchId: null,
+      kind: 'create',
+      category: 'manual',
+      payload,
+      targetTaskId: null,
+      confidence: action.confidence,
+      policyDecision: 'shown',
+      policyReason: 'manual_override',
+      sourceMessageIds: input.sourceMessageIds,
+      createdAt: input.now,
+    })
+    .returning();
+  if (!row) throw new Error('createManualProposal: insert returned no row');
+  return row;
+}
+
 // CLAUDE.md §8: jsonb goes through zod. Mirrors `ProposalPayload` above field-for-field — kept here,
 // next to the interface it validates, so `src/domain/proposals/decide.ts` (plan.md Task 2.13) has one
 // canonical parser instead of hand-rolling its own (`src/scheduler/jobs/cards.ts`'s own local schema,
@@ -161,10 +287,12 @@ export const ProposalPayloadSchema = z.object({
     .object({ due: DueSchema.optional(), assignee: AssigneeSchema.optional(), title: z.string().optional() })
     .optional(),
   targetProposalId: z.number().optional(),
+  newTaskTitle: z.string().optional(),
   origin: z.enum(['ai', 'manual_group', 'manual_dm', 'forward']),
   noReaction: z.boolean().optional(),
   quote: z.string().nullable(),
   quoteAuthorName: z.string().nullable(),
+  quoteAuthorUserId: z.number().nullable().optional(),
   ownerEdits: z.record(z.string(), OwnerEditSchema).optional(),
 });
 

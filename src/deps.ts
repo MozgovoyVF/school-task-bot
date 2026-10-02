@@ -24,8 +24,9 @@ export type { AiProviders };
 // contract (`{ name; afterChange(tx, task, change, deps) }`) is built, in
 // `src/domain/tasks/service.ts`, so this now re-exports it from there.
 // `AppDeps` below is unchanged: `taskHooks: TaskHook[]` still type-checks the
-// same way, and `deps.taskHooks` is still `[]` in `src/app.ts` until phase 3
-// (reminders) and phase 5 (Apple Reminders `SyncTarget`) register real hooks.
+// same way. Phase 3 is done: `src/app.ts` now registers the real reminders
+// hook (`taskHooks: [remindersHook]`); phase 5 (Apple Reminders `SyncTarget`)
+// still has to add its own hook to that array.
 export type { TaskHook };
 
 /**

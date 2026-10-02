@@ -229,14 +229,13 @@ export const texts = {
      * `texts.help.*` (a distinct, command-reference text — see that
      * namespace) once the zone is saved.
      */
-    superadmin(): string {
+    superadmin(commandList: string): string {
       return [
         '👋 Здравствуйте! Я — Секретарь школы.',
         'Слежу за рабочими группами, нахожу поручения и договорённости и веду список задач.',
         '',
         'Доступные команды:',
-        '/admin — панель администратора',
-        '/help — эта справка',
+        commandList,
       ].join('\n');
     },
     /**
@@ -296,14 +295,12 @@ export const texts = {
    * and that menu can never drift apart.
    */
   help: {
-    /** `/help` for a superadmin. */
-    superadmin(): string {
-      return [
-        '📋 Доступные команды:',
-        '/admin — панель администратора',
-        '/timezone — часовой пояс',
-        '/help — эта справка',
-      ].join('\n');
+    /** `/help` for a superadmin. `commandList` is `src/bot/views/help.ts`'s rendering of
+     * `src/bot/commands.ts`'s `SUPERADMIN_COMMANDS` (the Owner's full list plus `/admin`/`/debug`/
+     * `/reanalyze`) — the same source `syncCommands` uses for a superadmin's own chat-scope menu, so this
+     * text can never list fewer commands than Telegram's menu actually offers them. */
+    superadmin(commandList: string): string {
+      return ['📋 Доступные команды:', commandList].join('\n');
     },
     /** `/help` for the workspace Owner. */
     owner(commandList: string): string {
@@ -406,6 +403,48 @@ export const texts = {
       'Отключите privacy mode у @BotFather (Bot Settings → Group Privacy → Turn off) и ' +
         '<b>заново добавьте бота в группы</b>, где он уже состоит — иначе для уже добавленных чатов ничего не изменится.',
     ].join('\n'),
+    /** Button on the `/admin` panel that enters `adminSettings` (Task 3.11, superadmin-only `ai.*`/`batch.*` tuning, SPEC §16's "Superadmin может менять ai.* и batch.* через /admin"). */
+    aiSettingsButton: '🤖 AI-настройки',
+  },
+  /**
+   * `/admin`'s "🤖 AI-настройки" button (plan.md Task 3.11, `src/bot/conversations/settings.ts`'s
+   * `adminSettings` conversation) — a free-text `ключ значение` REPL for `ai.*`/`batch.*` (SPEC §16),
+   * ended by sending `/done`. Every value is validated through `SettingsSchema` (`mergeSettings`) before
+   * being written — an invalid one is rejected with `rejected`, leaving settings untouched.
+   */
+  adminSettings: {
+    intro: [
+      'Здесь можно менять только параметры ai.* и batch.*. Отправляйте строки вида «ключ значение», например:',
+      '<code>ai.thresholds.low 0.3</code>',
+      '<code>ai.thresholds.high 0.7</code>',
+      '<code>ai.thresholds.modify 0.5</code>',
+      '<code>ai.autoCreate.enabled false</code>',
+      '<code>ai.autoCreate.minConfidence 0.9</code>',
+      '<code>ai.proposalExpiryDays 7</code>',
+      '<code>batch.quietSeconds 180</code>',
+      '<code>batch.maxMessages 25</code>',
+      '<code>batch.maxWaitSeconds 600</code>',
+      '',
+      'Чтобы закончить, отправьте /done.',
+    ].join('\n'),
+    /** Anything other than a text message while this REPL is running. */
+    textHint: 'Пожалуйста, отправьте текстовое сообщение, например «ai.thresholds.low 0.3», или /done.',
+    invalidFormat: 'Не понял формат. Ожидается «ключ значение», например «ai.thresholds.low 0.3».',
+    unknownKey(path: string): string {
+      return `Неизвестный параметр: <code>${escapeHtml(path)}</code>.`;
+    },
+    /** `path`'s first segment is not `ai`/`batch` (SPEC §16, review round I2) — distinct from
+     * `unknownKey` (an `ai.*`/`batch.*` path that doesn't actually exist on `Settings`). */
+    outOfScope(path: string): string {
+      return `Здесь можно менять только ai.* и batch.*: <code>${escapeHtml(path)}</code> недоступен.`;
+    },
+    rejected(path: string): string {
+      return `Значение для <code>${escapeHtml(path)}</code> не подходит — настройки не изменены.`;
+    },
+    saved(path: string, value: string): string {
+      return `Сохранено: <code>${escapeHtml(path)} ${escapeHtml(value)}</code>`;
+    },
+    done: 'Готово, изменения сохранены.',
   },
   /**
    * `/debug [chat]` (SPEC §12.2 row, Task 2.15): superadmin-only diagnostics for the last 10
@@ -605,6 +644,65 @@ export const texts = {
     /** At least one field was saved. */
     saved: 'Данные участника сохранены.',
   },
+  /**
+   * GDPR-style erasure (SPEC §19.3.3, plan.md Task 3.12): `src/domain/people/erase.ts`'s `eraseMember`
+   * (`/people` → a member's card → "Удалить данные") and `src/domain/workspaces/erase.ts`'s
+   * `eraseWorkspace` (`/admin` → "Удалить workspace полностью"). Both flows use the same double-
+   * confirmation shape `texts.taskCard`'s delete-forever flow established (SPEC §12.4).
+   */
+  erase: {
+    /** `tasks.assignee_name_text` for a task whose assignee's data was erased (`eraseMember`). */
+    anonymous: '[удалено]',
+    /**
+     * `tasks.source_quote`/`proposals.payload.quote` redaction by quote author (D46, plan.md's
+     * `quote_author_user_id`/`payload.quoteAuthorUserId`), distinct from {@link anonymous} above, which is
+     * only for `assignee_name_text` — a quote and an assignment are independent facts about the same task,
+     * and `eraseMember` redacts whichever ones name the erased member.
+     */
+    redactedQuote: '[удалено по запросу]',
+    /**
+     * `proposals.payload.quoteAuthorName` redaction (D46 extension, 2026-10-02): replaces the erased quote
+     * author's display name captured at proposal creation, so cards rendered later no longer show it.
+     * `tasks` has no such name column, so this is used only for proposals.
+     */
+    redactedQuoteAuthor: 'участник удалён',
+    /** Button on `/people`'s per-member card (`renderPersonCard`) — the initial tap. */
+    memberButton: '🗑 Удалить данные',
+    /** First of the two required confirmations. `name` is the member's already-escaped display name. */
+    memberConfirm1(name: string): string {
+      return (
+        `Удалить все данные участника «${name}»? Будут удалены его сообщения, он будет убран из ` +
+        'участников, а задачи, где он исполнитель, — обезличены. Это действие нельзя отменить.'
+      );
+    },
+    /** The second (final) confirmation. */
+    memberConfirm2: 'Вы точно уверены? Отменить это действие будет невозможно.',
+    /** `eraseMember` refused with `'owner_must_transfer'` — shown instead of the confirmation screens. */
+    ownerMustTransfer:
+      'Нельзя удалить данные владельца школы. Сначала передайте права другому участнику: /transfer.',
+    /** `eraseMember` refused with `'not_found'` — the membership was removed by another update meanwhile. */
+    memberNotFound: 'Участник не найден.',
+    memberDone(messages: number, tasksAnonymized: number): string {
+      return (
+        `✅ Данные участника удалены: сообщений — ${String(messages)}, обезличено задач — ` +
+        `${String(tasksAnonymized)}.`
+      );
+    },
+    /** Button on `/admin`'s panel (superadmin only) — the initial tap for `eraseWorkspace`. */
+    workspaceButton: '🗑 Удалить workspace полностью',
+    /** First of the two required confirmations. */
+    workspaceConfirm1:
+      'Удалить ВСЕ данные этой школы — чаты, сообщения, задачи, участников? Бот покинет все чаты. ' +
+      'Это действие нельзя отменить.',
+    /** The second (final) confirmation. */
+    workspaceConfirm2:
+      'Вы точно уверены? Это необратимо удалит все данные школы без возможности восстановления.',
+    workspaceDone: '✅ Workspace полностью удалён. Бот покинул все чаты.',
+    /** Shared by both confirmation flows. */
+    confirmButton: 'Да, продолжить',
+    confirmForeverButton: 'Да, удалить навсегда',
+    cancelButton: '↩️ Отмена',
+  },
   privacy: {
     /**
      * SPEC §15.2 — published once per chat by `publishNoticeOnce`
@@ -729,6 +827,9 @@ export const texts = {
     },
     applyButton: '✅ Применить',
     ignoreButton: '❌ Игнорировать',
+    /** D47 (plan.md Task 3.15): the manual escape hatch on every `update`-kind card — creates a brand-new
+     * task instead of applying the suggested change to the existing one. */
+    createAsNewButton: '➕ Создать новой задачей',
     /** `complete`-kind's single summary line; the `— «quote» (author)` evidence is omitted when `quote` is `null`. */
     completeLine(taskId: number, title: string, quote: string | null, author: string | null): string {
       const evidence = quote === null ? '' : ` — «${quote}»${author === null ? '' : ` (${author})`}`;
@@ -895,6 +996,252 @@ export const texts = {
     ownerBlocked: '⚠️ Руководитель заблокировал бота в Telegram — карточки предложений не доставляются.',
   },
   /**
+   * Reminder DMs (`src/scheduler/jobs/notify.ts`/`src/bot/views/reminder.ts`, plan.md Task 3.3, SPEC
+   * §13.2/§13.3) — only ever sent to the Owner (D40). `pre_due`/`due`/`overdue`/`snooze` share one header
+   * per kind, then the same title/assignee/due layout `proposalCard` uses for a card. The grouped-overdue
+   * digest (3+ at once, `settings.reminders.groupOverdueThreshold`) reuses `overdueHeader`'s wording in its
+   * own count header instead, one `overdueDigestLine` per task.
+   */
+  reminders: {
+    preDueHeader: '⏳ Завтра срок',
+    dueHeader: '🔔 Срок сегодня',
+    overdueHeader: '🔴 Просрочено',
+    /** A user-requested repeat ping (`[⏰ +1 час]`/`[📅 Завтра]`/`[🕐 Выбрать время]`) — the due date itself never changed, so this gets a neutral header rather than `dueHeader`/`overdueHeader`'s implied urgency. */
+    snoozeHeader: '🔔 Напоминание',
+    titleLine(title: string): string {
+      return `📌 ${title}`;
+    },
+    metaLine(assignee: string, due: string): string {
+      return `👤 ${assignee} · 📅 ${due}`;
+    },
+    doneButton: '✅ Готово',
+    plusHourButton: '⏰ +1 час',
+    tomorrowButton: '📅 Завтра',
+    pickTimeButton: '🕐 Выбрать время',
+    /** The grouped-overdue digest's own header — `count` is always `>= settings.reminders.groupOverdueThreshold`. */
+    overdueDigestHeader(count: number): string {
+      return `🔴 Просрочено (${String(count)}):`;
+    },
+    /** One digest row per overdue task — no per-task buttons (SPEC doesn't specify any for the grouped case); `/tasks` is where the Owner acts on them individually. */
+    overdueDigestLine(taskId: number, title: string, due: string): string {
+      return `• T${String(taskId)} «${title}» — ${due}`;
+    },
+    /** The digest's own overflow footer (review round 1, I4) — `src/bot/views/reminder.ts`'s `renderOverdueDigest` stops adding rows once the text would cross Telegram's 4096-char limit (CLAUDE.md) and appends this instead, mirroring SPEC §13.4's "ещё N → /tasks" overflow convention for the summary's own "no-due" section. */
+    overdueDigestMore(count: number): string {
+      return `… ещё ${String(count)} → /tasks`;
+    },
+    /** `[✅ Готово]` succeeded (plan.md Task 3.4, SPEC §13.3) — `title` is already escaped by the caller,
+     * same convention as `proposalDecide.completedCard`. */
+    doneConfirm(taskId: number, title: string): string {
+      return `✅ Готово: T${String(taskId)} «${title}»`;
+    },
+    /** `[⏰ +1 час]`/`[📅 Завтра]`/the submenu's own three buttons all land here — `due` is
+     * `texts.formatDue`'s own output for the snooze's `fireAt`. The task's own due date never changed
+     * (SPEC §13.3), so this deliberately never mentions "due", only when the next ping will be. */
+    snoozeConfirm(due: string): string {
+      return `🔔 Отложено до: ${due}`;
+    },
+    /** `[🕐 Выбрать время]`'s own submenu (SPEC §13.3: `[Через 3 ч] [Сегодня 18:00] [Послезавтра] [Ввести…]`). */
+    pickMenuTitle: 'Когда напомнить?',
+    pick3hButton: 'Через 3 ч',
+    pickToday18Button: 'Сегодня 18:00',
+    pickDayAfterButton: 'Послезавтра',
+    pickEnterButton: 'Ввести…',
+    /** The submenu's own "Ввести…" button's free-text prompt (`src/bot/conversations/snoozeInput.ts`). */
+    snoozeEnterPrompt: 'Введите дату и время свободным текстом, например «15.10 14:00» или «через 2 часа».',
+    /** `snoozeFireAt` returned `null` — the picked option (currently only `today18`) is already unreachable
+     * today (SPEC §13.3's own example: pressing it after 18:00). */
+    snoozeUnavailable: 'Это время уже прошло. Выберите другой вариант.',
+    /** The task a reminder button was pressed on no longer exists, or is already `done`/`cancelled` —
+     * shared by every `v1:n:*` button and the `snoozeInput` conversation's own entry guard. */
+    taskGone: 'Задача не найдена или уже закрыта.',
+  },
+  /**
+   * The task card (`src/bot/views/taskCard.ts`/`src/bot/handlers/taskCallbacks.ts`, plan.md Task 3.6,
+   * SPEC §12.4) — Owner only (D40/`task.edit`). `titleLine`/`statusLine` assemble the card header; the
+   * meta/quote/link lines reuse `texts.reminders.metaLine`/`texts.proposalCard.quoteLine`/`.linkLine`
+   * directly rather than duplicating identically-worded lines here. Every parameter carrying user/DB text
+   * arrives here already HTML-escaped by the caller (`src/bot/views/taskCard.ts`), same convention as
+   * `texts.proposalCard`.
+   */
+  taskCard: {
+    titleLine(taskId: number, title: string): string {
+      return `📌 T${String(taskId)} · ${title}`;
+    },
+    statusLine(statusLabel: string, priorityLabel: string): string {
+      return `Статус: ${statusLabel} · Приоритет: ${priorityLabel}`;
+    },
+    statusOpen: 'открыта',
+    statusInProgress: 'в работе',
+    statusDone: 'выполнена',
+    statusCancelled: 'отменена',
+    descriptionLine(description: string): string {
+      return `📝 ${description}`;
+    },
+    doneButton: '✅ Выполнено',
+    startButton: '▶️ В работу',
+    editButton: '✏️ Изменить',
+    snoozeButton: '⏰ Отложить',
+    cancelButton: '🗑 Отменить',
+    historyButton: '📜 История',
+    restoreButton: '♻️ Восстановить',
+    deleteForeverButton: '🗑 Удалить навсегда',
+    backButton: '↩️ К задаче',
+    /** The card's own "edit" button opened the dialog, but the task is no longer in an editable (open/
+     * in_progress) state (e.g. it was archived by another update while the card sat open). */
+    editArchived: 'Эта задача в архиве. Сначала восстановите её, чтобы изменить.',
+    /** Shared "задача не найдена" reply (brief scenario 9, Фокус ревью 2) — every `v1:t:*` button looks the
+     * task up fresh before acting; a stale callback referencing an already-deleted/non-existent task gets
+     * this instead of a thrown exception. */
+    notFound: 'Задача не найдена.',
+    /** "🗑 Удалить навсегда"'s own two-step confirmation (SPEC §12.4: "с двойным подтверждением") — the
+     * initial press shows this first screen. */
+    deleteConfirm1(taskId: number, title: string): string {
+      return `Удалить задачу T${String(taskId)} «${title}» навсегда? Это действие нельзя отменить.`;
+    },
+    /** The first confirmation's own follow-up — the *second* of the two required confirmations. */
+    deleteConfirm2:
+      'Вы точно уверены? Будут безвозвратно удалены сама задача, её история и все уведомления по ней.',
+    deleteConfirmButton: 'Да, продолжить',
+    deleteForeverConfirmButton: 'Да, удалить навсегда',
+    deleteCancelButton: '↩️ Отмена',
+    deletedConfirm(taskId: number, title: string): string {
+      return `🗑 Задача T${String(taskId)} «${title}» удалена навсегда.`;
+    },
+    /** `src/bot/conversations/editTask.ts`'s own menu header — distinct from `texts.editProposal.menuHeader`
+     * only in that this edits an *existing* task rather than a not-yet-created one; its field menu/submenus
+     * otherwise reuse `texts.editProposal`'s own wording directly (field names, due/assignee/priority
+     * submenu titles and buttons, free-text date prompt/preview) since none of it is proposal-specific. */
+    editMenuHeader: '✏️ Изменение задачи',
+    /** Reuses every other button/prompt from `texts.editProposal`, but needs its own save label:
+     * `texts.editProposal.saveButton` ("Сохранить и создать") always creates a task, which is wrong wording
+     * for editing one that already exists. */
+    editSaveButton: '✅ Сохранить',
+    editSaved(taskId: number, title: string): string {
+      return `✅ Сохранено: T${String(taskId)} «${title}»`;
+    },
+  },
+  /**
+   * The task card's "📜 История" button (`src/bot/views/history.ts`, plan.md Task 3.6, SPEC §12.4's "все
+   * изменения пишутся в task_events") — the last 20 `task_events` rows for one task, newest first, dates in
+   * the viewer's own zone (the Owner's — only they ever see this). `actor*`/`type*` cover
+   * `task_events.actor_type`/`.type`'s known values (`src/domain/tasks/events.ts`); `typeOther` is the
+   * fallback for a `type` this list doesn't name individually.
+   */
+  taskHistory: {
+    header(taskId: number, title: string): string {
+      return `📜 История задачи T${String(taskId)} «${title}»`;
+    },
+    empty: 'Событий пока нет.',
+    line(dateLabel: string, actor: string, typeLabel: string): string {
+      return `${dateLabel} · ${actor} · ${typeLabel}`;
+    },
+    actorSystem: 'Система',
+    actorAi: 'ИИ',
+    actorApple: 'Apple Reminders',
+    /** `actor_type === 'user'` but the membership couldn't be resolved (should not normally happen). */
+    actorUnknownUser: 'Пользователь',
+    typeCreated: 'Создана',
+    typeUpdated: 'Изменена',
+    typeStatusChanged: 'Статус изменён',
+    typeOther(type: string): string {
+      return `Событие: ${type}`;
+    },
+  },
+  /**
+   * `/tasks`/`/today`/`/overdue`/`/archive` (`src/bot/views/taskList.ts`/`src/bot/handlers/lists.ts`,
+   * plan.md Task 3.7, SPEC §12.3) — Owner only (D40, `task.viewAll`). `row`'s marker is `rowMarker`'s own
+   * `'🔴'|'🔵'|'🟡'|'⚪'` (D24); `title`/`assignee` arrive already HTML-escaped by the caller, same
+   * convention as `texts.taskCard`. `pageFooter`'s lowercase, no-period "стр N/M" is SPEC §12.3's own
+   * literal wording (distinct from `texts.inbox.pageFooter`'s "Стр. N/M" — each list screen keeps its own
+   * copy rather than sharing one, same stance `texts.taskCard`/`texts.reminders` already take on
+   * near-identical lines elsewhere in this file).
+   */
+  taskList: {
+    headerOpen: '📋 Открытые задачи',
+    headerToday: '🟡 Сегодня',
+    headerOverdue: '🔴 Просрочено',
+    headerNoDue: '⚪ Без срока',
+    /** `/today` (SPEC §12.2: "на сегодня + просроченные") — distinct from the filter row's own
+     * `headerOverdue`/`headerToday`, which are each a single bucket. */
+    headerTodayAndOverdue: '📅 Сегодня и просроченные',
+    headerArchive: '🗄 Архив',
+    headerAssignee(name: string): string {
+      return `👤 Исполнитель: ${name}`;
+    },
+    headerChat(title: string): string {
+      return `💬 Чат: ${title}`;
+    },
+    /** No tasks matched the current filter/page. */
+    empty: 'Нет задач по этому фильтру.',
+    /** One list row (SPEC §12.3): `marker T<id> <title> — <assignee> · <due>`. */
+    row(marker: string, taskId: number, title: string, assignee: string, due: string): string {
+      return `${marker} T${String(taskId)} ${title} — ${assignee} · ${due}`;
+    },
+    /** A row's own due column when the task has no due date at all (distinct from `texts.formatDue`'s
+     * identical wording — this is a list-row fragment, not a full due-date line). */
+    noDueLabel: 'без срока',
+    pageFooter(page: number, totalPages: number): string {
+      return `стр ${String(page)}/${String(totalPages)}`;
+    },
+    prevButton: '◀️',
+    nextButton: '▶️',
+    filterAllButton: '📋 Все открытые',
+    filterTodayButton: '🟡 Сегодня',
+    filterOverdueButton: '🔴 Просрочено',
+    filterNoDueButton: '⚪ Без срока',
+    filterAssigneeButton: '👤 По исполнителю ▾',
+    filterChatButton: '💬 По чату ▾',
+    assigneeMenuHeader: '👤 По какому исполнителю показать задачи?',
+    chatMenuHeader: '💬 По какому чату показать задачи?',
+    /** The "По чату ▾" picker has nothing to list (no chats attached to the workspace yet). */
+    chatMenuEmpty: 'У этого рабочего пространства пока нет чатов.',
+    /** A `chats.title`-less chat's own picker button/header label (same "без названия" fallback
+     * `texts.inbox.itemButton` already uses for an untitled chat). */
+    chatUntitled: 'без названия',
+    backButton: '↩️ Назад',
+  },
+  /**
+   * The morning summary (`src/scheduler/jobs/summary.ts`/`src/bot/views/summary.ts`, plan.md Task 3.5,
+   * SPEC §13.4) — Owner only (D40, no "Ждут вашей проверки" section, since the review flow is
+   * Member-only and was removed). Section order: overdue, today, unprocessed proposals, no-due — an empty
+   * section is simply left out, and `allEmpty` replaces the whole body when every section is empty.
+   * `sectionMore`/no-due's own overflow line reuse the same "ещё N → /tasks" convention as
+   * `texts.reminders.overdueDigestMore`.
+   */
+  summary: {
+    /** `dateLabel` is `src/time/format.ts`'s `formatDateLabel` output, e.g. `пт, 25 сен`. */
+    header(dateLabel: string): string {
+      return `☀️ Доброе утро! Сводка на ${dateLabel}`;
+    },
+    overdueHeader(count: number): string {
+      return `🔴 Просрочено (${String(count)}):`;
+    },
+    todayHeader(count: number): string {
+      return `🟡 Сегодня (${String(count)}):`;
+    },
+    inboxLine(count: number): string {
+      return `📥 Неразобранные предложения: ${String(count)} → /inbox`;
+    },
+    /** `count` is the section's true total (`noDueTotal`), even when the body below only shows the top 5. */
+    noDueHeader(count: number): string {
+      return `⚪ Без срока (${String(count)}):`;
+    },
+    /** A no-due task never has a due date to show (that's the whole section), so its line is just the
+     * title, unlike `texts.reminders.overdueDigestLine`'s own `title — due` shape. */
+    noDueItemLine(taskId: number, title: string): string {
+      return `• T${String(taskId)} «${title}»`;
+    },
+    /** Any section's own overflow footer, once its item list had to be cut short — `src/bot/views/
+     * summary.ts`'s `renderSummary` budgets Telegram's 4096-char limit (CLAUDE.md) across every section. */
+    sectionMore(count: number): string {
+      return `… ещё ${String(count)} → /tasks`;
+    },
+    /** Every section empty (SPEC §13.4). */
+    allEmpty: 'Задач на сегодня нет 🎉',
+    allTasksButton: '📋 Все задачи',
+  },
+  /**
    * `/inbox` (SPEC §12.2 row, Owner only — D40, Task 2.15): every still-`pending` proposal (`shown` *and*
    * `suppressed` alike — this is deliberately the one place a `suppressed` proposal is ever surfaced to
    * the Owner, so a message the auto-pipeline hid below threshold is never permanently lost, CLAUDE.md's
@@ -978,5 +1325,205 @@ export const texts = {
     admin: 'Панель администратора',
     debug: 'Диагностика последнего анализа чата',
     reanalyze: 'Повторно проанализировать последние сообщения',
+  },
+  /**
+   * `/search <текст>` (plan.md Task 3.8, SPEC §12.2) — Owner only (D40, `task.viewAll`). Result rows reuse
+   * `texts.taskList.row`/`pageFooter`/`prevButton`/`nextButton` directly (`src/bot/handlers/search.ts`
+   * builds the view) rather than a second copy of those; this namespace only holds what's actually new.
+   * `header`'s `query` must already be HTML-escaped by the caller, same convention
+   * `texts.taskList.headerAssignee`'s `name` already uses — the quoted query is also how
+   * `src/bot/handlers/search.ts` recovers the original search text for its own "▶️ next page" callback
+   * (parsed back out of this exact message, since `callback_data`'s charset can't carry arbitrary
+   * free-text/Cyrillic — see that file's own doc comment), so this exact `«…»` shape is load-bearing, not
+   * just decorative.
+   */
+  search: {
+    usage: 'Введите текст для поиска, например: <code>/search расписание</code>.',
+    header(query: string): string {
+      return `🔍 Поиск: «${query}»`;
+    },
+    /** The search matched nothing at all (distinct from `texts.taskList.empty`'s "nothing in this filter"
+     * wording — a search finding nothing isn't the same situation). */
+    empty: 'Ничего не найдено.',
+    /** The message this pagination callback points at no longer carries a parseable query — SPEC §12.2's
+     * own "a missed task is worse than a false positive" stance means a best-effort re-parse that fails
+     * must say so plainly rather than silently showing the wrong results. */
+    expired: 'Результаты поиска устарели — выполните /search ещё раз.',
+  },
+  /**
+   * `/stats` (plan.md Task 3.8, SPEC §12.5) — Owner only (D40, `task.viewAll`). One block per assignee
+   * (`src/bot/views/stats.ts`'s `renderStats` picks each block's own icon — 👤/👑/❓ — based on
+   * `TaskStatsRow.key.type`, this namespace only holds the Russian wording itself) plus the `[7] [30] [90]`
+   * period-switch row.
+   */
+  stats: {
+    header(periodDays: number): string {
+      return `📊 Статистика за ${String(periodDays)} дней`;
+    },
+    /** SPEC §12.5's own wording for the workspace Owner's own "delegated to myself" row — kept as the
+     * Latin "Owner" (SPEC §12.5 itself writes it this way, unlike every other label in this file). */
+    ownerLabel: 'Owner',
+    noneLabel: 'Без исполнителя',
+    /** No task in the cohort at all for the selected period. */
+    empty: 'За этот период задач нет.',
+    periodButton(periodDays: number): string {
+      return `${String(periodDays)} дн.`;
+    },
+    /** The currently-selected period's own button, visually marked so the Owner can see which window the
+     * numbers below belong to. */
+    periodButtonActive(periodDays: number): string {
+      return `• ${String(periodDays)} дн. •`;
+    },
+    /** One assignee's own block — `name` already carries its own icon prefix (`renderStats`'s job);
+     * `onTimePct`/`avgLateHours` of `null` (no `done` tasks / no late ones) read as `NO_DATA_LABEL`. */
+    row(
+      name: string,
+      open: number,
+      inProgress: number,
+      overdueNow: number,
+      done: number,
+      onTimePct: number | null,
+      avgLateHours: number | null,
+    ): string {
+      const onTime = onTimePct === null ? NO_DATA_LABEL : `${String(onTimePct)}%`;
+      const roundedLate = avgLateHours === null ? null : Math.round(avgLateHours);
+      const late =
+        roundedLate === null ? NO_DATA_LABEL : `${String(roundedLate)} ${pluralizeChas(roundedLate)}`;
+      return [
+        name,
+        `Открыто: ${String(open)} · В работе: ${String(inProgress)} · Просрочено сейчас: ${String(overdueNow)}`,
+        `Выполнено: ${String(done)} · В срок: ${onTime} · Опоздание в среднем: ${late}`,
+      ].join('\n');
+    },
+  },
+  /**
+   * Manual task creation (plan.md Task 3.10, SPEC §12.1): `/task` in a group, DM free text and `/new`
+   * (`src/bot/handlers/taskCommand.ts`/`dmFreeText.ts`/`forwards.ts`, `src/bot/conversations/newTask.ts`).
+   * `/task` itself never replies with text in the group (SPEC §12.1) — nothing here is shown there; this
+   * namespace is DM-only wording.
+   */
+  manualTask: {
+    /** A Member's free text in DM, outside any dialog (D40 — manual DM creation is Owner-only; no LLM call
+     * is made for this reply, unlike the Owner's own free text). */
+    membersNotSupported: 'Создание задач вручную доступно только руководителю.',
+  },
+  /** The `/new` conversation (`src/bot/conversations/newTask.ts`, plan.md Task 3.10, SPEC §12.1): a
+   * strictly linear название → исполнитель → срок → приоритет → подтверждение, reusing
+   * `texts.editProposal`'s submenu wording for the assignee/due/priority steps (identical UI, no
+   * proposal involved here) and `texts.proposalDecide.createdCard` for the final "✅ Создано" line. */
+  newTask: {
+    titlePrompt: 'Введите название новой задачи.',
+    menuHeader: '🆕 Новая задача',
+    confirmButton: '✅ Создать задачу',
+    cancelButton: '❌ Отмена',
+    cancelled: 'Создание задачи отменено.',
+  },
+  /**
+   * `/settings` (Owner-only, plan.md Task 3.11, SPEC §16's "кнопочные меню"): the main menu and every
+   * section's screen (`src/bot/views/settings.ts`/`src/bot/conversations/settings.ts`). Every section
+   * applies each change immediately — no separate "save" step — and every time/number value is validated
+   * through `SettingsSchema` (`updateSettings`'s own `mergeSettings`) before the reply confirms it, so an
+   * invalid value never reaches the DB and the Owner always gets a clear reason instead.
+   */
+  settings: {
+    menuHeader: '⚙️ Настройки',
+    summaryButton: '☀️ Сводка',
+    remindersButton: '🔔 Напоминания',
+    quietButton: '🌙 Тихие часы',
+    timezoneButton: '🕐 Часовой пояс школы',
+    reactionsButton: '👀 Реакции',
+    noticeButton: '💬 Текст уведомления в чате',
+    closeButton: '✖️ Закрыть',
+    closed: 'Настройки закрыты.',
+    backButton: '◀️ Назад',
+    pickButtonHint: 'Пожалуйста, воспользуйтесь кнопками.',
+    textHint: 'Пожалуйста, отправьте текстовое сообщение.',
+
+    summaryHeader(enabled: boolean, time: string): string {
+      return `☀️ Сводка ${enabled ? 'включена' : 'выключена'}, время: ${time}`;
+    },
+    summaryEnableButton: 'Включить',
+    summaryDisableButton: 'Выключить',
+    summaryTimeButton: 'Изменить время',
+    summaryTimePrompt: 'Введите время сводки в формате ЧЧ:ММ, например 09:00.',
+    timeInvalid: 'Не удалось сохранить время — ожидается формат ЧЧ:ММ. Настройки не изменены.',
+
+    remindersHeader(preDue: string, allDayDue: string, overdue: string, threshold: number): string {
+      return [
+        '🔔 Напоминания',
+        `Накануне срока: ${preDue}`,
+        `В день срока (без времени): ${allDayDue}`,
+        `Просрочено (ежедневно): ${overdue}`,
+        `Объединять от: ${String(threshold)} одновременных`,
+      ].join('\n');
+    },
+    remindersPreDueButton: 'Время «накануне срока»',
+    remindersAllDayButton: 'Время «в день срока»',
+    remindersOverdueButton: 'Время «просрочено»',
+    remindersThresholdButton: 'Порог объединения',
+    remindersTimePrompt: 'Введите время в формате ЧЧ:ММ, например 10:00.',
+    remindersThresholdPrompt: 'Введите порог объединения — целое число от 1, например 3.',
+    thresholdInvalid: 'Не удалось сохранить — ожидается целое число от 1. Настройки не изменены.',
+
+    quietHeader(enabled: boolean, weekdays: string, window: string | null, rangesCount: number): string {
+      return [
+        `🌙 Тихие часы ${enabled ? 'включены' : 'выключены'}`,
+        `Дни недели: ${weekdays === '' ? 'не выбраны' : weekdays}`,
+        `Окно времени: ${window ?? 'не задано'}`,
+        `Диапазоны дат: ${String(rangesCount)}`,
+      ].join('\n');
+    },
+    quietEnableButton: 'Включить',
+    quietDisableButton: 'Выключить',
+    quietWeekdaysButton: 'Дни недели',
+    quietWindowButton: 'Окно времени',
+    quietDateRangesButton: 'Диапазоны дат',
+    quietWindowPrompt: 'Введите окно в формате ЧЧ:ММ-ЧЧ:ММ, например 22:00-08:00.',
+    quietWindowInvalid:
+      'Не удалось разобрать окно. Попробуйте ещё раз, например 22:00-08:00. Настройки не изменены.',
+    quietWeekdaysHeader: 'Отметьте тихие дни недели:',
+    quietWeekdayLabel(short: string, active: boolean): string {
+      return `${active ? '✅' : '▫️'} ${short}`;
+    },
+    quietDateRangesHeader: 'Диапазоны дат тихих часов:',
+    quietDateRangesEmpty: 'Диапазонов пока нет.',
+    quietDateRangeAddButton: '➕ Добавить диапазон',
+    quietDateRangeRemoveButton(from: string, to: string): string {
+      return `🗑 ${from} — ${to}`;
+    },
+    quietDateRangePrompt: 'Введите диапазон дат, например «с 31.12 по 08.01».',
+    quietDateRangeInvalid:
+      'Не удалось разобрать диапазон дат. Попробуйте ещё раз, например «с 31.12 по 08.01». Настройки не изменены.',
+
+    timezoneHeader(zoneLabel: string): string {
+      return `🕐 Часовой пояс школы: ${zoneLabel}`;
+    },
+    timezoneSaved(zoneLabel: string): string {
+      return `Часовой пояс школы сохранён: ${zoneLabel}.`;
+    },
+
+    reactionsHeader(onDetect: boolean, onAccept: boolean): string {
+      return [
+        '👀 Реакции',
+        `При обнаружении задачи: ${onDetect ? 'включена' : 'выключена'}`,
+        `При подтверждении: ${onAccept ? 'включена' : 'выключена'}`,
+      ].join('\n');
+    },
+    reactionsDetectEnableButton: 'Включить 👀',
+    reactionsDetectDisableButton: 'Выключить 👀',
+    reactionsAcceptEnableButton: 'Включить ✍',
+    reactionsAcceptDisableButton: 'Выключить ✍',
+
+    noticeHeader(isCustom: boolean, text: string): string {
+      return [`💬 Текст уведомления в чате (${isCustom ? 'изменён' : 'по умолчанию'}):`, '', text].join('\n');
+    },
+    noticeEditButton: 'Изменить',
+    noticeResetButton: 'Сбросить по умолчанию',
+    noticeEditPrompt: 'Введите новый текст уведомления.',
+    noticeTooLong(limit: number): string {
+      return `Текст слишком длинный (максимум ${String(limit)} символов). Попробуйте короче.`;
+    },
+    noticeSaved: 'Текст уведомления сохранён.',
+    noticeReset: 'Текст уведомления сброшен по умолчанию.',
   },
 };

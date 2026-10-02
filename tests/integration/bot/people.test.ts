@@ -29,6 +29,12 @@ function lastEditTo(harness: BotHarness, chatId: number): { text: string; button
   return last;
 }
 
+function lastAnswerText(harness: BotHarness): string | undefined {
+  const calls = harness.calls.filter((c) => c.method === 'answerCallbackQuery');
+  const last = calls[calls.length - 1];
+  return typeof last?.payload.text === 'string' ? last.payload.text : undefined;
+}
+
 /** `/people`'s own reply and the conversation's prompts go through `ctx.reply` (real Bot API). */
 function lastKeyboard(harness: BotHarness, chatId: number): CallbackButton[][] {
   const sendCalls = harness.calls.filter((c) => c.method === 'sendMessage' && c.payload.chat_id === chatId);
@@ -229,5 +235,71 @@ describe('/people', () => {
     expect(updated?.displayName).toBe(MEMBER.firstName);
     expect(updated?.aliases).toEqual(['Боря']);
     expect(harness.replies(OWNER.id).at(-1)).toBe(texts.people.nothingChanged);
+  });
+
+  it('erasing a member requires two confirmations past the initial "delete data" press, then wipes their data (D43 review I3.1)', async () => {
+    const harness = await createBotHarness();
+    await makeOwner(harness, OWNER);
+    const memberRow = await makeMember(harness, MEMBER);
+
+    await harness.send(dmText(OWNER, '/people'));
+    const listKeyboard = lastKeyboard(harness, OWNER.id);
+    await harness.send(
+      callback(OWNER, findButtonData(listKeyboard, 'opn', memberRow.id), botKeyboardMessage(OWNER)),
+    );
+
+    // Initial press — only opens the first confirm screen, nothing deleted yet.
+    const cardButtons = lastEditTo(harness, OWNER.id).buttons ?? [];
+    const eraData = findDomainButtonData(cardButtons, 'era', memberRow.id);
+    await harness.send(callback(OWNER, eraData, botKeyboardMessage(OWNER)));
+    const confirm1 = lastEditTo(harness, OWNER.id);
+    expect(confirm1.text).toContain('Boris');
+    expect(await harness.db.select().from(memberships).where(eq(memberships.id, memberRow.id))).toHaveLength(
+      1,
+    );
+
+    // First confirmation — still not deleted, now shows the second (final) confirm screen.
+    const confirm1Buttons = confirm1.buttons ?? [];
+    const erbData = findDomainButtonData(confirm1Buttons, 'erb', memberRow.id);
+    await harness.send(callback(OWNER, erbData, botKeyboardMessage(OWNER)));
+    const confirm2 = lastEditTo(harness, OWNER.id);
+    expect(confirm2.text).toBe(texts.erase.memberConfirm2);
+    expect(await harness.db.select().from(memberships).where(eq(memberships.id, memberRow.id))).toHaveLength(
+      1,
+    );
+
+    // Second confirmation — now it's actually gone.
+    const confirm2Buttons = confirm2.buttons ?? [];
+    const ercData = findDomainButtonData(confirm2Buttons, 'erc', memberRow.id);
+    await harness.send(callback(OWNER, ercData, botKeyboardMessage(OWNER)));
+
+    expect(await harness.db.select().from(memberships).where(eq(memberships.id, memberRow.id))).toHaveLength(
+      0,
+    );
+    const finalEdit = lastEditTo(harness, OWNER.id);
+    expect(finalEdit.text).toContain('✅');
+  });
+
+  it('tapping "delete data" on the owner\'s own card refuses immediately — no confirmation screen is shown (D43 review I3.1)', async () => {
+    const harness = await createBotHarness();
+    const ownerRow = await makeOwner(harness, OWNER);
+
+    await harness.send(dmText(OWNER, '/people'));
+    const listKeyboard = lastKeyboard(harness, OWNER.id);
+    await harness.send(
+      callback(OWNER, findButtonData(listKeyboard, 'opn', ownerRow.id), botKeyboardMessage(OWNER)),
+    );
+    const cardButtons = lastEditTo(harness, OWNER.id).buttons ?? [];
+    const eraData = findDomainButtonData(cardButtons, 'era', ownerRow.id);
+    const editsBefore = fake(harness).edits.length;
+
+    await harness.send(callback(OWNER, eraData, botKeyboardMessage(OWNER)));
+
+    expect(lastAnswerText(harness)).toBe(texts.erase.ownerMustTransfer);
+    // No confirm screen (or any other edit) was sent.
+    expect(fake(harness).edits.length).toBe(editsBefore);
+    expect(await harness.db.select().from(memberships).where(eq(memberships.id, ownerRow.id))).toHaveLength(
+      1,
+    );
   });
 });

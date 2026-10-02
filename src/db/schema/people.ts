@@ -41,7 +41,6 @@ export const memberships = pgTable(
       .array()
       .notNull()
       .default(sql`'{}'::text[]`),
-    notifyAssignments: boolean('notify_assignments').notNull().default(true),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [

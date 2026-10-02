@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { renderStart, renderHelp } from '../../../../src/bot/views/help.js';
+import { renderStart, renderHelp, formatCommandList } from '../../../../src/bot/views/help.js';
 import { texts } from '../../../../src/bot/texts/ru.js';
+import { SUPERADMIN_COMMANDS } from '../../../../src/bot/commands.js';
 import type { Actor } from '../../../../src/bot/context.js';
 
 const SUPERADMIN: Actor = { userId: 1, isSuperadmin: true, role: null, dmStarted: true };
@@ -39,7 +40,7 @@ describe('renderStart (I2 fix)', () => {
   });
 
   it('leaves the superadmin and stranger texts unchanged', () => {
-    expect(renderStart(SUPERADMIN).text).toBe(texts.start.superadmin());
+    expect(renderStart(SUPERADMIN).text).toBe(texts.start.superadmin(formatCommandList(SUPERADMIN_COMMANDS)));
     expect(renderStart(STRANGER).text).toBe(texts.start.stranger());
   });
 });
@@ -64,7 +65,7 @@ describe('renderHelp (I2 fix)', () => {
   });
 
   it('leaves the superadmin and stranger texts unchanged', () => {
-    expect(renderHelp(SUPERADMIN).text).toBe(texts.help.superadmin());
+    expect(renderHelp(SUPERADMIN).text).toBe(texts.help.superadmin(formatCommandList(SUPERADMIN_COMMANDS)));
     expect(renderHelp(STRANGER).text).toBe(texts.help.stranger());
   });
 });

@@ -39,6 +39,15 @@ export type ResolvedAction =
       kind: 'update';
       target: { taskId: number } | { proposalId: number };
       changes: { due?: ResolvedDue; assignee?: AssigneeResolution; title?: string };
+      /**
+       * D47 (plan.md Task 3.15): the model's own title for a brand-new task this `update` could become,
+       * carried through onto the proposal's payload (`processBatch`'s `buildPayload`) even when the
+       * pipeline itself still resolved this as a plain `update` — the card's manual "➕ Create as a new
+       * task" escape hatch (`src/domain/proposals/decide.ts`) needs it, since that button can be
+       * pressed on any `update`-kind card, not only the ones {@link resolveActions} itself converted to
+       * `create` below. Absent when the model sent no `new_task_title` (or sent `null`).
+       */
+      newTaskTitle?: string;
     } & Common)
   | ({ kind: 'complete' | 'cancel'; target: { taskId: number } | { proposalId: number } } & Common);
 
@@ -52,6 +61,59 @@ export interface ResolveContext {
   workspaceTz: string;
   now: Date;
   fuzzy: FuzzyTimes;
+  /**
+   * D47 (plan.md Task 3.15): `title`/current `assignee` for every open task that could be referenced as a
+   * `T#` target in this batch (built by `processBatch.ts`'s `loadOpenTasks`, straight from the raw task
+   * rows it already loads — same rows `buildExtractionInput`'s `refs.tasks` map is built from, so every
+   * resolvable `T#` target has an entry here too). Deliberately *not* `buildInput.ts`'s
+   * `OpenTaskForLlm.assignee` — that projection is lossy (a free-text `assigneeNameText` collapses to
+   * `'none'`, since it only drives what the model is shown) and D47's rule needs the real current assignee,
+   * including the free-text case, to decide whether a new named assignee in `update.changes.assignee_ref`
+   * is a genuinely different specific person. A target not in this map (should not normally happen for a
+   * resolvable `T#`) simply skips the D47 conversion below rather than guessing.
+   */
+  targetTasks: Map<number, { title: string; assignee: AssigneeResolution }>;
+}
+
+/**
+ * The resolved assignee of a task row, straight off its `assignee_user_id`/`assignee_all`/
+ * `assignee_name_text` columns (SPEC's three-way assignee representation). Shared by
+ * {@link ResolveContext.targetTasks}'s construction (`processBatch.ts`) and by D47's own conversion logic
+ * below; also reused by `src/ai/pipeline/dedup.ts`'s duplicate checks for the exact same conversion — kept
+ * here (not there) since `dedup.ts` already imports `AssigneeResolution`/`ResolvedAction` from this module,
+ * and the reverse import would be a cycle.
+ */
+export function taskAssignee(row: {
+  assigneeUserId: number | null;
+  assigneeAll: boolean;
+  assigneeNameText: string | null;
+}): AssigneeResolution {
+  if (row.assigneeAll) return { type: 'all' };
+  if (row.assigneeUserId !== null) return { type: 'user', userId: row.assigneeUserId };
+  if (row.assigneeNameText !== null) return { type: 'text', name: row.assigneeNameText };
+  return { type: 'none' };
+}
+
+/** Case-insensitive, NFC-normalized equality for a free-text assignee name — mirrors `dedup.ts`'s own
+ * `normalizeTitle`, kept local here since the two modules must not import from each other either way. */
+function normalizePersonName(name: string): string {
+  return name.normalize('NFC').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+type SpecificPerson = Extract<AssigneeResolution, { type: 'user' } | { type: 'text' }>;
+
+function isSpecificPerson(a: AssigneeResolution): a is SpecificPerson {
+  return a.type === 'user' || a.type === 'text';
+}
+
+/** True only when both name a *specific* person and it's the same one (D47 — `all`/`none` never reach this,
+ * callers only invoke it once both sides are already known to be {@link SpecificPerson}). */
+function sameSpecificPerson(a: SpecificPerson, b: SpecificPerson): boolean {
+  if (a.type !== b.type) return false;
+  if (a.type === 'user' && b.type === 'user') return a.userId === b.userId;
+  if (a.type === 'text' && b.type === 'text')
+    return normalizePersonName(a.name) === normalizePersonName(b.name);
+  return false;
 }
 
 /**
@@ -257,7 +319,51 @@ export function resolveActions(
 
     if (action.type === 'update') {
       const changes = resolveUpdateChanges(action, index, ctx, zone);
-      actions.push({ kind: 'update', target, changes, ...common });
+      const newTaskTitle = action.new_task_title ?? undefined;
+      const explicitTransfer = action.explicit_transfer ?? false;
+
+      // D47 (plan.md Task 3.15): only a `T#` target has a known current
+      // assignee to compare against (`ctx.targetTasks`) — an `R#` target
+      // (a still-pending proposal, D44) keeps today's plain `update`
+      // behavior regardless of `changes.assignee`.
+      if (!explicitTransfer && 'taskId' in target && changes.assignee !== undefined) {
+        const targetInfo = ctx.targetTasks.get(target.taskId);
+        if (
+          targetInfo !== undefined &&
+          isSpecificPerson(targetInfo.assignee) &&
+          isSpecificPerson(changes.assignee) &&
+          !sameSpecificPerson(targetInfo.assignee, changes.assignee)
+        ) {
+          actions.push({
+            kind: 'create',
+            category: 'assignment',
+            title: newTaskTitle ?? targetInfo.title,
+            description: null,
+            assignee: changes.assignee,
+            due:
+              changes.due ??
+              resolveDue(
+                { due_local: null, time_hint: 'none', due_text: null },
+                {
+                  zone,
+                  now: ctx.now,
+                  fuzzy: ctx.fuzzy,
+                },
+              ),
+            priority: 'normal',
+            ...common,
+          });
+          return;
+        }
+      }
+
+      actions.push({
+        kind: 'update',
+        target,
+        changes,
+        ...(newTaskTitle !== undefined ? { newTaskTitle } : {}),
+        ...common,
+      });
       return;
     }
 

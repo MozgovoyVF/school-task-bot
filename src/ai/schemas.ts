@@ -52,6 +52,24 @@ export const Action = z.discriminatedUnion('type', [
       assignee_ref: z.string().nullable().optional(),
       title: z.string().max(120).optional(),
     }),
+    // D47: whether this is an explicit hand-over of the target's assignee
+    // to someone else ("hand it to Veronika", "Veronika does it now instead
+    // of Masha") rather than a brand-new instruction that merely mentions the same
+    // topic as `target_ref` — `resolve.ts` uses this to decide whether a
+    // named-assignee conflict on the target becomes a new `create` action
+    // instead of applying as an `update` (plan.md decision D47). Optional
+    // here (unlike the wire schema below) so every fixture/example written
+    // before this field existed still parses; `resolve.ts` treats an absent
+    // value as `false` (the conservative default — not an explicit
+    // hand-over).
+    explicit_transfer: z.boolean().optional(),
+    // D47: the model's own title for the new task this `update` would
+    // become if the pipeline (or the Owner, via the card's manual escape
+    // hatch) decides to split it off from `target_ref` instead of applying
+    // it — same bounds as `create.title` (plan.md Task 3.15). Optional/
+    // nullable so old fixtures/examples without it still parse; absent is
+    // treated the same as `null` (fall back to the target's own title).
+    new_task_title: z.string().min(3).max(120).nullable().optional(),
     ...Base,
   }),
   z.object({ type: z.literal('complete'), target_ref: z.string().regex(/^[TR]\d+$/), ...Base }),
@@ -98,6 +116,11 @@ const ActionWire = z.discriminatedUnion('type', [
     type: z.literal('update'),
     target_ref: z.string().regex(/^[TR]\d+$/),
     changes: ChangesWire,
+    // D47 — see the local `Action` schema's `update` variant above for what
+    // these mean; required (not nullable/optional) here like every other
+    // wire field, since the wire schema always forces a value.
+    explicit_transfer: z.boolean(),
+    new_task_title: z.string().min(3).max(120).nullable(),
     ...Base,
   }),
   z.object({ type: z.literal('complete'), target_ref: z.string().regex(/^[TR]\d+$/), ...Base }),
@@ -214,6 +237,34 @@ function normalizeUpdateChanges(action: Record<string, unknown>): Record<string,
 }
 
 /**
+ * D47 (plan.md Task 3.15, fix round 1 finding I2): `new_task_title`/`explicit_transfer` are only
+ * meaningfully constrained (3..120 chars, boolean) by the *full* strict wire schema
+ * (`extractionJsonSchema()`) — a model on the Gemini-compat path (`extractionJsonSchemaCompat()`,
+ * `minLength`/`maxLength` stripped) or the `json_object` fallback (no schema enforcement at all) can
+ * send an out-of-range `new_task_title` (e.g. `""`, or a non-string) or a non-boolean
+ * `explicit_transfer` on an ordinary `update` with no assignee change involved at all. Left
+ * unhandled, `ExtractionResult.safeParse` would reject the *whole* batch's `actions` array over one
+ * cosmetic field on one `update` action — strictly worse than not having D47 at all (CLAUDE.md: a
+ * missed task is worse than a false positive). Mirrors {@link normalizeCreateTargetRef}'s "coerce to
+ * the safe default instead of failing" precedent: an invalid `new_task_title` becomes `null` (same as
+ * "the model suggested no title"), an invalid `explicit_transfer` is dropped entirely (same as
+ * "absent" — `resolve.ts` already treats an absent value as `false`).
+ */
+function normalizeUpdateD47Fields(action: Record<string, unknown>): Record<string, unknown> {
+  const result = { ...action };
+  if ('new_task_title' in result && result.new_task_title !== null) {
+    const title = result.new_task_title;
+    if (typeof title !== 'string' || title.length < 3 || title.length > 120) {
+      result.new_task_title = null;
+    }
+  }
+  if ('explicit_transfer' in result && typeof result.explicit_transfer !== 'boolean') {
+    delete result.explicit_transfer;
+  }
+  return result;
+}
+
+/**
  * `target_ref` is not meaningful on a `create` action (SPEC: a new task has
  * nothing existing to point at). Task 2.18 compat fix C: a model can still
  * attach an invalid, empty, or otherwise irrelevant value to it — e.g. under
@@ -240,7 +291,7 @@ function normalizeWireInput(raw: unknown): unknown {
       return normalizeCreateTargetRef(action);
     }
     if (action.type === 'update') {
-      return normalizeUpdateChanges(action);
+      return normalizeUpdateD47Fields(normalizeUpdateChanges(action));
     }
     return action;
   });

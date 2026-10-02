@@ -128,6 +128,147 @@ describe('extraction schema', () => {
       expect(action.target_ref).toBeNull();
     }
   });
+  // D47 (plan.md Task 3.15): `update`'s new `explicit_transfer`/`new_task_title` fields.
+  it('accepts an update action carrying explicit_transfer/new_task_title', () => {
+    const r = parseExtraction({
+      actions: [
+        {
+          type: 'update',
+          target_ref: 'T12',
+          changes: { assignee_ref: 'P2' },
+          explicit_transfer: false,
+          new_task_title: 'Подготовить отчёт',
+          source_message_ids: ['M1'],
+          confidence: 0.8,
+          reasoning: 'другой адресат',
+        },
+      ],
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.actions[0]).toMatchObject({
+        explicit_transfer: false,
+        new_task_title: 'Подготовить отчёт',
+      });
+    }
+  });
+  it('accepts an update action with explicit_transfer:true and a null new_task_title', () => {
+    const r = parseExtraction({
+      actions: [
+        {
+          type: 'update',
+          target_ref: 'T12',
+          changes: { assignee_ref: 'P2' },
+          explicit_transfer: true,
+          new_task_title: null,
+          source_message_ids: ['M1'],
+          confidence: 0.8,
+          reasoning: 'явная передача',
+        },
+      ],
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.actions[0]).toMatchObject({ explicit_transfer: true, new_task_title: null });
+    }
+  });
+  it('still accepts an update action with neither field (old fixtures/examples)', () => {
+    const r = parseExtraction({
+      actions: [
+        {
+          type: 'update',
+          target_ref: 'T12',
+          changes: { due: { due_local: '2026-09-25', time_hint: 'none', due_text: null } },
+          source_message_ids: ['M1'],
+          confidence: 0.8,
+          reasoning: 'перенос срока',
+        },
+      ],
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const action = r.value.actions[0] as { explicit_transfer?: boolean; new_task_title?: string | null };
+      expect(action.explicit_transfer).toBeUndefined();
+      expect(action.new_task_title).toBeUndefined();
+    }
+  });
+  // D47 fix round 1, I2: a too-short/out-of-range `new_task_title` must degrade to `null` instead of
+  // failing the whole batch — a model on the Gemini-compat path (`extractionJsonSchemaCompat`, no
+  // `minLength`/`maxLength` sent) or the `json_object` fallback isn't actually constrained to 3..120
+  // chars by the wire schema it was asked to follow, so this is a realistic provider response, not a
+  // hypothetical. Losing every other action in the same batch over this one cosmetic field would be
+  // strictly worse than not having D47 at all.
+  it('normalizes a too-short new_task_title to null instead of rejecting the whole batch', () => {
+    const r = parseExtraction({
+      actions: [
+        {
+          type: 'update',
+          target_ref: 'T12',
+          changes: {},
+          new_task_title: 'ab',
+          source_message_ids: ['M1'],
+          confidence: 0.8,
+          reasoning: 'r',
+        },
+      ],
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.actions[0]).toMatchObject({ new_task_title: null });
+  });
+  it('normalizes an empty-string new_task_title to null', () => {
+    const r = parseExtraction({
+      actions: [
+        {
+          type: 'update',
+          target_ref: 'T12',
+          changes: {},
+          new_task_title: '',
+          source_message_ids: ['M1'],
+          confidence: 0.8,
+          reasoning: 'r',
+        },
+      ],
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.actions[0]).toMatchObject({ new_task_title: null });
+  });
+  it('normalizes an over-120-char new_task_title to null', () => {
+    const r = parseExtraction({
+      actions: [
+        {
+          type: 'update',
+          target_ref: 'T12',
+          changes: {},
+          new_task_title: 'я'.repeat(121),
+          source_message_ids: ['M1'],
+          confidence: 0.8,
+          reasoning: 'r',
+        },
+      ],
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.actions[0]).toMatchObject({ new_task_title: null });
+  });
+  it('normalizes a non-boolean explicit_transfer to absent instead of rejecting the batch', () => {
+    const r = parseExtraction({
+      actions: [
+        {
+          type: 'update',
+          target_ref: 'T12',
+          changes: {},
+          explicit_transfer: 'yes',
+          source_message_ids: ['M1'],
+          confidence: 0.8,
+          reasoning: 'r',
+        },
+      ],
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const action = r.value.actions[0] as { explicit_transfer?: boolean };
+      expect(action.explicit_transfer).toBeUndefined();
+    }
+  });
   it('still rejects an invalid target_ref on update/complete/cancel actions (inventing a target is worse than dropping one)', () => {
     expect(
       parseExtraction({

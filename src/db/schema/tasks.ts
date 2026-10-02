@@ -37,11 +37,6 @@ export const tasks = pgTable(
     dueTz: text('due_tz'),
     priority: taskPriority('priority').notNull().default('normal'),
     status: taskStatus('status').notNull().default('open'),
-    reviewPending: boolean('review_pending').notNull().default(false),
-    reviewRequestedBy: bigint('review_requested_by', { mode: 'number' }).references(() => users.id, {
-      onDelete: 'set null',
-    }),
-    reviewRequestedAt: timestamp('review_requested_at', { withTimezone: true }),
     completedAt: timestamp('completed_at', { withTimezone: true }),
     completedByUserId: bigint('completed_by_user_id', { mode: 'number' }).references(() => users.id, {
       onDelete: 'set null',
@@ -58,6 +53,14 @@ export const tasks = pgTable(
     sourceTgMessageId: integer('source_tg_message_id'),
     sourceLink: text('source_link'),
     sourceQuote: text('source_quote'), // <= 200 chars, enforced by zod at the domain boundary
+    // D46: the quote's own author, tracked separately from `source_chat_id`/`source_tg_message_id`'s
+    // `messages` row (which may be gone after the 30-day retention sweep, `chats/retention.ts`) — this is
+    // what lets `eraseMember` (`src/domain/people/erase.ts`) still find and redact `source_quote` after
+    // that row is deleted. Nullable: unset for a `forward`-origin task (no reliably resolvable internal
+    // id, D46) and for every row created before this migration (no backfill, D46).
+    quoteAuthorUserId: bigint('quote_author_user_id', { mode: 'number' }).references(() => users.id, {
+      onDelete: 'set null',
+    }),
     // D5: nullable for anonymization.
     createdByUserId: bigint('created_by_user_id', { mode: 'number' }).references(() => users.id, {
       onDelete: 'set null',
@@ -83,7 +86,10 @@ export const taskEvents = pgTable('task_events', {
   actorUserId: bigint('actor_user_id', { mode: 'number' }).references(() => users.id, {
     onDelete: 'set null',
   }),
-  // e.g. created, updated, status_changed, review_requested, review_accepted, review_returned, snoozed, deleted…
+  // `created`, `updated` or `status_changed` — the only three `TaskService` (`src/domain/tasks/service.ts`)
+  // currently writes via `insertTaskEvent`. D40 removed the whole review flow, so `review_requested`/
+  // `review_accepted`/`review_returned` no longer apply; `deleteForever` deliberately writes no event at
+  // all (nothing left to attach it to once the task row is gone).
   type: text('type').notNull(),
   diff: jsonb('diff'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

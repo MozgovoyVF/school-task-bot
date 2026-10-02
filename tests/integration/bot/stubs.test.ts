@@ -31,16 +31,19 @@ async function makeMember(harness: BotHarness, tgUser: { id: number; firstName: 
   return userRow;
 }
 
-// `/tasks` stands in for the whole `STUB_COMMANDS` list (`src/bot/handlers/stubs.ts`) — every one of them
-// is registered the same way, with the same `can(actor, 'task.viewAll')` gate, so one representative
-// command is enough to cover the gate itself; a second, `/settings`, checks the gate wasn't hardcoded to
-// just `/tasks`.
-describe('owner-command stubs (/tasks, /today, /overdue, /new, /archive, /search, /stats, /settings)', () => {
+// `STUB_COMMANDS` (`src/bot/handlers/stubs.ts`) is now empty — every `OWNER_COMMANDS` row has a real
+// handler (`/settings` was the last one, landed in Task 3.11: `src/bot/handlers/settings.ts`/
+// `src/bot/conversations/settings.ts`). This file keeps `/settings`'s own entry-gate smoke tests (the
+// stub-era `can(actor, 'task.viewAll')` checks were review round 1's I1 fix, now
+// `can(actor, 'settings.manage')` — same Owner-only shape) rather than duplicating them again in a
+// dedicated `settings.test.ts`; the full menu/section behaviour is this task's own optional coverage, not
+// required by plan.md's D43 list.
+describe('/settings entry gate', () => {
   it('is forbidden for a Member (review round 1, I1)', async () => {
     const harness = await createBotHarness();
     await makeMember(harness, MEMBER);
 
-    await harness.send(dmText(MEMBER, '/tasks'));
+    await harness.send(dmText(MEMBER, '/settings'));
 
     expect(harness.replies(MEMBER.id)).toEqual([texts.common.forbidden]);
   });
@@ -48,30 +51,18 @@ describe('owner-command stubs (/tasks, /today, /overdue, /new, /archive, /search
   it('is forbidden for a stranger with no membership at all (review round 1, I1)', async () => {
     const harness = await createBotHarness();
 
-    await harness.send(dmText(STRANGER, '/tasks'));
+    await harness.send(dmText(STRANGER, '/settings'));
 
     expect(harness.replies(STRANGER.id)).toEqual([texts.common.forbidden]);
   });
 
-  it('replies with the "coming soon" stub for the Owner', async () => {
+  it('opens the settings menu for the Owner', async () => {
     const harness = await createBotHarness();
     await makeOwner(harness, OWNER);
-
-    await harness.send(dmText(OWNER, '/tasks'));
-
-    expect(harness.replies(OWNER.id)).toEqual([texts.common.comingSoon]);
-  });
-
-  it('gates every stub command, not just /tasks', async () => {
-    const harness = await createBotHarness();
-    await makeOwner(harness, OWNER);
-    await makeMember(harness, MEMBER);
 
     await harness.send(dmText(OWNER, '/settings'));
-    await harness.send(dmText(MEMBER, '/settings'));
 
-    expect(harness.replies(OWNER.id)).toEqual([texts.common.comingSoon]);
-    expect(harness.replies(MEMBER.id)).toEqual([texts.common.forbidden]);
+    expect(harness.replies(OWNER.id)).toEqual([texts.settings.menuHeader]);
   });
 
   it('has no effect in a group, even for the Owner', async () => {
@@ -79,7 +70,7 @@ describe('owner-command stubs (/tasks, /today, /overdue, /new, /archive, /search
     await makeOwner(harness, OWNER);
     const group = { id: -1001, type: 'supergroup' as const, title: 'Учительская' };
 
-    await harness.send(groupText(group, OWNER, '/tasks'));
+    await harness.send(groupText(group, OWNER, '/settings'));
 
     expect(harness.replies(group.id)).toEqual([]);
   });

@@ -14,10 +14,11 @@ Use the Skill `superpowers:subagent-driven-development` with plan file `plan.md`
 ## Dispatch rules
 
 - Implementers: `subagent_type: "stb-implementer"`, reviewers: `"stb-reviewer"`. Never `general-purpose`. Always pass `model`.
-- Implementer model: `sonnet` (`haiku` only if the plan text already contains the complete code). Fix rounds 4–5: `opus`.
+- Implementer type: `stb-implementer` for D43 tasks and for all fix rounds; `stb-implementer-light` (medium effort) for first implementation of non-D43 tasks. Model: `sonnet` (`haiku` only if the plan text already contains the complete code). Fix rounds 4–5: `stb-implementer` + `opus`.
 - **D43 (TDD only for critical tasks):** TDD list = 1.7, 1.12; 2.1, 2.2, 2.5–2.10, 2.12, 2.13; 3.1–3.3, 3.12; 5.2, 5.3; phase-6 initData. In every dispatch state explicitly either "TDD task" or "no TDD for this task — implement directly; tests from the brief are optional".
 - **Reviews:** D43 tasks — individual review (`opus` for 1.5, 2.9, 2.10, 2.12, 2.13, 3.1, 3.2, 3.3, 3.12; otherwise `sonnet`). Non-D43 tasks — group review of 2–3 consecutive non-D43 tasks with one `sonnet` reviewer over one review package (BASE before the first task .. HEAD); never across a phase boundary, never mixing in a D43 task. Reviewers must not flag missing tests on non-D43 tasks. Final whole-phase review: `opus`.
 - One implementer at a time. Never write code yourself.
+- **Segments (token economy):** your context grows with every step and each step re-reads all of it. A _review unit_ = a D43 task reviewed clean, or a group of non-D43 tasks reviewed clean. After **2 completed review units** in this run (or at phase end, or when blocked), append a `HANDOFF` block to the ledger — HEAD sha, completed tasks, the exact next step, open rulings/parked items that the next step needs — then return `SEGMENT_DONE` with that block. The main session starts a fresh orchestrator, which reads only the last `HANDOFF` block of the ledger (`grep -n HANDOFF` then read from there), not the whole ledger. Keep ledger entries terse.
 - **Waiting:** background subagents notify you when they finish — after a dispatch, end your turn. Never `sleep` (foreground or background), never poll, never tail transcripts: each wake-up costs the user's usage limit.
 
 ## Git (pre-authorized)

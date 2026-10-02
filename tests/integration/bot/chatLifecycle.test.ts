@@ -14,6 +14,7 @@ import { texts } from '../../../src/bot/texts/ru.js';
 import { decodeCallback } from '../../../src/bot/keyboards/callbackCodec.js';
 import type { Buttons } from '../../../src/domain/messenger.js';
 import { upsertTelegramUser } from '../../../src/domain/people/repo.js';
+import { updateSettings } from '../../../src/domain/workspaces/repo.js';
 import { chats, memberships, messages, tasks } from '../../../src/db/schema/index.js';
 import type { FakeMessenger } from '../../helpers/fakeMessenger.js';
 
@@ -133,6 +134,21 @@ describe('group chat lifecycle', () => {
     await harness.send(botAdded(GROUP, OWNER)); // a duplicate my_chat_member update
 
     expect(sentTo(harness, GROUP.id)).toEqual([texts.privacy.chatNotice]); // still just the one notice
+  });
+
+  // Review round I1: a custom `settings.privacyNoticeText` (Task 3.11's `/settings` "chat notice text"
+  // section) is Owner-authored free text — `Messenger.send` always sends with `parse_mode: 'HTML'`, so an
+  // unescaped `<`/`>`/`&` in it would break Telegram's parser. `publishNoticeOnce` must escape it.
+  it('escapes a custom privacy notice override before sending it', async () => {
+    const harness = await createBotHarness();
+    await makeOwner(harness, OWNER);
+    await updateSettings(harness.db, harness.deps.workspace.id, {
+      privacyNoticeText: 'Keep <b>calm</b> & read /privacy',
+    });
+
+    await harness.send(botAdded(GROUP, OWNER));
+
+    expect(sentTo(harness, GROUP.id)).toEqual(['Keep &lt;b&gt;calm&lt;/b&gt; &amp; read /privacy']);
   });
 
   it('a superadmin adding the bot activates the chat directly (D14)', async () => {

@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { DEDUP_SIMILARITY, DEDUP_WINDOW_DAYS } from '../../config/constants.js';
 import type { DbOrTx } from '../../db/client.js';
 import { proposals, tasks } from '../../db/schema/index.js';
-import type { AssigneeResolution, ResolvedAction } from './resolve.js';
+import { taskAssignee, type AssigneeResolution, type ResolvedAction } from './resolve.js';
 
 /** How many trigram-similarity candidates to pull before filtering by assignee in JS (SPEC §9.7.2 checks title similarity AND assignee, and the two engines — SQL columns for tasks, jsonb for proposals — are cheapest to reconcile client-side). */
 const CANDIDATE_LIMIT = 20;
@@ -47,17 +47,6 @@ function assigneeEquals(a: AssigneeResolution, b: AssigneeResolution): boolean {
   if (a.type === 'user' && b.type === 'user') return a.userId === b.userId;
   if (a.type === 'text' && b.type === 'text') return normalizeTitle(a.name) === normalizeTitle(b.name);
   return true; // 'all' === 'all', 'none' === 'none' (SPEC §9.7.2 / brief step 1 case 7)
-}
-
-function taskAssignee(row: {
-  assigneeUserId: number | null;
-  assigneeAll: boolean;
-  assigneeNameText: string | null;
-}): AssigneeResolution {
-  if (row.assigneeAll) return { type: 'all' };
-  if (row.assigneeUserId !== null) return { type: 'user', userId: row.assigneeUserId };
-  if (row.assigneeNameText !== null) return { type: 'text', name: row.assigneeNameText };
-  return { type: 'none' };
 }
 
 /**

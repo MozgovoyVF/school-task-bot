@@ -43,6 +43,7 @@ export type Action =
   | 'chat.approve'
   | 'chat.manage'
   | 'people.manage'
+  | 'settings.manage'
   | 'admin.tech'
   | 'transfer.generate';
 
@@ -78,7 +79,10 @@ export function can(actor: Actor, action: Action, target?: ActionTarget): boolea
     // chat at all, which SPEC §3's matrix does grant a superadmin). `people.manage` (SPEC §12.2's
     // `/people` row: also "Owner" only) — viewing/editing member names and aliases; deliberately its
     // own Action rather than reusing `chat.manage` (a different resource) or `chat.approve` (which
-    // also grants a superadmin, unlike `/people`'s own row).
+    // also grants a superadmin, unlike `/people`'s own row). `settings.manage` (SPEC §12.2's
+    // `/settings` row: also "Owner" only, plan.md Task 3.11) — the workspace `settings`/`timezone`
+    // menus; `ai.*`/`batch.*` tuning stays under `admin.tech` below (SPEC §16: only a superadmin
+    // changes `ai.*`/`batch.*`, via `/admin`).
     case 'proposal.receive':
     case 'proposal.decide':
     case 'task.createDm':
@@ -86,6 +90,7 @@ export function can(actor: Actor, action: Action, target?: ActionTarget): boolea
     case 'task.edit':
     case 'chat.manage':
     case 'people.manage':
+    case 'settings.manage':
       return isOwner;
 
     // Superadmin or Owner: approving a new group chat, generating an ownership-transfer code.

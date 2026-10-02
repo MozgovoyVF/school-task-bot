@@ -2,12 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { parseSettings, mergeSettings } from '../../../src/domain/settings/schema.js';
 
 const DEFAULTS = {
-  summary: { enabled: true, time: '09:00', forMembers: false },
+  summary: { enabled: true, time: '09:00' },
   reminders: {
     preDueTime: '10:00',
     allDayDueTime: '10:00',
     overdueTime: '10:00',
-    notifyAssignees: true,
     groupOverdueThreshold: 3,
   },
   quiet: { enabled: false, weekdays: [], windows: [], dateRanges: [] },
@@ -38,7 +37,7 @@ describe('settings', () => {
   });
   it('deep-merges partial values', () => {
     const s = parseSettings({ summary: { time: '08:30' } });
-    expect(s.summary).toEqual({ enabled: true, time: '08:30', forMembers: false });
+    expect(s.summary).toEqual({ enabled: true, time: '08:30' });
     expect(s.reminders).toEqual(DEFAULTS.reminders);
   });
   it('rejects invalid values on merge', () => {
@@ -61,5 +60,19 @@ describe('settings', () => {
   });
   it('falls back to defaults on corrupted stored JSON', () => {
     expect(parseSettings({ summary: { time: 42 } }).summary.time).toBe('09:00');
+  });
+  it('still parses a pre-D40 row carrying the now-removed forMembers/notifyAssignees keys', () => {
+    const s = parseSettings({
+      summary: { enabled: true, time: '09:00', forMembers: true },
+      reminders: {
+        preDueTime: '10:00',
+        allDayDueTime: '10:00',
+        overdueTime: '10:00',
+        notifyAssignees: false,
+        groupOverdueThreshold: 3,
+      },
+    });
+    expect(s.summary).toEqual({ enabled: true, time: '09:00' });
+    expect(s.reminders).toEqual(DEFAULTS.reminders);
   });
 });

@@ -23,11 +23,14 @@ import { pendingChatsJob } from './scheduler/jobs/pendingChats.js';
 import { retentionJob } from './scheduler/jobs/retention.js';
 import { analyzeJob } from './scheduler/jobs/analyze.js';
 import { cardsJob } from './scheduler/jobs/cards.js';
+import { notifyJob } from './scheduler/jobs/notify.js';
+import { ensureSummariesJob } from './scheduler/jobs/summary.js';
 import { expireProposalsJob } from './scheduler/jobs/expireProposals.js';
 import { buildHttpServer } from './http/server.js';
 import { checkPrivacyMode } from './bot/startupChecks.js';
 import { syncCommands } from './bot/commands.js';
 import type { AppDeps } from './deps.js';
+import { remindersHook } from './domain/notifications/schedule.js';
 import { createOpenRouterClient } from './ai/providers/openrouter.js';
 import { LlmExtractionProvider } from './ai/pipeline/extract.js';
 import { extractionJsonSchema, extractionJsonSchemaCompat } from './ai/schemas.js';
@@ -167,7 +170,7 @@ export async function startApp(env: Env, overrides?: StartAppOverrides): Promise
     messenger,
     workspace,
     ai,
-    taskHooks: [],
+    taskHooks: [remindersHook],
   };
 
   const bot = createBot(deps, { botInfo: overrides?.botInfo, client: overrides?.client });
@@ -181,11 +184,17 @@ export async function startApp(env: Env, overrides?: StartAppOverrides): Promise
 
   // `analyzeJob`/`cardsJob` (Task 2.9/2.10/2.12) and `expireProposalsJob` (Task 2.15, D11) are registered
   // here; `analyzeJob` itself still no-ops whenever `deps.ai` is `null` (no `OPENROUTER_API_KEY`/
-  // `LLM_MODEL_PRIMARY` configured, per the `ai`/`deps.ai` construction above).
+  // `LLM_MODEL_PRIMARY` configured, per the `ai`/`deps.ai` construction above). `notifyJob` (Task 3.3's
+  // reminder/summary outbox) was built but never wired in until now (Task 3.5); `ensureSummariesJob`
+  // (Task 3.5) runs right after it — in the same `tickOnce()` — so a tick that sends today's morning
+  // summary also sees the now-empty `scheduled` slot and immediately schedules tomorrow's (see that job's
+  // own doc comment).
   const ticker = createTicker(deps, [
     pendingChatsJob,
     analyzeJob,
     cardsJob,
+    notifyJob,
+    ensureSummariesJob,
     expireProposalsJob,
     retentionJob,
   ]);
@@ -194,7 +203,9 @@ export async function startApp(env: Env, overrides?: StartAppOverrides): Promise
   // `start()` then keeps the heartbeat refreshed going forward; the extra
   // immediate tick it fires is harmless (every job here is idempotent —
   // `pendingChatsJob`'s CAS claims, `analyzeJob`'s `FOR UPDATE SKIP LOCKED`
-  // batch claim, `cardsJob`'s `notified_at` outbox guard, and
+  // batch claim, `cardsJob`'s `notified_at` outbox guard, `notifyJob`'s
+  // `FOR UPDATE SKIP LOCKED` claim plus its own `sent`/`cancelled` status
+  // guards, `ensureSummariesJob`'s self-healing scheduled-row check, and
   // `retentionJob`/`expireProposalsJob`'s shared `dailyJob` wrapper all
   // no-op on a repeat call).
   await ticker.tickOnce();
