@@ -237,6 +237,34 @@ function normalizeUpdateChanges(action: Record<string, unknown>): Record<string,
 }
 
 /**
+ * D47 (plan.md Task 3.15, fix round 1 finding I2): `new_task_title`/`explicit_transfer` are only
+ * meaningfully constrained (3..120 chars, boolean) by the *full* strict wire schema
+ * (`extractionJsonSchema()`) — a model on the Gemini-compat path (`extractionJsonSchemaCompat()`,
+ * `minLength`/`maxLength` stripped) or the `json_object` fallback (no schema enforcement at all) can
+ * send an out-of-range `new_task_title` (e.g. `""`, or a non-string) or a non-boolean
+ * `explicit_transfer` on an ordinary `update` with no assignee change involved at all. Left
+ * unhandled, `ExtractionResult.safeParse` would reject the *whole* batch's `actions` array over one
+ * cosmetic field on one `update` action — strictly worse than not having D47 at all (CLAUDE.md: a
+ * missed task is worse than a false positive). Mirrors {@link normalizeCreateTargetRef}'s "coerce to
+ * the safe default instead of failing" precedent: an invalid `new_task_title` becomes `null` (same as
+ * "the model suggested no title"), an invalid `explicit_transfer` is dropped entirely (same as
+ * "absent" — `resolve.ts` already treats an absent value as `false`).
+ */
+function normalizeUpdateD47Fields(action: Record<string, unknown>): Record<string, unknown> {
+  const result = { ...action };
+  if ('new_task_title' in result && result.new_task_title !== null) {
+    const title = result.new_task_title;
+    if (typeof title !== 'string' || title.length < 3 || title.length > 120) {
+      result.new_task_title = null;
+    }
+  }
+  if ('explicit_transfer' in result && typeof result.explicit_transfer !== 'boolean') {
+    delete result.explicit_transfer;
+  }
+  return result;
+}
+
+/**
  * `target_ref` is not meaningful on a `create` action (SPEC: a new task has
  * nothing existing to point at). Task 2.18 compat fix C: a model can still
  * attach an invalid, empty, or otherwise irrelevant value to it — e.g. under
@@ -263,7 +291,7 @@ function normalizeWireInput(raw: unknown): unknown {
       return normalizeCreateTargetRef(action);
     }
     if (action.type === 'update') {
-      return normalizeUpdateChanges(action);
+      return normalizeUpdateD47Fields(normalizeUpdateChanges(action));
     }
     return action;
   });

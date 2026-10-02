@@ -466,7 +466,7 @@ describe('processBatch (plan.md Task 2.10)', () => {
       });
       const { extraction } = extractorFrom([fixture]);
       const deps = await makeDeps(clock, extraction);
-      const { veronika, owner, task } = await setupTargetTask(deps, now);
+      const { maria, veronika, owner, task } = await setupTargetTask(deps, now);
 
       const chat = await makeChat(deps.workspace.id, -510, now);
       const msg = await insertMessage(chat.id, 1, owner.id, now, 'Вероника, подготовь отчёт');
@@ -482,13 +482,20 @@ describe('processBatch (plan.md Task 2.10)', () => {
       expect(proposal.targetTaskId).toBeNull();
       const payload = proposal.payload as Record<string, unknown>;
       expect(payload.title).toBe('Подготовить отчёт');
+      // The new named person (Veronika), not Maria (T12's own assignee) — proves this didn't silently
+      // keep pointing at the old assignee.
       expect(payload.assignee).toEqual({ type: 'user', userId: veronika.id });
+      // The whole point of D47's dedup-safety requirement (brief step 1.1): despite having the *exact
+      // same* title as T12 (a certain trigram match) and being created in the same findPossibleDuplicate
+      // pass, this proposal must NOT be flagged as a duplicate of T12 — their assignees differ. Before
+      // this fix, a title-only dedup check would have matched them and suppressed/flagged this proposal.
+      expect(payload.duplicateOf).toBeUndefined();
 
-      // The target task itself is untouched, and the new proposal was never flagged as a duplicate of it
-      // (different assignee) — the whole point of D47.
+      // The target task itself is untouched (processBatch never writes to `tasks` on this path) — still
+      // titled the same and still assigned to Maria, not Veronika.
       const [targetAfter] = await db.select().from(tasks).where(eq(tasks.id, task.id));
       expect(targetAfter?.title).toBe('Подготовить отчёт');
-      expect(targetAfter?.assigneeUserId).not.toBe(veronika.id);
+      expect(targetAfter?.assigneeUserId).toBe(maria.id);
     });
 
     it('stays an update (assignee change on T12) when explicit_transfer is true', async () => {

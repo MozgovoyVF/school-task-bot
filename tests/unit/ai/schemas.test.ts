@@ -192,7 +192,13 @@ describe('extraction schema', () => {
       expect(action.new_task_title).toBeUndefined();
     }
   });
-  it('rejects a new_task_title shorter than 3 chars', () => {
+  // D47 fix round 1, I2: a too-short/out-of-range `new_task_title` must degrade to `null` instead of
+  // failing the whole batch — a model on the Gemini-compat path (`extractionJsonSchemaCompat`, no
+  // `minLength`/`maxLength` sent) or the `json_object` fallback isn't actually constrained to 3..120
+  // chars by the wire schema it was asked to follow, so this is a realistic provider response, not a
+  // hypothetical. Losing every other action in the same batch over this one cosmetic field would be
+  // strictly worse than not having D47 at all.
+  it('normalizes a too-short new_task_title to null instead of rejecting the whole batch', () => {
     const r = parseExtraction({
       actions: [
         {
@@ -206,7 +212,62 @@ describe('extraction schema', () => {
         },
       ],
     });
-    expect(r.ok).toBe(false);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.actions[0]).toMatchObject({ new_task_title: null });
+  });
+  it('normalizes an empty-string new_task_title to null', () => {
+    const r = parseExtraction({
+      actions: [
+        {
+          type: 'update',
+          target_ref: 'T12',
+          changes: {},
+          new_task_title: '',
+          source_message_ids: ['M1'],
+          confidence: 0.8,
+          reasoning: 'r',
+        },
+      ],
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.actions[0]).toMatchObject({ new_task_title: null });
+  });
+  it('normalizes an over-120-char new_task_title to null', () => {
+    const r = parseExtraction({
+      actions: [
+        {
+          type: 'update',
+          target_ref: 'T12',
+          changes: {},
+          new_task_title: 'я'.repeat(121),
+          source_message_ids: ['M1'],
+          confidence: 0.8,
+          reasoning: 'r',
+        },
+      ],
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.actions[0]).toMatchObject({ new_task_title: null });
+  });
+  it('normalizes a non-boolean explicit_transfer to absent instead of rejecting the batch', () => {
+    const r = parseExtraction({
+      actions: [
+        {
+          type: 'update',
+          target_ref: 'T12',
+          changes: {},
+          explicit_transfer: 'yes',
+          source_message_ids: ['M1'],
+          confidence: 0.8,
+          reasoning: 'r',
+        },
+      ],
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const action = r.value.actions[0] as { explicit_transfer?: boolean };
+      expect(action.explicit_transfer).toBeUndefined();
+    }
   });
   it('still rejects an invalid target_ref on update/complete/cancel actions (inventing a target is worse than dropping one)', () => {
     expect(
