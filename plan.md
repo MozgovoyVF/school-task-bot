@@ -509,7 +509,7 @@ describe('planTaskNotifications', () => {
   - `parseTimeWindow(input: string): { from: string; to: string } | null`;
   - `parseAdminSetting(input: string): { path: string; value: unknown } | null` — формат `ключ значение`, например `ai.thresholds.low 0.3`.
 
-- [ ] **Шаг 1: падающие тесты**
+- [x] **Шаг 1: падающие тесты**
   - `parseDateRange` (сейчас 2026-09-23):
     - `с 31.12 по 08.01` → `2026-12-31..2027-01-08`;
     - `31.12-08.01` → то же;
@@ -524,8 +524,8 @@ describe('planTaskNotifications', () => {
     2. Некорректное время → понятная ошибка, настройки не изменились.
     3. `/admin → AI-настройки` (superadmin): `ai.thresholds.low 0.3` сохраняется, `ai.thresholds.low 2` отклоняется zod. `batch.*` — так же.
     4. Member → `forbidden`.
-- [ ] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
-- [ ] **Шаг 5: коммит и push:** `feat(settings): add /settings menus and admin AI/batch tuning`.
+- [x] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
+- [x] **Шаг 5: коммит и push:** `feat(settings): add /settings menus and admin AI/batch tuning`.
 - [ ] **Шаг 6: чистка по D40.**
   1. Убрать `summary.forMembers` и `reminders.notifyAssignees` из `SettingsSchema`, поправить тест defaults из Task 1.1. Сохранённые настройки с этими полями должны читаться без ошибок (лишние ключи отбрасываются).
   2. Миграция: удалить `memberships.notify_assignments`, `tasks.review_pending`, `tasks.review_requested_by`, `tasks.review_requested_at`.

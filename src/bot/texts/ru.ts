@@ -406,6 +406,43 @@ export const texts = {
       'Отключите privacy mode у @BotFather (Bot Settings → Group Privacy → Turn off) и ' +
         '<b>заново добавьте бота в группы</b>, где он уже состоит — иначе для уже добавленных чатов ничего не изменится.',
     ].join('\n'),
+    /** Button on the `/admin` panel that enters `adminSettings` (Task 3.11, superadmin-only `ai.*`/`batch.*` tuning, SPEC §16's "Superadmin может менять ai.* и batch.* через /admin"). */
+    aiSettingsButton: '🤖 AI-настройки',
+  },
+  /**
+   * `/admin`'s "🤖 AI-настройки" button (plan.md Task 3.11, `src/bot/conversations/settings.ts`'s
+   * `adminSettings` conversation) — a free-text `ключ значение` REPL for `ai.*`/`batch.*` (SPEC §16),
+   * ended by sending `/done`. Every value is validated through `SettingsSchema` (`mergeSettings`) before
+   * being written — an invalid one is rejected with `rejected`, leaving settings untouched.
+   */
+  adminSettings: {
+    intro: [
+      'Отправляйте строки вида «ключ значение», например:',
+      '<code>ai.thresholds.low 0.3</code>',
+      '<code>ai.thresholds.high 0.7</code>',
+      '<code>ai.thresholds.modify 0.5</code>',
+      '<code>ai.autoCreate.enabled false</code>',
+      '<code>ai.autoCreate.minConfidence 0.9</code>',
+      '<code>ai.proposalExpiryDays 7</code>',
+      '<code>batch.quietSeconds 180</code>',
+      '<code>batch.maxMessages 25</code>',
+      '<code>batch.maxWaitSeconds 600</code>',
+      '',
+      'Чтобы закончить, отправьте /done.',
+    ].join('\n'),
+    /** Anything other than a text message while this REPL is running. */
+    textHint: 'Пожалуйста, отправьте текстовое сообщение, например «ai.thresholds.low 0.3», или /done.',
+    invalidFormat: 'Не понял формат. Ожидается «ключ значение», например «ai.thresholds.low 0.3».',
+    unknownKey(path: string): string {
+      return `Неизвестный параметр: <code>${escapeHtml(path)}</code>.`;
+    },
+    rejected(path: string): string {
+      return `Значение для <code>${escapeHtml(path)}</code> не подходит — настройки не изменены.`;
+    },
+    saved(path: string, value: string): string {
+      return `Сохранено: <code>${escapeHtml(path)} ${escapeHtml(value)}</code>`;
+    },
+    done: 'Готово, изменения сохранены.',
   },
   /**
    * `/debug [chat]` (SPEC §12.2 row, Task 2.15): superadmin-only diagnostics for the last 10
@@ -1316,5 +1353,113 @@ export const texts = {
     confirmButton: '✅ Создать задачу',
     cancelButton: '❌ Отмена',
     cancelled: 'Создание задачи отменено.',
+  },
+  /**
+   * `/settings` (Owner-only, plan.md Task 3.11, SPEC §16's "кнопочные меню"): the main menu and every
+   * section's screen (`src/bot/views/settings.ts`/`src/bot/conversations/settings.ts`). Every section
+   * applies each change immediately — no separate "save" step — and every time/number value is validated
+   * through `SettingsSchema` (`updateSettings`'s own `mergeSettings`) before the reply confirms it, so an
+   * invalid value never reaches the DB and the Owner always gets a clear reason instead.
+   */
+  settings: {
+    menuHeader: '⚙️ Настройки',
+    summaryButton: '☀️ Сводка',
+    remindersButton: '🔔 Напоминания',
+    quietButton: '🌙 Тихие часы',
+    timezoneButton: '🕐 Часовой пояс школы',
+    reactionsButton: '👀 Реакции',
+    noticeButton: '💬 Текст уведомления в чате',
+    closeButton: '✖️ Закрыть',
+    closed: 'Настройки закрыты.',
+    backButton: '◀️ Назад',
+    pickButtonHint: 'Пожалуйста, воспользуйтесь кнопками.',
+    textHint: 'Пожалуйста, отправьте текстовое сообщение.',
+
+    summaryHeader(enabled: boolean, time: string): string {
+      return `☀️ Сводка ${enabled ? 'включена' : 'выключена'}, время: ${time}`;
+    },
+    summaryEnableButton: 'Включить',
+    summaryDisableButton: 'Выключить',
+    summaryTimeButton: 'Изменить время',
+    summaryTimePrompt: 'Введите время сводки в формате ЧЧ:ММ, например 09:00.',
+    timeInvalid: 'Не удалось сохранить время — ожидается формат ЧЧ:ММ. Настройки не изменены.',
+
+    remindersHeader(preDue: string, allDayDue: string, overdue: string, threshold: number): string {
+      return [
+        '🔔 Напоминания',
+        `Накануне срока: ${preDue}`,
+        `В день срока (без времени): ${allDayDue}`,
+        `Просрочено (ежедневно): ${overdue}`,
+        `Объединять от: ${String(threshold)} одновременных`,
+      ].join('\n');
+    },
+    remindersPreDueButton: 'Время «накануне срока»',
+    remindersAllDayButton: 'Время «в день срока»',
+    remindersOverdueButton: 'Время «просрочено»',
+    remindersThresholdButton: 'Порог объединения',
+    remindersTimePrompt: 'Введите время в формате ЧЧ:ММ, например 10:00.',
+    remindersThresholdPrompt: 'Введите порог объединения — целое число от 1, например 3.',
+    thresholdInvalid: 'Не удалось сохранить — ожидается целое число от 1. Настройки не изменены.',
+
+    quietHeader(enabled: boolean, weekdays: string, window: string | null, rangesCount: number): string {
+      return [
+        `🌙 Тихие часы ${enabled ? 'включены' : 'выключены'}`,
+        `Дни недели: ${weekdays === '' ? 'не выбраны' : weekdays}`,
+        `Окно времени: ${window ?? 'не задано'}`,
+        `Диапазоны дат: ${String(rangesCount)}`,
+      ].join('\n');
+    },
+    quietEnableButton: 'Включить',
+    quietDisableButton: 'Выключить',
+    quietWeekdaysButton: 'Дни недели',
+    quietWindowButton: 'Окно времени',
+    quietDateRangesButton: 'Диапазоны дат',
+    quietWindowPrompt: 'Введите окно в формате ЧЧ:ММ-ЧЧ:ММ, например 22:00-08:00.',
+    quietWindowInvalid:
+      'Не удалось разобрать окно. Попробуйте ещё раз, например 22:00-08:00. Настройки не изменены.',
+    quietWeekdaysHeader: 'Отметьте тихие дни недели:',
+    quietWeekdayLabel(short: string, active: boolean): string {
+      return `${active ? '✅' : '▫️'} ${short}`;
+    },
+    quietDateRangesHeader: 'Диапазоны дат тихих часов:',
+    quietDateRangesEmpty: 'Диапазонов пока нет.',
+    quietDateRangeAddButton: '➕ Добавить диапазон',
+    quietDateRangeRemoveButton(from: string, to: string): string {
+      return `🗑 ${from} — ${to}`;
+    },
+    quietDateRangePrompt: 'Введите диапазон дат, например «с 31.12 по 08.01».',
+    quietDateRangeInvalid:
+      'Не удалось разобрать диапазон дат. Попробуйте ещё раз, например «с 31.12 по 08.01». Настройки не изменены.',
+
+    timezoneHeader(zoneLabel: string): string {
+      return `🕐 Часовой пояс школы: ${zoneLabel}`;
+    },
+    timezoneSaved(zoneLabel: string): string {
+      return `Часовой пояс школы сохранён: ${zoneLabel}.`;
+    },
+
+    reactionsHeader(onDetect: boolean, onAccept: boolean): string {
+      return [
+        '👀 Реакции',
+        `При обнаружении задачи: ${onDetect ? 'включена' : 'выключена'}`,
+        `При подтверждении: ${onAccept ? 'включена' : 'выключена'}`,
+      ].join('\n');
+    },
+    reactionsDetectEnableButton: 'Включить 👀',
+    reactionsDetectDisableButton: 'Выключить 👀',
+    reactionsAcceptEnableButton: 'Включить ✍',
+    reactionsAcceptDisableButton: 'Выключить ✍',
+
+    noticeHeader(isCustom: boolean, text: string): string {
+      return [`💬 Текст уведомления в чате (${isCustom ? 'изменён' : 'по умолчанию'}):`, '', text].join('\n');
+    },
+    noticeEditButton: 'Изменить',
+    noticeResetButton: 'Сбросить по умолчанию',
+    noticeEditPrompt: 'Введите новый текст уведомления.',
+    noticeTooLong(limit: number): string {
+      return `Текст слишком длинный (максимум ${String(limit)} символов). Попробуйте короче.`;
+    },
+    noticeSaved: 'Текст уведомления сохранён.',
+    noticeReset: 'Текст уведомления сброшен по умолчанию.',
   },
 };

@@ -47,8 +47,41 @@ export async function getSettings(db: DbOrTx, workspaceId: number): Promise<Sett
 }
 
 /**
+ * Updates the workspace's own `timezone` column (SPEC §16: the school's own zone, distinct from a user's
+ * personal override in `users.timezone` — Task 3.11's `/settings` "school timezone" section). Unlike
+ * `updateSettings` below, there is no zod re-validation step here: `timezone` is a plain `text` column,
+ * and the caller (`src/bot/conversations/settings.ts`) only ever passes a value already resolved by
+ * `time/zones.ts`'s `parseZoneInput` or picked from its own `RU_ZONES` list.
+ */
+export async function setWorkspaceTimezone(
+  db: DbOrTx,
+  workspaceId: number,
+  timezone: string,
+): Promise<WorkspaceRow> {
+  const [updated] = await db
+    .update(workspaces)
+    .set({ timezone })
+    .where(eq(workspaces.id, workspaceId))
+    .returning();
+  if (!updated) throw new Error(`workspace not found: ${workspaceId}`);
+  return updated;
+}
+
+/**
  * Deep-merges `patch` onto the current settings, persists the result, and
  * returns it. Throws (without writing) if the merged settings are invalid.
+ *
+ * Callers that need to catch that `ZodError` from *inside* a
+ * `@grammyjs/conversations` dialog should not wrap this function itself in
+ * `conversation.external(...)`: that plugin's replay machinery does not
+ * guarantee a thrown error survives with its original prototype intact
+ * (confirmed empirically by `tests/integration/bot/settings.test.ts` — an
+ * `instanceof ZodError` check on the error `conversation.external` rethrows
+ * came back `false`). Such a caller should instead call {@link getSettings}
+ * and `mergeSettings` directly (both pure/synchronous, same as
+ * `src/bot/conversations/editPerson.ts`'s own unwrapped `parseAliases` call)
+ * to decide whether the patch is valid, and only wrap the actual write —
+ * {@link setSettings} below — in `conversation.external`.
  */
 export async function updateSettings(
   db: DbOrTx,
@@ -57,8 +90,12 @@ export async function updateSettings(
 ): Promise<Settings> {
   const current = await getSettings(db, workspaceId);
   const next = mergeSettings(current, patch);
-
-  await db.update(workspaces).set({ settings: next }).where(eq(workspaces.id, workspaceId));
-
+  await setSettings(db, workspaceId, next);
   return next;
+}
+
+/** Persists already-validated settings (see {@link updateSettings}'s own doc comment for why a
+ * conversation that must catch a validation error keeps this write separate from the validation step). */
+export async function setSettings(db: DbOrTx, workspaceId: number, settings: Settings): Promise<void> {
+  await db.update(workspaces).set({ settings }).where(eq(workspaces.id, workspaceId));
 }

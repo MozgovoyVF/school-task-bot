@@ -9,6 +9,7 @@ import { texts } from '../texts/ru.js';
 import type { BotContext } from '../context.js';
 import { renderAdminPanel } from '../views/admin.js';
 import { renderAdminOwnerCodeButton } from '../views/transfer.js';
+import { renderAdminAiSettingsButton } from '../views/settings.js';
 import { renderDebugPanel } from '../views/debug.js';
 import { toInlineKeyboard } from '../keyboards/build.js';
 
@@ -83,7 +84,7 @@ export function registerAdminHandlers(bot: Bot<BotContext>, deps: AdminHandlersD
     });
     await ctx.reply(view.text, {
       parse_mode: 'HTML',
-      reply_markup: toInlineKeyboard(renderAdminOwnerCodeButton()),
+      reply_markup: toInlineKeyboard([...renderAdminOwnerCodeButton(), ...renderAdminAiSettingsButton()]),
     });
   });
 

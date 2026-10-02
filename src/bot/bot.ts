@@ -42,6 +42,8 @@ import { registerEditProposalConversation } from './conversations/editProposal.j
 import { registerEditTaskConversation } from './conversations/editTask.js';
 import { registerSnoozeInputConversation } from './conversations/snoozeInput.js';
 import { registerNewTaskConversation } from './conversations/newTask.js';
+import { registerSettingsConversations } from './conversations/settings.js';
+import { registerSettingsHandlers } from './handlers/settings.js';
 
 /**
  * The subset of `AppDeps` (`src/deps.ts`) that bot construction and its
@@ -134,8 +136,10 @@ export function createBot(
   // above is registered ahead of `registerProposalCallbackHandlers` for its `v1:p:edt:` entry callback.
   registerSnoozeInputConversation(bot, deps);
   registerNewTaskConversation(bot, deps);
+  registerSettingsConversations(bot, deps);
   registerDmHandlers(bot);
   registerAdminHandlers(bot, deps, startedAt);
+  registerSettingsHandlers(bot);
   registerTransferHandlers(bot, deps);
   registerChatMemberHandlers(bot, deps);
   registerChatsHandlers(bot, deps);

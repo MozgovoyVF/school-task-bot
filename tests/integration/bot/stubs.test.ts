@@ -31,16 +31,14 @@ async function makeMember(harness: BotHarness, tgUser: { id: number; firstName: 
   return userRow;
 }
 
-// `/settings` stands in for the whole `STUB_COMMANDS` list (`src/bot/handlers/stubs.ts`, now just
-// `/settings` itself) — every one of them is registered the same way, with the same
-// `can(actor, 'task.viewAll')` gate. `/tasks` used to be this suite's representative command too, until
-// Task 3.7 gave it (and `/today`/`/overdue`/`/archive`) a real handler (`src/bot/handlers/lists.ts`,
-// covered by `tests/integration/bot/lists.test.ts`); `/stats` was this suite's second example command
-// until Task 3.8 gave it (and `/search`) a real handler too (`src/bot/handlers/stats.ts`/`search.ts`,
-// covered by `tests/integration/bot/stats.test.ts`/`search.test.ts`); `/new` was this suite's second
-// example command until Task 3.10 gave it a real handler too (`src/bot/conversations/newTask.ts`, covered
-// by `tests/integration/bot/newTask.test.ts`) — `/settings` is now the only stub left.
-describe('owner-command stubs (/settings)', () => {
+// `STUB_COMMANDS` (`src/bot/handlers/stubs.ts`) is now empty — every `OWNER_COMMANDS` row has a real
+// handler (`/settings` was the last one, landed in Task 3.11: `src/bot/handlers/settings.ts`/
+// `src/bot/conversations/settings.ts`). This file keeps `/settings`'s own entry-gate smoke tests (the
+// stub-era `can(actor, 'task.viewAll')` checks were review round 1's I1 fix, now
+// `can(actor, 'settings.manage')` — same Owner-only shape) rather than duplicating them again in a
+// dedicated `settings.test.ts`; the full menu/section behaviour is this task's own optional coverage, not
+// required by plan.md's D43 list.
+describe('/settings entry gate', () => {
   it('is forbidden for a Member (review round 1, I1)', async () => {
     const harness = await createBotHarness();
     await makeMember(harness, MEMBER);
@@ -58,13 +56,13 @@ describe('owner-command stubs (/settings)', () => {
     expect(harness.replies(STRANGER.id)).toEqual([texts.common.forbidden]);
   });
 
-  it('replies with the "coming soon" stub for the Owner', async () => {
+  it('opens the settings menu for the Owner', async () => {
     const harness = await createBotHarness();
     await makeOwner(harness, OWNER);
 
     await harness.send(dmText(OWNER, '/settings'));
 
-    expect(harness.replies(OWNER.id)).toEqual([texts.common.comingSoon]);
+    expect(harness.replies(OWNER.id)).toEqual([texts.settings.menuHeader]);
   });
 
   it('has no effect in a group, even for the Owner', async () => {
