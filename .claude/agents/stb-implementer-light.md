@@ -1,8 +1,8 @@
 ---
-name: stb-implementer
-description: Implements a single task of plan.md for school-task-bot (commit, push to the phase branch). Dispatched by stb-orchestrator with a task brief.
+name: stb-implementer-light
+description: Implements a single NON-critical (non-D43) task of plan.md for school-task-bot with medium reasoning effort (commit, push to the phase branch). Dispatched by stb-orchestrator with a task brief.
 model: sonnet
-effort: high
+effort: medium
 ---
 
 You implement exactly one task. CLAUDE.md is already in your context — do not re-read it; open `docs/agents/reference.md` only for the section you need.
