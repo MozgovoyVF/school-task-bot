@@ -163,18 +163,24 @@ export async function eraseMember(
     // Also nulls out `payload.quoteAuthorUserId` itself in the same write (D46 fix round 1): leaving it
     // pointing at the now-possibly-deleted user would make a later `acceptProposal` on this still-pending
     // row try to insert a nonexistent `users.id` into `tasks.quote_author_user_id` and fail on the FK —
-    // mirrors that column's own `onDelete: 'set null'` semantics. Guarded by `payload->>'quote' is not
-    // null` (mirrors step 1a's `isNotNull(tasks.sourceQuote)` guard): `processBatch` can legitimately
-    // store `quote: null` with `quoteAuthorUserId` set (the source message had no text) — without this
-    // guard that row would get a fake `redactedQuote` string materialized where there never was a quote.
+    // mirrors that column's own `onDelete: 'set null'` semantics. This null-out must run unconditionally
+    // on every matching row (D46 fix round 2): `processBatch` can legitimately store `quote: null` with
+    // `quoteAuthorUserId` set (the source message had no text), and round 1's single `payload->>'quote'
+    // is not null` guard around the *whole* statement skipped nulling `quoteAuthorUserId` for exactly
+    // that case too, reintroducing the dangling-id FK violation `acceptProposal` was supposed to be safe
+    // from. Only the inner `{quote}` rewrite still needs that guard, so it never fabricates a
+    // `redactedQuote` string where there was no quote to begin with.
     await tx.execute(sql`
       update proposals
       set payload = jsonb_set(
-        jsonb_set(payload, '{quote}', to_jsonb(${texts.erase.redactedQuote}::text)),
+        case
+          when payload ->> 'quote' is not null
+          then jsonb_set(payload, '{quote}', to_jsonb(${texts.erase.redactedQuote}::text))
+          else payload
+        end,
         '{quoteAuthorUserId}', 'null'::jsonb
       )
       where workspace_id = ${input.workspaceId}
-        and payload ->> 'quote' is not null
         and (payload ->> 'quoteAuthorUserId')::bigint = ${input.userId}
     `);
 

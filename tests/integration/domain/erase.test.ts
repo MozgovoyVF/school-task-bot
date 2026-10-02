@@ -577,6 +577,27 @@ describe('eraseMember', () => {
       const [after] = await db.select().from(proposals).where(eq(proposals.id, proposal.id));
       const payloadAfter = after?.payload as Record<string, unknown>;
       expect(payloadAfter.quote).toBeNull();
+      // D46 fix round 2: `quoteAuthorUserId` must be cleared regardless of whether `quote` itself is
+      // null — otherwise it keeps pointing at Maria's now-deleted `users` row.
+      expect(payloadAfter.quoteAuthorUserId).toBeNull();
+
+      const deps = {
+        db,
+        clock: fixedClock('2026-09-24T09:00:00Z'),
+        config: {} as Env,
+        messenger: new FakeMessenger(),
+        logger,
+        workspace: ws,
+        taskHooks: [],
+      };
+      const result = await acceptProposal(deps, {
+        proposalId: proposal.id,
+        actor: actorOf(owner.id, 'owner'),
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error('expected acceptProposal to succeed');
+      expect(result.value.quoteAuthorUserId).toBeNull();
     },
   );
 
