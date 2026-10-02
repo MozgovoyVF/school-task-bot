@@ -204,11 +204,10 @@ export interface UpdatePersonInput {
  * Updates a membership's editable profile fields (`/people`'s edit dialog,
  * Task 1.10): `displayName` and/or `aliases`, whichever is given —
  * deliberately no `notifyAssignments` field (D40: member-facing
- * notifications were dropped project-wide, so `/people` never touches that
- * column even though it still exists on the row pending its removal in
- * Task 3.11). Passing neither field is a no-op read of the current row
- * (still returns it, for a caller that just wants the row back). Returns
- * `null` if `membershipId` doesn't exist.
+ * notifications were dropped project-wide, and that column itself was
+ * dropped by Task 3.11's own migration). Passing neither field is a no-op
+ * read of the current row (still returns it, for a caller that just wants
+ * the row back). Returns `null` if `membershipId` doesn't exist.
  */
 export async function updatePerson(db: DbOrTx, input: UpdatePersonInput): Promise<MembershipRow | null> {
   const set: Partial<typeof memberships.$inferInsert> = {};

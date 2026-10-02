@@ -526,7 +526,7 @@ describe('planTaskNotifications', () => {
     4. Member → `forbidden`.
 - [x] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
 - [x] **Шаг 5: коммит и push:** `feat(settings): add /settings menus and admin AI/batch tuning`.
-- [ ] **Шаг 6: чистка по D40.**
+- [x] **Шаг 6: чистка по D40.**
   1. Убрать `summary.forMembers` и `reminders.notifyAssignees` из `SettingsSchema`, поправить тест defaults из Task 1.1. Сохранённые настройки с этими полями должны читаться без ошибок (лишние ключи отбрасываются).
   2. Миграция: удалить `memberships.notify_assignments`, `tasks.review_pending`, `tasks.review_requested_by`, `tasks.review_requested_at`.
   3. `pnpm lint && pnpm typecheck && pnpm test` — зелёные.

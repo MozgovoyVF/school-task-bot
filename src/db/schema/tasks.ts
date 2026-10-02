@@ -37,11 +37,6 @@ export const tasks = pgTable(
     dueTz: text('due_tz'),
     priority: taskPriority('priority').notNull().default('normal'),
     status: taskStatus('status').notNull().default('open'),
-    reviewPending: boolean('review_pending').notNull().default(false),
-    reviewRequestedBy: bigint('review_requested_by', { mode: 'number' }).references(() => users.id, {
-      onDelete: 'set null',
-    }),
-    reviewRequestedAt: timestamp('review_requested_at', { withTimezone: true }),
     completedAt: timestamp('completed_at', { withTimezone: true }),
     completedByUserId: bigint('completed_by_user_id', { mode: 'number' }).references(() => users.id, {
       onDelete: 'set null',

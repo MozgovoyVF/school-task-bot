@@ -15,6 +15,13 @@
       "when": 1790437376490,
       "tag": "0001_wild_expediter",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790942978286,
+      "tag": "0002_narrow_azazel",
+      "breakpoints": true
     }
   ]
 }

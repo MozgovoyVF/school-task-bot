@@ -32,17 +32,17 @@ describe('workspaces repo', () => {
 
     const settings = await getSettings(db, ws.id);
 
-    expect(settings.summary).toEqual({ enabled: true, time: '09:00', forMembers: false });
+    expect(settings.summary).toEqual({ enabled: true, time: '09:00' });
   });
 
   it('updateSettings persists the patch, getSettings returns the merged result', async () => {
     const ws = await ensureDefaultWorkspace(db, { name: 'Школа', timezone: 'Europe/Moscow' });
 
     const updated = await updateSettings(db, ws.id, { summary: { time: '08:30' } });
-    expect(updated.summary).toEqual({ enabled: true, time: '08:30', forMembers: false });
+    expect(updated.summary).toEqual({ enabled: true, time: '08:30' });
 
     const reloaded = await getSettings(db, ws.id);
-    expect(reloaded.summary).toEqual({ enabled: true, time: '08:30', forMembers: false });
+    expect(reloaded.summary).toEqual({ enabled: true, time: '08:30' });
     expect(reloaded.reminders).toEqual(updated.reminders);
   });
 

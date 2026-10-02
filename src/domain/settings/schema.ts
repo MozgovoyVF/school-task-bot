@@ -21,17 +21,19 @@ const DateString = z
 /** ISO weekday: 1 (Monday) .. 7 (Sunday) — plan.md decision D10. */
 const IsoWeekday = z.number().int().min(1).max(7);
 
+// D40 (plan.md, 2026-09-27): member-facing notifications were dropped project-wide — `forMembers`/
+// `notifyAssignees` are gone (Task 3.11's own Step 6 cleanup). Settings jsonb saved before this change may
+// still carry those keys on disk; `parseSettings`/`SettingsSchema.parse` below drop unknown object keys by
+// default (no `.strict()`), so such a row still parses without error, it just loses those two fields.
 const SummarySchema = z.object({
   enabled: z.boolean().default(true),
   time: TimeString.default('09:00'),
-  forMembers: z.boolean().default(false),
 });
 
 const RemindersSchema = z.object({
   preDueTime: TimeString.default('10:00'),
   allDayDueTime: TimeString.default('10:00'),
   overdueTime: TimeString.default('10:00'),
-  notifyAssignees: z.boolean().default(true),
   groupOverdueThreshold: z.number().int().positive().default(3),
 });
 
@@ -97,12 +99,11 @@ const RetentionSchema = z.object({
 });
 
 export const SettingsSchema = z.object({
-  summary: SummarySchema.default({ enabled: true, time: '09:00', forMembers: false }),
+  summary: SummarySchema.default({ enabled: true, time: '09:00' }),
   reminders: RemindersSchema.default({
     preDueTime: '10:00',
     allDayDueTime: '10:00',
     overdueTime: '10:00',
-    notifyAssignees: true,
     groupOverdueThreshold: 3,
   }),
   quiet: QuietSchema.default({ enabled: false, weekdays: [], windows: [], dateRanges: [] }),
