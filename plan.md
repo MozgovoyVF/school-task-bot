@@ -232,14 +232,14 @@ export interface TaskHook { name: string; afterChange(tx: Tx, task: TaskRow | nu
 
 **Файлы:** создать `docs/OPERATIONS.md`, `docs/MIGRATION_TO_OWNER.md`, `docs/legal/consent_template.md`, `docs/legal/processing_policy_template.md`, `docs/legal/rkn_checklist.md`; изменить `docs/legal/privacy_notice_chat.md`, `docs/legal/privacy_full.md`.
 
-- [ ] **Шаг 1:** `docs/OPERATIONS.md`: логи (`docker compose logs -f app`), `/admin`, `/debug`, диск (`df -h`), обновление и откат (`scripts/deploy.sh`), бэкапы, типовые инциденты (бюджет LLM, заблокированный бот, privacy mode, падение OpenRouter, миграция group → supergroup), ротация токена.
-- [ ] **Шаг 2:** `docs/MIGRATION_TO_OWNER.md` — 8 шагов SPEC §17.3 с командами. **Первый пункт чек-листа — юридический гейт** (профиль А или Б и документы согласованы).
-- [ ] **Шаг 3:** шаблоны `docs/legal/*` (SPEC §19.5), каждый с пометкой «⚠️ Шаблон, проверить юристу». Содержание:
+- [x] **Шаг 1:** `docs/OPERATIONS.md`: логи (`docker compose logs -f app`), `/admin`, `/debug`, диск (`df -h`), обновление и откат (`scripts/deploy.sh`), бэкапы, типовые инциденты (бюджет LLM, заблокированный бот, privacy mode, падение OpenRouter, миграция group → supergroup), ротация токена.
+- [x] **Шаг 2:** `docs/MIGRATION_TO_OWNER.md` — 8 шагов SPEC §17.3 с командами. **Первый пункт чек-листа — юридический гейт** (профиль А или Б и документы согласованы).
+- [x] **Шаг 3:** шаблоны `docs/legal/*` (SPEC §19.5), каждый с пометкой «⚠️ Шаблон, проверить юристу». Содержание:
   - какие данные обрабатываются, цели и сроки хранения (30 дней для текстов);
   - передача за рубеж (OpenRouter) и псевдонимизация, включая то, что имена третьих лиц в MVP не заменяются;
   - как запросить удаление;
   - чек-лист уведомлений РКН (ст. 22, ст. 12).
-- [ ] **Шаг 4: коммит и push:** `docs: add operations runbook, owner migration guide and legal templates`.
+- [x] **Шаг 4: коммит и push:** `docs: add operations runbook, owner migration guide and legal templates`.
 
 ### Task 4.4: Профиль Б — БД в РФ через WireGuard
 
