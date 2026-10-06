@@ -2,6 +2,44 @@
 
 ## [Unreleased]
 
+Phase 4 (production readiness): verified backup/restore round-trip, a ticker-downtime watchdog
+and a completed `/admin` error view, the operations runbook/owner-migration/legal document set,
+and a strict deployment profile B with a remote (RF-side) database. Task 4.5 (legal sign-off,
+production deploy, `/claim`, @BotFather ownership transfer, tag `v1.0.0`) is a manual (👤) step
+and not part of this entry.
+
+### Added
+
+- `scripts/test-backup-restore.sh` — exercises `scripts/backup.sh`/`scripts/restore.sh` end to end
+  in Docker against a synthetic fixture (two throwaway Postgres instances, a throwaway age key, a
+  dependency-free `/healthz` stub so the test never makes real Telegram calls), including a
+  deliberate dump corruption that must make the `count(*)` comparison fail. `scripts/lib/common.sh`
+  and `scripts/backup.sh` gain test-only overrides (`STB_DEPLOY_STATE_DIR`,
+  `STB_COMPOSE_EXTRA_FILE`, `STB_BACKUP_DIR`, `STB_TELEGRAM_API_BASE`) to make this possible without
+  touching the real `.env`/`.deploy`/backups.
+- `src/ops/watchdog.ts` (`checkTickerGapOnStart`, SPEC §18) — alerts every superadmin via
+  `errors.alert('ticker_gap', …)` with the observed downtime when `app_state['ticker:heartbeat']`
+  is more than 2 minutes stale at startup; a missing row (fresh install) or a fresh heartbeat sends
+  nothing. Called from `src/app.ts` right after `checkPrivacyMode`/`syncCommands` and before the
+  ticker's first tick.
+- `src/domain/system/errorReports.ts` (`listRecentErrors`, `errorSampleSchema`) — completes
+  `/admin`'s SPEC §12.2 "последние ошибки" column, reading `error_reports.sample` (jsonb),
+  skipping rows that fail to validate (e.g. alert-only rows with a null sample).
+- `docs/OPERATIONS.md` — logs, `/admin`/`/debug`, disk, deploy/rollback, backup rotation and
+  restore-on-a-clean-server, and typical incidents (LLM budget, blocked bot, privacy mode,
+  OpenRouter outage, group→supergroup migration, token rotation).
+- `docs/MIGRATION_TO_OWNER.md` — the 8-step SPEC §17.3 owner-migration checklist with commands,
+  gated on a legal sign-off (profile A or B with its documents agreed) as the first checklist item.
+- `docs/legal/consent_template.md`, `docs/legal/processing_policy_template.md`,
+  `docs/legal/rkn_checklist.md` (new) and edits to `docs/legal/privacy_notice_chat.md`,
+  `docs/legal/privacy_full.md` (SPEC §19.5) — each marked "⚠️ Шаблон, проверить юристу": processed
+  data/purposes/retention (30 days for texts), cross-border transfer to OpenRouter and
+  pseudonymization (including that third-party names aren't redacted in MVP), how to request
+  erasure, and an RKN notification checklist (ст. 22, ст. 12).
+- `docker/compose.db-remote.yml`, `docs/DEPLOY_PROFILE_B.md` — SPEC §19.4's strict profile B: an
+  app-only compose file (no local `db` service/`depends_on`) plus the RF-side Postgres 17 setup,
+  TLS, WireGuard tunnel, connection check, backups and an EU-server no-data verification procedure.
+
 ## [0.4.0] — 2026-10-03
 
 Phase 3 (tasks, reminders and assignees — Owner-only per D40): pre-due/due/overdue reminder
