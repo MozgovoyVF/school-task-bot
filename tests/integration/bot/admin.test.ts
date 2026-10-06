@@ -89,6 +89,7 @@ describe('/admin', () => {
           precision: null,
         },
         [],
+        [],
       ),
     ]);
   });
@@ -139,6 +140,31 @@ describe('/admin', () => {
     const reply = harness.replies(SUPERADMIN.id)[0];
     expect(reply).toContain('Очередь предложений по чатам');
     expect(reply).toContain('French teachers: 1');
+  });
+
+  it('shows nothing under "Последние ошибки" when no error has been reported yet (SPEC §12.2)', async () => {
+    const harness = await createBotHarness();
+
+    await harness.send(dmText(SUPERADMIN, '/admin'));
+
+    const reply = harness.replies(SUPERADMIN.id)[0];
+    expect(reply).toContain('Последние ошибки');
+    expect(reply).toContain('Ошибок не было.');
+  });
+
+  it('shows the last reported error — name, message and count (SPEC §12.2)', async () => {
+    const harness = await createBotHarness();
+    // Triggers `/testerror`'s thrown Error, which `src/bot/middleware/errors.ts` reports via
+    // `errors.report`, writing a fresh `error_reports` row.
+    await harness.send(dmText(SUPERADMIN, '/testerror'));
+    harness.reset();
+
+    await harness.send(dmText(SUPERADMIN, '/admin'));
+
+    const reply = harness.replies(SUPERADMIN.id)[0];
+    expect(reply).toContain('Последние ошибки');
+    expect(reply).toContain('Test error from /testerror');
+    expect(reply).not.toContain('Ошибок не было.');
   });
 
   it('has no effect at all in a group, even for a superadmin (final Phase 1 review’s C1 fix)', async () => {

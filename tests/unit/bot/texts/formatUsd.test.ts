@@ -59,6 +59,7 @@ describe('rendered texts using formatUsd stay valid HTML with a sub-0.0001 amoun
         precision: null,
       },
       [],
+      [],
     );
     expect(rendered).toContain('менее 0.0001');
     expect(rendered).not.toMatch(RAW_LT);

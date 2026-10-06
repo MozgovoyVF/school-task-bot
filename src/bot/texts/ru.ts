@@ -388,6 +388,7 @@ export const texts = {
         precision: number | null;
       },
       pendingByChat: Array<{ chatId: number; title: string; count: number }>,
+      recentErrors: Array<{ name: string; message: string; count: number; when: string }>,
     ): string {
       const precisionLabel =
         ai.precision === null ? NO_DATA_LABEL : `${String(Math.round(ai.precision * 100))}%`;
@@ -395,6 +396,13 @@ export const texts = {
         pendingByChat.length === 0
           ? ['Нет необработанных предложений.']
           : pendingByChat.map((row) => `· ${escapeHtml(row.title)}: ${String(row.count)}`);
+      const errorLines =
+        recentErrors.length === 0
+          ? ['Ошибок не было.']
+          : recentErrors.map((e) => {
+              const repeat = e.count > 0 ? ` · повторилось ${String(e.count)} ${pluralizeRaz(e.count)}` : '';
+              return `· <b>${escapeHtml(e.name)}</b>: ${escapeHtml(e.message)} (${e.when}${repeat})`;
+            });
       return [
         '🛠 Панель администратора',
         `Версия: <code>${escapeHtml(gitSha)}</code>`,
@@ -408,6 +416,9 @@ export const texts = {
         `За 7 дней: показано ${String(ai.last7.shown)}, скрыто ${String(ai.last7.suppressed)}, ` +
           `принято ${String(ai.last7.accepted)}, отклонено ${String(ai.last7.rejected)}`,
         `Точность (принято / принято+отклонено): ${precisionLabel}`,
+        '',
+        '🛑 Последние ошибки',
+        ...errorLines,
       ].join('\n');
     },
     /** Button on the `/admin` panel that issues a claim code (Task 1.5, `src/bot/handlers/transfer.ts`). */

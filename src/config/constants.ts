@@ -4,6 +4,9 @@ export const HEARTBEAT_MAX_AGE_MS = 60_000;
 // SPEC §18 — `src/ops/watchdog.ts`'s `checkTickerGapOnStart`: a startup heartbeat older than this alerts
 // superadmin that the ticker loop was not running for at least that long before the restart.
 export const TICKER_GAP_ALERT_MS = 2 * 60_000;
+// SPEC §12.2's `/admin` row ("последние ошибки") — `src/domain/system/errorReports.ts`'s `listRecentErrors`
+// caps how many of the most-recently-seen distinct errors the panel shows.
+export const RECENT_ERRORS_LIMIT = 5;
 export const BATCH_BACKOFF_MINUTES = [1, 5, 15, 15] as const; // после 1-й…4-й неудачи; 5-я → failed
 export const BATCH_MAX_ATTEMPTS = 5;
 export const STALE_RUNNING_BATCH_MS = 5 * 60_000;
