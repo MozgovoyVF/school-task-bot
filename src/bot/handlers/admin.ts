@@ -121,6 +121,7 @@ export function registerAdminHandlers(bot: Bot<BotContext>, deps: AdminHandlersD
         last7: stats.last7,
         precision: stats.precision,
       },
+      pendingByChat: stats.pendingByChat,
     });
     await ctx.reply(view.text, {
       parse_mode: 'HTML',
@@ -269,6 +270,7 @@ export function registerAdminHandlers(bot: Bot<BotContext>, deps: AdminHandlersD
         last7: stats.last7,
         precision: stats.precision,
       },
+      pendingByChat: stats.pendingByChat,
     });
     await editInto(view.text, [
       ...renderAdminOwnerCodeButton(),

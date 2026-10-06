@@ -49,12 +49,17 @@ describe('rendered texts using formatUsd stay valid HTML with a sub-0.0001 amoun
   });
 
   it('texts.admin.panel', () => {
-    const rendered = texts.admin.panel('test-sha', 90, {
-      costToday: 0.000001,
-      costMonth: 0.000001,
-      last7: { shown: 0, suppressed: 0, accepted: 0, rejected: 0 },
-      precision: null,
-    });
+    const rendered = texts.admin.panel(
+      'test-sha',
+      90,
+      {
+        costToday: 0.000001,
+        costMonth: 0.000001,
+        last7: { shown: 0, suppressed: 0, accepted: 0, rejected: 0 },
+        precision: null,
+      },
+      [],
+    );
     expect(rendered).toContain('менее 0.0001');
     expect(rendered).not.toMatch(RAW_LT);
   });

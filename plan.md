@@ -221,12 +221,12 @@ export interface TaskHook { name: string; afterChange(tx: Tx, task: TaskRow | nu
 
 **Интерфейсы:** Produces `checkTickerGapOnStart(deps): Promise<void>` — если `app_state['ticker:heartbeat']` старше 2 мин, вызывается `errors.alert('ticker_gap', …)` с длительностью простоя (SPEC §18).
 
-- [ ] **Шаг 1: падающий тест.**
+- [x] **Шаг 1: падающий тест.**
   - Heartbeat 5 мин назад → при старте superadmin получает оповещение «ticker не работал 5 мин».
   - Heartbeat 30 с назад → оповещения нет.
-- [ ] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
-- [ ] **Шаг 5:** сверить `/admin` с SPEC §18: версия, аптайм, pending по чатам, стоимость LLM за сегодня и месяц, proposals за 7 дней, precision, «Код владельца», «Удалить workspace», последние ошибки. Недостающее дописать с тестами.
-- [ ] **Шаг 6: коммит и push:** `feat(ops): alert on ticker downtime at startup`.
+- [x] **Шаг 2:** FAIL. **Шаг 3:** реализация. **Шаг 4:** PASS.
+- [x] **Шаг 5:** сверить `/admin` с SPEC §18: версия, аптайм, pending по чатам, стоимость LLM за сегодня и месяц, proposals за 7 дней, precision, «Код владельца», «Удалить workspace», последние ошибки. Недостающее дописать с тестами.
+- [x] **Шаг 6: коммит и push:** `feat(ops): alert on ticker downtime at startup`.
 
 ### Task 4.3: Документы — OPERATIONS, MIGRATION_TO_OWNER, юридические шаблоны
 

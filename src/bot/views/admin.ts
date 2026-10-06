@@ -15,9 +15,11 @@ export interface AdminPanelInfo {
     last7: AiLast7Stats;
     precision: number | null;
   };
+  /** `aiStats`'s `pendingByChat` — the pending-proposals queue by chat (SPEC §18/§12.2). */
+  pendingByChat: Array<{ chatId: number; title: string; count: number }>;
 }
 
 /** Pure render for `/admin`: no DB, no I/O (CLAUDE.md §7). */
 export function renderAdminPanel(info: AdminPanelInfo): AdminView {
-  return { text: texts.admin.panel(info.gitSha, info.uptimeSec, info.ai) };
+  return { text: texts.admin.panel(info.gitSha, info.uptimeSec, info.ai, info.pendingByChat) };
 }

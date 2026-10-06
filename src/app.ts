@@ -28,6 +28,7 @@ import { ensureSummariesJob } from './scheduler/jobs/summary.js';
 import { expireProposalsJob } from './scheduler/jobs/expireProposals.js';
 import { buildHttpServer } from './http/server.js';
 import { checkPrivacyMode } from './bot/startupChecks.js';
+import { checkTickerGapOnStart } from './ops/watchdog.js';
 import { syncCommands } from './bot/commands.js';
 import type { AppDeps } from './deps.js';
 import { remindersHook } from './domain/notifications/schedule.js';
@@ -181,6 +182,11 @@ export async function startApp(env: Env, overrides?: StartAppOverrides): Promise
   await bot.init();
   await checkPrivacyMode(deps, bot.botInfo);
   await syncCommands({ db, workspace, superadminIds: env.SUPERADMIN_TG_IDS }, bot.api);
+
+  // Must run before `createTicker`/`ticker.tickOnce()` below: that first tick immediately
+  // overwrites `app_state['ticker:heartbeat']` with the current time, so checking it any later would
+  // always see a fresh heartbeat and this would never fire (SPEC §18, `src/ops/watchdog.ts`).
+  await checkTickerGapOnStart(deps);
 
   // `analyzeJob`/`cardsJob` (Task 2.9/2.10/2.12) and `expireProposalsJob` (Task 2.15, D11) are registered
   // here; `analyzeJob` itself still no-ops whenever `deps.ai` is `null` (no `OPENROUTER_API_KEY`/

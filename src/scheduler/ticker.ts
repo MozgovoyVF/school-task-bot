@@ -2,7 +2,8 @@ import type { AppDeps } from '../deps.js';
 import { setState } from '../domain/system/appState.js';
 import { TICK_INTERVAL_MS } from '../config/constants.js';
 
-const HEARTBEAT_KEY = 'ticker:heartbeat';
+/** `app_state` key the ticker's heartbeat is persisted under — also read by `src/ops/watchdog.ts`'s `checkTickerGapOnStart`. */
+export const HEARTBEAT_KEY = 'ticker:heartbeat';
 
 export interface Job {
   name: string;
