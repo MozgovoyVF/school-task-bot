@@ -104,6 +104,21 @@ ssl_key_file = '/etc/postgresql/17/main/certs/server.key'
 listen_addresses = 'localhost,10.8.0.1'
 ```
 
+**Важно про порядок загрузки после перезагрузки сервера:** Postgres должен запускаться **после**
+того, как поднят интерфейс WireGuard — иначе при старте системы `listen_addresses =
+'localhost,10.8.0.1'` свяжется только с `localhost` (адреса `10.8.0.1` ещё не существует), и
+приложение потеряет связь с БД до следующего ручного перезапуска `postgresql`. Варианты (любой
+один, не оба обязательно):
+
+- systemd drop-in: `sudo systemctl edit postgresql` и добавить
+  ```ini
+  [Unit]
+  After=wg-quick@wg0.service
+  Wants=wg-quick@wg0.service
+  ```
+- либо `sudo sysctl net.ipv4.ip_nonlocal_bind=1` (разрешает слушать на ещё не поднятом адресе;
+  проще, но менее явно документирует зависимость, чем drop-in выше).
+
 В `/etc/postgresql/17/main/pg_hba.conf` добавить строку, разрешающую подключение **только** с
 туннельного адреса EU-сервера (`10.8.0.2` ниже, шаг 3) и **только** с TLS (`hostssl`, не `host`):
 
@@ -250,13 +265,28 @@ DATABASE_URL=postgres://stb:<пароль>@10.8.0.1:5432/stb?sslmode=require
 ```
 
 (ср. `.env.example`: `DATABASE_URL=postgres://stb:***@db:5432/stb` в профиле А — там `db` — это
-имя сервиса в `docker/compose.yml`, здесь — туннельный адрес РФ-сервера.) На EU-сервере
-использовать `docker/compose.db-remote.yml` вместо `docker/compose.yml` во всех командах из
-`docs/DEPLOY.md` (`scripts/compose.sh`, `scripts/deploy.sh` используют `docker/compose.yml` по
-умолчанию — для профиля Б указать свой compose-файл явно, например
-`docker compose -f docker/compose.db-remote.yml --env-file .env -p stb-prod up -d`, либо завести
-переменную `COMPOSE_FILE=docker/compose.db-remote.yml` в окружении, которое читает
-`scripts/lib/common.sh`).
+имя сервиса в `docker/compose.yml`, здесь — туннельный адрес РФ-сервера.)
+
+**На EU-сервере в профиле Б `scripts/compose.sh`/`scripts/deploy.sh`/`scripts/backup.sh` НЕ
+используются** — все три жёстко прописывают `docker/compose.yml` (`scripts/lib/common.sh`:
+`COMPOSE_FILE="$ROOT_DIR/docker/compose.yml"`, без точки переопределения — в отличие от
+`STB_ENV_FILE`/`STB_DEPLOY_STATE_DIR`, которые существуют только для тестов). Запустив их как
+есть на профиле Б, получите попытку управлять локальным сервисом `db`, которого в
+`compose.db-remote.yml` просто нет, — молча мимо несуществующей/пустой базы, без явной ошибки.
+Вместо них — голые команды `docker compose` с `docker/compose.db-remote.yml` напрямую:
+
+```bash
+# деплой/обновление версии
+docker compose -f docker/compose.db-remote.yml --env-file .env -p stb-prod pull
+docker compose -f docker/compose.db-remote.yml --env-file .env -p stb-prod up -d
+
+# логи приложения
+docker compose -f docker/compose.db-remote.yml --env-file .env -p stb-prod logs -f app
+```
+
+(`stb-prod` — пример `COMPOSE_PROJECT`/`-p`; подставить реальное значение из `.env`.) Бэкапы в
+профиле Б тоже не через `scripts/backup.sh` — отдельная процедура на стороне РФ-сервера
+(`pg_dump` локально там), см. §5 ниже.
 
 ---
 
@@ -346,8 +376,22 @@ docker/compose.db-remote.yml up -d`, список томов для этого �
 
 Всё остальное — тот же процесс, что в `docs/DEPLOY.md`: выбор EU-сервера (§1), первичная настройка
 (§2), BotFather и OpenRouter (§5–§6), получение кода и `.env` (§7–§8, кроме значения
-`DATABASE_URL` — см. шаг 4 выше — и имени compose-файла — см. шаг 4), релиз и первый запуск (§8),
-обновление версии и откат (§11, `scripts/deploy.sh` работает так же, если указать ему
-`docker/compose.db-remote.yml`), мониторинг (§12). LLM остаётся OpenRouter (с уведомлением РКН о
+`DATABASE_URL` — см. шаг 4 выше — и имени compose-файла — см. шаг 4), релиз (§8 — сборка образа в
+GHCR workflow'ом не зависит от профиля). **Кроме:** обновление версии/откат (§11) и мониторинг
+(§12) в `docs/DEPLOY.md` используют `scripts/deploy.sh`/`scripts/compose.sh`, которые в профиле Б
+не применяются (см. шаг 4 выше) — вместо них:
+
+```bash
+# обновление версии / откат — просто другой тег на pull
+docker compose -f docker/compose.db-remote.yml --env-file .env -p stb-prod pull
+docker compose -f docker/compose.db-remote.yml --env-file .env -p stb-prod up -d
+
+# мониторинг / логи
+docker compose -f docker/compose.db-remote.yml --env-file .env -p stb-prod logs -f app
+```
+
+(откат деплоя здесь ручной — тот же набор команд с предыдущим тегом в `.env`/образе; `deploy.sh`'s
+автоматический healthz-based rollback, запись `.deploy/current_tag` и pre-deploy backup — это всё
+специфика профиля А, в профиле Б не действует.) LLM остаётся OpenRouter (с уведомлением РКН о
 трансграничной передаче) или переключается на российского провайдера — отдельное решение,
 не затронутое этой задачей (SPEC §19.4).

@@ -40,6 +40,14 @@ and not part of this entry.
   app-only compose file (no local `db` service/`depends_on`) plus the RF-side Postgres 17 setup,
   TLS, WireGuard tunnel, connection check, backups and an EU-server no-data verification procedure.
 
+### Known open points (flagged for the user, not blocking)
+
+- `users.dm_blocked` has no automatic reset path: no code path ever sets it back to `false`, even
+  after the person re-opens the chat with `/start` (pre-existing Phase-3 gap). Found and
+  documented — not fixed — during Phase 4's final review; `docs/OPERATIONS.md`'s "Бот заблокирован
+  пользователем" section now documents the manual SQL recovery (`UPDATE users SET dm_blocked =
+false WHERE tg_user_id = ...`) as the real, intended-for-now recovery path.
+
 ## [0.4.0] — 2026-10-03
 
 Phase 3 (tasks, reminders and assignees — Owner-only per D40): pre-due/due/overdue reminder
