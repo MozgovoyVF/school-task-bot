@@ -1,0 +1,25 @@
+services:
+  # Profile B (SPEC §19.4, strict production: Postgres stays on a VPS in Russia, the app server in
+  # the EU reaches it only through a WireGuard tunnel). This file is the app-only half of
+  # docker/compose.yml: same `app` service (image reference, env_file, port mapping, logging), but
+  # with NO `db` service and NO `depends_on` on it -- there is nothing local to depend on. See
+  # docs/DEPLOY_PROFILE_B.md for the Postgres-in-Russia / WireGuard setup this depends on, and
+  # docs/DEPLOY.md for everything that is unchanged (scripts/*.sh, release/deploy flow, backups
+  # once DATABASE_URL points at the tunnel address).
+  app:
+    # Same image reference as docker/compose.yml; no `:-latest` fallback (plan.md decision D38).
+    image: ghcr.io/mozgovoyvf/school-task-bot:${APP_TAG:?APP_TAG must be set to a concrete release tag (see scripts/compose.sh)}
+    env_file: ../.env
+    environment:
+      # Same reasoning as docker/compose.yml: HTTP_PORT in .env is the HOST-side port, the
+      # container always listens on 3000 (Dockerfile HEALTHCHECK and the port mapping below rely
+      # on it); `environment` takes precedence over `env_file`.
+      HTTP_PORT: '3000'
+    ports:
+      - '127.0.0.1:${HTTP_PORT:-3000}:3000'
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'

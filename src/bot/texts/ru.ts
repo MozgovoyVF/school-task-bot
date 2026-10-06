@@ -188,6 +188,18 @@ export const texts = {
     llmConsecutiveFailures(count: number): string {
       return `⚠️ ${String(count)} ошибок LLM подряд. Проверьте доступность OpenRouter и ключ API.`;
     },
+    /**
+     * SPEC §18: sent to superadmin via `errors.alert('ticker_gap', ...)` (`src/ops/watchdog.ts`'s
+     * `checkTickerGapOnStart`, called once from `src/app.ts` right after `checkPrivacyMode`/
+     * `syncCommands` — before the ticker's own first `tickOnce()` overwrites the heartbeat it is
+     * reading) when the previous run's ticker heartbeat was already more than `TICKER_GAP_ALERT_MS`
+     * (2 min) stale at this restart — the ticker loop was not running for at least that long
+     * (crash, OOM, deploy downtime, ...).
+     */
+    tickerGap(gapMs: number): string {
+      const minutes = Math.max(1, Math.round(gapMs / 60_000));
+      return `⚠️ Ticker не работал ${String(minutes)} мин. Планировщик был остановлен (сбой или деплой) — проверьте логи сервиса.`;
+    },
     /** SPEC §9.2: sent to superadmin and Owner once, per calendar day, when the daily LLM budget is exhausted. */
     budgetPaused(spentUsd: number, budgetUsd: number): string {
       return [
@@ -358,10 +370,13 @@ export const texts = {
   },
   admin: {
     /**
-     * `/admin` panel for a superadmin: build version, elapsed process uptime, and (Task 2.15) a short
-     * AI-pipeline summary — today's/this month's LLM spend, the last 7 days' shown/suppressed/accepted/
-     * rejected proposal counts, and `accepted/(accepted+rejected)` precision (`NO_DATA_LABEL` when that
-     * denominator is zero — SPEC §11.2's own "н/д" case, not a bug).
+     * `/admin` panel for a superadmin: build version, elapsed process uptime, the pending-proposals
+     * queue by chat (SPEC §18's "pending-сообщения по чатам"/§12.2's "очередь" — `aiStats`'s own
+     * `pendingByChat`, every chat still holding at least one `pending` proposal, Owner hasn't decided
+     * yet), and (Task 2.15) a short AI-pipeline summary — today's/this month's LLM spend, the last 7
+     * days' shown/suppressed/accepted/rejected proposal counts, and `accepted/(accepted+rejected)`
+     * precision (`NO_DATA_LABEL` when that denominator is zero — SPEC §11.2's own "н/д" case, not a
+     * bug).
      */
     panel(
       gitSha: string,
@@ -372,19 +387,38 @@ export const texts = {
         last7: { shown: number; suppressed: number; accepted: number; rejected: number };
         precision: number | null;
       },
+      pendingByChat: Array<{ chatId: number; title: string; count: number }>,
+      recentErrors: Array<{ name: string; message: string; count: number; when: string }>,
     ): string {
       const precisionLabel =
         ai.precision === null ? NO_DATA_LABEL : `${String(Math.round(ai.precision * 100))}%`;
+      const queueLines =
+        pendingByChat.length === 0
+          ? ['Нет необработанных предложений.']
+          : pendingByChat.map((row) => `· ${escapeHtml(row.title)}: ${String(row.count)}`);
+      const errorLines =
+        recentErrors.length === 0
+          ? ['Ошибок не было.']
+          : recentErrors.map((e) => {
+              const repeat = e.count > 0 ? ` · повторилось ${String(e.count)} ${pluralizeRaz(e.count)}` : '';
+              return `· <b>${escapeHtml(e.name)}</b>: ${escapeHtml(e.message)} (${e.when}${repeat})`;
+            });
       return [
         '🛠 Панель администратора',
         `Версия: <code>${escapeHtml(gitSha)}</code>`,
         `Аптайм: ${formatUptime(uptimeSec)}`,
+        '',
+        '📥 Очередь предложений по чатам',
+        ...queueLines,
         '',
         '🤖 ИИ-анализ',
         `Стоимость сегодня: ${formatUsd(ai.costToday)} $ · за месяц: ${formatUsd(ai.costMonth)} $`,
         `За 7 дней: показано ${String(ai.last7.shown)}, скрыто ${String(ai.last7.suppressed)}, ` +
           `принято ${String(ai.last7.accepted)}, отклонено ${String(ai.last7.rejected)}`,
         `Точность (принято / принято+отклонено): ${precisionLabel}`,
+        '',
+        '🛑 Последние ошибки',
+        ...errorLines,
       ].join('\n');
     },
     /** Button on the `/admin` panel that issues a claim code (Task 1.5, `src/bot/handlers/transfer.ts`). */

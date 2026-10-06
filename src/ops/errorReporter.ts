@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { eq } from 'drizzle-orm';
+import { z } from 'zod';
 import type { Db } from '../db/client.js';
 import { errorReports } from '../db/schema/index.js';
 import type { Messenger } from '../domain/messenger.js';
@@ -13,6 +14,20 @@ const MAX_STACK_FRAMES = 5;
 const LONG_DIGIT_RUN = /\d{7,}/g;
 
 type Context = Record<string, string | number | boolean | null>;
+
+/**
+ * Validates `error_reports.sample` (jsonb, written by `buildSample` below) on read — every jsonb read
+ * goes through zod (CLAUDE.md §8). Used by `src/domain/system/errorReports.ts`'s `listRecentErrors`
+ * (SPEC §12.2's `/admin` row's last-errors column) to parse each row's `sample` back into an
+ * {@link ErrorSample}; a row whose `sample` fails this (old/malformed data) is skipped there rather than
+ * thrown.
+ */
+export const errorSampleSchema = z.object({
+  name: z.string(),
+  message: z.string(),
+  topFrames: z.array(z.string()),
+  context: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])),
+});
 
 interface NormalizedError {
   name: string;
@@ -77,7 +92,7 @@ function sanitizeMessage(message: string): string {
   return masked.length > MAX_MESSAGE_CHARS ? masked.slice(0, MAX_MESSAGE_CHARS) : masked;
 }
 
-interface ErrorSample {
+export interface ErrorSample {
   name: string;
   message: string;
   topFrames: string[];

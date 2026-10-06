@@ -6,8 +6,10 @@ import type { Logger } from '../../ops/logger.js';
 import type { Messenger, Buttons } from '../../domain/messenger.js';
 import type { WorkspaceRow } from '../../domain/workspaces/repo.js';
 import { aiStats, listRecentBatches } from '../../domain/ai/stats.js';
+import { listRecentErrors } from '../../domain/system/errorReports.js';
 import { reanalyze } from '../../domain/proposals/queries.js';
 import { eraseWorkspace, EraseWorkspaceError } from '../../domain/workspaces/erase.js';
+import { RECENT_ERRORS_LIMIT } from '../../config/constants.js';
 import { texts } from '../texts/ru.js';
 import type { BotContext } from '../context.js';
 import { renderAdminPanel } from '../views/admin.js';
@@ -112,6 +114,7 @@ export function registerAdminHandlers(bot: Bot<BotContext>, deps: AdminHandlersD
     }
     const uptimeSec = (deps.clock.now().getTime() - startedAt.getTime()) / 1000;
     const stats = await aiStats(deps.db, { now: deps.clock.now(), tz: deps.workspace.timezone });
+    const recentErrors = await listRecentErrors(deps.db, RECENT_ERRORS_LIMIT);
     const view = renderAdminPanel({
       gitSha: deps.config.GIT_SHA,
       uptimeSec,
@@ -121,6 +124,9 @@ export function registerAdminHandlers(bot: Bot<BotContext>, deps: AdminHandlersD
         last7: stats.last7,
         precision: stats.precision,
       },
+      pendingByChat: stats.pendingByChat,
+      recentErrors,
+      viewerZone: deps.workspace.timezone,
     });
     await ctx.reply(view.text, {
       parse_mode: 'HTML',
@@ -260,6 +266,7 @@ export function registerAdminHandlers(bot: Bot<BotContext>, deps: AdminHandlersD
     await ctx.answerCallbackQuery();
     const uptimeSec = (deps.clock.now().getTime() - startedAt.getTime()) / 1000;
     const stats = await aiStats(deps.db, { now: deps.clock.now(), tz: deps.workspace.timezone });
+    const recentErrors = await listRecentErrors(deps.db, RECENT_ERRORS_LIMIT);
     const view = renderAdminPanel({
       gitSha: deps.config.GIT_SHA,
       uptimeSec,
@@ -269,6 +276,9 @@ export function registerAdminHandlers(bot: Bot<BotContext>, deps: AdminHandlersD
         last7: stats.last7,
         precision: stats.precision,
       },
+      pendingByChat: stats.pendingByChat,
+      recentErrors,
+      viewerZone: deps.workspace.timezone,
     });
     await editInto(view.text, [
       ...renderAdminOwnerCodeButton(),

@@ -5,10 +5,17 @@
 #
 # Defines:
 #   ROOT_DIR, COMPOSE_FILE, ENV_FILE, DEPLOY_STATE_DIR, CURRENT_TAG_FILE
-#     (ENV_FILE defaults to $ROOT_DIR/.env; STB_ENV_FILE overrides it, for tests)
+#     (ENV_FILE defaults to $ROOT_DIR/.env; STB_ENV_FILE overrides it, for tests.
+#     DEPLOY_STATE_DIR defaults to $ROOT_DIR/.deploy; STB_DEPLOY_STATE_DIR
+#     overrides it, for tests -- so a test run's .deploy/current_tag never
+#     reads or writes the real repo's deploy state.)
 #   env_get KEY        print KEY's value from $ENV_FILE ("" if absent)
 #   read_current_tag   print the tag recorded in $CURRENT_TAG_FILE ("" if none)
-#   compose ARGS...    docker compose for this stack (needs COMPOSE_PROJECT)
+#   compose ARGS...    docker compose for this stack (needs COMPOSE_PROJECT).
+#     STB_COMPOSE_EXTRA_FILE, if set, is passed as an extra `-f` on top of
+#     $COMPOSE_FILE (for tests: scripts/test-backup-restore.sh overrides the
+#     `app` service with a dependency-free stub image/command, see its own
+#     header comment for why).
 #
 # Why env_get instead of `source .env`: .env is written for docker compose's
 # dotenv parser, not for bash. Values such as `SUPERADMIN_TG_IDS=111, 222` or
@@ -32,7 +39,7 @@
 ROOT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 COMPOSE_FILE="$ROOT_DIR/docker/compose.yml"
 ENV_FILE="${STB_ENV_FILE:-$ROOT_DIR/.env}"
-DEPLOY_STATE_DIR="$ROOT_DIR/.deploy"
+DEPLOY_STATE_DIR="${STB_DEPLOY_STATE_DIR:-$ROOT_DIR/.deploy}"
 CURRENT_TAG_FILE="$DEPLOY_STATE_DIR/current_tag"
 
 env_get() {
@@ -77,5 +84,9 @@ read_current_tag() {
 }
 
 compose() {
-  docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" -p "$COMPOSE_PROJECT" "$@"
+  local extra_file=()
+  if [[ -n "${STB_COMPOSE_EXTRA_FILE:-}" ]]; then
+    extra_file=(-f "$STB_COMPOSE_EXTRA_FILE")
+  fi
+  docker compose -f "$COMPOSE_FILE" "${extra_file[@]}" --env-file "$ENV_FILE" -p "$COMPOSE_PROJECT" "$@"
 }

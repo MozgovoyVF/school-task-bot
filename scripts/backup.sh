@@ -24,9 +24,16 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source-path=SCRIPTDIR source=lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
 
-BACKUP_DIR="$ROOT_DIR/backups"
+# STB_BACKUP_DIR overrides this, for tests (scripts/test-backup-restore.sh) --
+# so a test run's backup files, and its 14-backup pruning, never touch this
+# repo's real backups/ directory.
+BACKUP_DIR="${STB_BACKUP_DIR:-$ROOT_DIR/backups}"
 KEEP_COUNT=14
 MAX_TELEGRAM_SIZE_BYTES=$((50 * 1024 * 1024))
+# STB_TELEGRAM_API_BASE overrides this, for tests (scripts/test-backup-restore.sh)
+# -- so a test run's sendMessage/sendDocument calls hit a local stub instead of
+# the real Telegram Bot API (CLAUDE.md: no real Telegram calls from tests).
+TELEGRAM_API_BASE="${STB_TELEGRAM_API_BASE:-https://api.telegram.org}"
 
 # The alert path is installed FIRST, before anything is read from .env, so
 # that every later failure -- an unreadable .env, a missing variable, a
@@ -45,7 +52,7 @@ alert_superadmin() {
     echo "(no TELEGRAM_BOT_TOKEN/SUPERADMIN_TG_IDS available; Telegram alert not sent)" >&2
     return 0
   fi
-  curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+  curl -fsS -X POST "${TELEGRAM_API_BASE}/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
     -d "chat_id=${SUPERADMIN_ID}" \
     --data-urlencode "text=${message}" \
     >/dev/null 2>&1 || true
@@ -126,7 +133,7 @@ FILE_SIZE=$(stat -c%s "$OUT_FILE" 2>/dev/null || stat -f%z "$OUT_FILE")
 
 if (( FILE_SIZE <= MAX_TELEGRAM_SIZE_BYTES )); then
   curl -fsS -F document=@"$OUT_FILE" \
-    "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument?chat_id=${SUPERADMIN_ID}" \
+    "${TELEGRAM_API_BASE}/bot${TELEGRAM_BOT_TOKEN}/sendDocument?chat_id=${SUPERADMIN_ID}" \
     >/dev/null
   echo "Backup sent to superadmin via Telegram."
 else

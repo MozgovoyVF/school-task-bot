@@ -6,8 +6,9 @@ import { texts } from '../../../src/bot/texts/ru.js';
 import { decodeCallback, encodeCallback } from '../../../src/bot/keyboards/callbackCodec.js';
 import { upsertTelegramUser } from '../../../src/domain/people/repo.js';
 import { upsertChatOnAdd } from '../../../src/domain/chats/repo.js';
-import { chats, memberships, workspaces } from '../../../src/db/schema/index.js';
+import { chats, memberships, proposals, workspaces } from '../../../src/db/schema/index.js';
 import type { Buttons } from '../../../src/domain/messenger.js';
+import type { ProposalPayload } from '../../../src/domain/proposals/repo.js';
 import type { FakeMessenger } from '../../helpers/fakeMessenger.js';
 
 const SUPERADMIN = { id: 900000001, firstName: 'Anna' };
@@ -78,13 +79,92 @@ describe('/admin', () => {
     await harness.send(dmText(SUPERADMIN, '/admin'));
 
     expect(harness.replies(SUPERADMIN.id)).toEqual([
-      texts.admin.panel('test-sha', 90, {
-        costToday: 0,
-        costMonth: 0,
-        last7: { shown: 0, suppressed: 0, accepted: 0, rejected: 0 },
-        precision: null,
-      }),
+      texts.admin.panel(
+        'test-sha',
+        90,
+        {
+          costToday: 0,
+          costMonth: 0,
+          last7: { shown: 0, suppressed: 0, accepted: 0, rejected: 0 },
+          precision: null,
+        },
+        [],
+        [],
+      ),
     ]);
+  });
+
+  it('shows the pending-proposals queue by chat (SPEC §18)', async () => {
+    const harness = await createBotHarness();
+    const superadminUser = await upsertTelegramUser(harness.db, {
+      id: SUPERADMIN.id,
+      first_name: SUPERADMIN.firstName,
+    });
+    const chat = await upsertChatOnAdd(harness.db, {
+      tgChatId: -6000,
+      title: 'French teachers',
+      type: 'supergroup',
+      workspaceId: harness.deps.workspace.id,
+      addedByUserId: superadminUser.id,
+      status: 'active',
+      pendingSince: null,
+      now: harness.clock.now(),
+    });
+    const payload: ProposalPayload = {
+      title: 'Test',
+      description: null,
+      category: 'assignment',
+      assignee: { type: 'none' },
+      due: null,
+      dueText: null,
+      priority: 'normal',
+      reasoning: 'test',
+      origin: 'ai',
+      quote: null,
+      quoteAuthorName: null,
+      quoteAuthorUserId: null,
+    };
+    await harness.db.insert(proposals).values({
+      workspaceId: harness.deps.workspace.id,
+      chatId: chat.id,
+      kind: 'create',
+      payload,
+      confidence: 0.8,
+      policyDecision: 'shown',
+      policyReason: 'above_low',
+      status: 'pending',
+    });
+
+    await harness.send(dmText(SUPERADMIN, '/admin'));
+
+    const reply = harness.replies(SUPERADMIN.id)[0];
+    expect(reply).toContain('Очередь предложений по чатам');
+    expect(reply).toContain('French teachers: 1');
+  });
+
+  it('shows nothing under "Последние ошибки" when no error has been reported yet (SPEC §12.2)', async () => {
+    const harness = await createBotHarness();
+
+    await harness.send(dmText(SUPERADMIN, '/admin'));
+
+    const reply = harness.replies(SUPERADMIN.id)[0];
+    expect(reply).toContain('Последние ошибки');
+    expect(reply).toContain('Ошибок не было.');
+  });
+
+  it('shows the last reported error — name, message and count (SPEC §12.2)', async () => {
+    const harness = await createBotHarness();
+    // Triggers `/testerror`'s thrown Error, which `src/bot/middleware/errors.ts` reports via
+    // `errors.report`, writing a fresh `error_reports` row.
+    await harness.send(dmText(SUPERADMIN, '/testerror'));
+    harness.reset();
+
+    await harness.send(dmText(SUPERADMIN, '/admin'));
+
+    const reply = harness.replies(SUPERADMIN.id)[0];
+    expect(reply).toContain('Последние ошибки');
+    expect(reply).toContain('Test error from /testerror');
+    expect(reply).not.toContain('Ошибок не было.');
   });
 
   it('has no effect at all in a group, even for a superadmin (final Phase 1 review’s C1 fix)', async () => {
