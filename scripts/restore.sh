@@ -4,10 +4,13 @@ set -euo pipefail
 # scripts/restore.sh <file.age> <identity-file>
 #
 # Restores an age-encrypted, gzip-compressed pg_dump backup produced by
-# scripts/backup.sh: stops the app, drops and recreates the database,
-# restores the dump into it, brings the SAME app version back up (the tag
-# recorded in .deploy/current_tag, never a floating `latest`; plan.md
-# decision D38), and verifies /healthz.
+# scripts/backup.sh: decrypts and verifies the backup into a private temp
+# file FIRST, and only once that has succeeded does it stop the app, drop
+# and recreate the database, restore the dump into it, bring the SAME app
+# version back up (the tag recorded in .deploy/current_tag, never a floating
+# `latest`; plan.md decision D38), and verify /healthz. If decryption fails
+# (wrong identity file) or the result is empty/corrupt, the script aborts
+# right there -- the database is never touched.
 #
 # Run from the repo root on the VPS (e.g. /opt/stb-dev or /opt/stb-prod),
 # next to docker/compose.yml and .env. See docs/DEPLOY.md §10.
@@ -69,6 +72,32 @@ if [[ -z "$APP_TAG" ]]; then
 fi
 export APP_TAG
 
+# Decrypt+decompress into a private temp file and verify it BEFORE touching
+# the database at all. A bad identity file or a corrupt dump must fail here,
+# with nothing stopped/dropped yet. The temp file holds a full plaintext
+# dump (personal data) and is cleaned up on exit, success or failure alike.
+RESTORE_TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/stb-restore.XXXXXX")
+chmod 700 "$RESTORE_TMP_DIR"
+DECRYPTED_DUMP="$RESTORE_TMP_DIR/dump.sql"
+cleanup_restore_tmp() {
+  rm -f -- "$DECRYPTED_DUMP"
+  rmdir "$RESTORE_TMP_DIR" 2>/dev/null || rm -rf -- "$RESTORE_TMP_DIR"
+}
+trap cleanup_restore_tmp EXIT
+
+echo "Decrypting and verifying $BACKUP_FILE..."
+: >"$DECRYPTED_DUMP"
+chmod 600 "$DECRYPTED_DUMP"
+if ! age -d -i "$IDENTITY_FILE" "$BACKUP_FILE" | gunzip >"$DECRYPTED_DUMP"; then
+  echo "failed to decrypt/decompress $BACKUP_FILE (wrong identity file or corrupt backup); database was NOT touched" >&2
+  exit 1
+fi
+if [[ ! -s "$DECRYPTED_DUMP" ]]; then
+  echo "decrypted backup $BACKUP_FILE is empty; refusing to restore. database was NOT touched" >&2
+  exit 1
+fi
+echo "Backup decrypted and verified non-empty."
+
 echo "This will PERMANENTLY REPLACE the contents of database '$POSTGRES_DB' ($COMPOSE_PROJECT)."
 echo "The app will be restarted on its current version: $APP_TAG."
 read -r -p "Type 'yes' to continue: " CONFIRM
@@ -89,10 +118,9 @@ compose exec -T db psql -U "$POSTGRES_USER" -d postgres \
   -c "DROP DATABASE IF EXISTS \"$POSTGRES_DB\";" \
   -c "CREATE DATABASE \"$POSTGRES_DB\" OWNER \"$POSTGRES_USER\";"
 
-echo "Restoring backup from $BACKUP_FILE..."
-age -d -i "$IDENTITY_FILE" "$BACKUP_FILE" \
-  | gunzip \
-  | compose exec -T db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+echo "Restoring backup from $DECRYPTED_DUMP..."
+compose exec -T db psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+  <"$DECRYPTED_DUMP"
 
 echo "Starting app ($APP_TAG)..."
 compose up -d app

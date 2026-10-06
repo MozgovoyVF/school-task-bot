@@ -15,8 +15,14 @@ export interface WatchdogDeps {
   errors: ErrorReporter;
 }
 
-/** Shape `src/scheduler/ticker.ts`'s `tickOnce()` writes to `app_state[HEARTBEAT_KEY]` on every tick. */
-const heartbeatSchema = z.object({ at: z.string() });
+/**
+ * Shape `src/scheduler/ticker.ts`'s `tickOnce()` writes to `app_state[HEARTBEAT_KEY]` on every
+ * tick: `{ at: now.toISOString() }`. `z.iso.datetime()` (not a bare `z.string()`) matches that
+ * exact format and rejects anything malformed up front — a bare `z.string()` would let a garbage
+ * value through to `new Date(bad)` (→ `NaN`), silently defeating the `gapMs` comparison below and
+ * firing a false `ticker_gap` alert with a meaningless number (fix-round-1 review finding #3).
+ */
+const heartbeatSchema = z.object({ at: z.iso.datetime() });
 
 /**
  * Checks `app_state['ticker:heartbeat']` once at startup (SPEC §18's "ticker downtime over 2 minutes
