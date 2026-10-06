@@ -245,16 +245,16 @@ export interface TaskHook { name: string; afterChange(tx: Tx, task: TaskRow | nu
 
 **Файлы:** создать `docker/compose.db-remote.yml`, `docs/DEPLOY_PROFILE_B.md`.
 
-- [ ] **Шаг 1:** `compose.db-remote.yml` — только сервис `app` без `db`. `DATABASE_URL` указывает на туннельный адрес с `sslmode=require` (SPEC §19.4).
-- [ ] **Шаг 2:** `docs/DEPLOY_PROFILE_B.md`:
+- [x] **Шаг 1:** `compose.db-remote.yml` — только сервис `app` без `db`. `DATABASE_URL` указывает на туннельный адрес с `sslmode=require` (SPEC §19.4).
+- [x] **Шаг 2:** `docs/DEPLOY_PROFILE_B.md`:
   1. VPS в РФ с Postgres 17 (UTF-8 локаль для `pg_trgm`).
   2. TLS-сертификат Postgres.
   3. WireGuard между серверами: ключи, `wg0.conf`, `ufw`.
   4. Проверка `psql "sslmode=require host=10.x.x.x"`.
   5. Бэкапы на стороне РФ.
   6. Проверка, что на ЕС-сервере нет данных (`docker volume ls`).
-- [ ] **Шаг 3:** проверка — CI собирает образ. Локально `docker compose -f docker/compose.db-remote.yml config` без ошибок.
-- [ ] **Шаг 4: коммит и push:** `docs(deploy): add strict profile B with remote database`.
+- [x] **Шаг 3:** проверка — CI собирает образ. Локально `docker compose -f docker/compose.db-remote.yml config` без ошибок.
+- [x] **Шаг 4: коммит и push:** `docs(deploy): add strict profile B with remote database`.
 
 ### Task 4.5 (👤): Юридический гейт, prod, переезд, закрытие фазы
 
