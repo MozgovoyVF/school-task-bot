@@ -7,6 +7,7 @@
 **Решение по ходу:** перед Task 3.1 обсудить с пользователем D6 (`dedupe_key` с версией) и D7 (правила планирования overdue).
 
 **Приёмка (SPEC §22):**
+
 - unit-тесты расписания: часовые пояса, all-day, переходы DST, тихие часы, изменение срока;
 - сквозной сценарий: задача → напоминание накануне → snooze → due → «Выполнено» от руководителя → архив (без review, D40);
 - сотрудникам бот ничего не присылает в личку (D40);
@@ -17,6 +18,7 @@
 **Файлы:** создать `src/domain/notifications/plan.ts`; тест `tests/unit/domain/notificationPlan.test.ts`.
 
 **Интерфейсы:**
+
 - Produces:
   - `interface PlanRecipient { userId: number; zone: string }` — получатель всегда только owner (D40);
   - `interface PlannedNotification { kind: 'pre_due' | 'due' | 'overdue'; recipientUserId: number; fireAt: Date; dedupeKey: string }`;
@@ -29,15 +31,45 @@
 import { describe, it, expect } from 'vitest';
 import { planTaskNotifications, type PlanRecipient } from '../../../src/domain/notifications/plan.js';
 
-const reminders = { preDueTime: '10:00', allDayDueTime: '10:00', overdueTime: '10:00', groupOverdueThreshold: 3 };
+const reminders = {
+  preDueTime: '10:00',
+  allDayDueTime: '10:00',
+  overdueTime: '10:00',
+  groupOverdueThreshold: 3,
+};
 const owner: PlanRecipient = { userId: 10, zone: 'Europe/Moscow' };
 const FRI_18_MSK = new Date('2026-09-25T15:00:00Z');
 const FRI_ALLDAY_MSK = new Date('2026-09-25T20:59:00Z');
-const task = (o: Partial<{ id: number; version: number; dueAt: Date | null; dueAllDay: boolean; dueTz: string | null; status: string }> = {}) =>
-  ({ id: 1, version: 1, dueAt: FRI_18_MSK, dueAllDay: false, dueTz: 'Europe/Moscow', status: 'open', ...o });
-const plan = (t: ReturnType<typeof task>, now: string, recipients: PlanRecipient[] = [owner], r = reminders) =>
-  planTaskNotifications({ task: t, recipients, reminders: r, now: new Date(now) })
-    .map((n) => [n.kind, n.recipientUserId, n.fireAt.toISOString(), n.dedupeKey]);
+const task = (
+  o: Partial<{
+    id: number;
+    version: number;
+    dueAt: Date | null;
+    dueAllDay: boolean;
+    dueTz: string | null;
+    status: string;
+  }> = {},
+) => ({
+  id: 1,
+  version: 1,
+  dueAt: FRI_18_MSK,
+  dueAllDay: false,
+  dueTz: 'Europe/Moscow',
+  status: 'open',
+  ...o,
+});
+const plan = (
+  t: ReturnType<typeof task>,
+  now: string,
+  recipients: PlanRecipient[] = [owner],
+  r = reminders,
+) =>
+  planTaskNotifications({ task: t, recipients, reminders: r, now: new Date(now) }).map((n) => [
+    n.kind,
+    n.recipientUserId,
+    n.fireAt.toISOString(),
+    n.dedupeKey,
+  ]);
 
 describe('planTaskNotifications', () => {
   it('datetime due more than 24h ahead', () => {
@@ -51,18 +83,20 @@ describe('planTaskNotifications', () => {
     expect(plan(task(), '2026-09-25T00:00:00Z').map((x) => x[0])).toEqual(['due', 'overdue']);
   });
   it('all-day due', () => {
-    expect(plan(task({ dueAt: FRI_ALLDAY_MSK, dueAllDay: true }), '2026-09-23T09:00:00Z').map((x) => x[2])).toEqual([
-      '2026-09-24T07:00:00.000Z', '2026-09-25T07:00:00.000Z', '2026-09-26T07:00:00.000Z',
-    ]);
+    expect(
+      plan(task({ dueAt: FRI_ALLDAY_MSK, dueAllDay: true }), '2026-09-23T09:00:00Z').map((x) => x[2]),
+    ).toEqual(['2026-09-24T07:00:00.000Z', '2026-09-25T07:00:00.000Z', '2026-09-26T07:00:00.000Z']);
   });
   it('never schedules in the past (D7)', () => {
-    expect(plan(task({ dueAt: FRI_ALLDAY_MSK, dueAllDay: true }), '2026-09-24T12:00:00Z').map((x) => x[0])).toEqual(['due', 'overdue']);
+    expect(
+      plan(task({ dueAt: FRI_ALLDAY_MSK, dueAllDay: true }), '2026-09-24T12:00:00Z').map((x) => x[0]),
+    ).toEqual(['due', 'overdue']);
   });
   it('uses the recipient zone for all-day dates', () => {
     const yekt: PlanRecipient = { userId: 10, zone: 'Asia/Yekaterinburg' };
-    expect(plan(task({ dueAt: FRI_ALLDAY_MSK, dueAllDay: true }), '2026-09-23T03:00:00Z', [yekt]).map((x) => x[2])).toEqual([
-      '2026-09-24T05:00:00.000Z', '2026-09-25T05:00:00.000Z', '2026-09-26T05:00:00.000Z',
-    ]);
+    expect(
+      plan(task({ dueAt: FRI_ALLDAY_MSK, dueAllDay: true }), '2026-09-23T03:00:00Z', [yekt]).map((x) => x[2]),
+    ).toEqual(['2026-09-24T05:00:00.000Z', '2026-09-25T05:00:00.000Z', '2026-09-26T05:00:00.000Z']);
   });
   it('first overdue for an already overdue task is the next overdueTime after now', () => {
     expect(plan(task(), '2026-09-27T09:00:00Z')).toEqual([
@@ -71,13 +105,17 @@ describe('planTaskNotifications', () => {
   });
   it('datetime overdue may fire the same day (D7, literal SPEC §13.2)', () => {
     const due0900 = new Date('2026-09-25T06:00:00Z');
-    expect(plan(task({ dueAt: due0900 }), '2026-09-23T09:00:00Z').at(-1)?.[2]).toBe('2026-09-25T07:00:00.000Z');
+    expect(plan(task({ dueAt: due0900 }), '2026-09-23T09:00:00Z').at(-1)?.[2]).toBe(
+      '2026-09-25T07:00:00.000Z',
+    );
   });
   it('handles DST in the recipient zone', () => {
     const berlin: PlanRecipient = { userId: 10, zone: 'Europe/Berlin' };
     const t = task({ dueAt: new Date('2026-10-25T22:59:00Z'), dueAllDay: true, dueTz: 'Europe/Berlin' });
     expect(plan(t, '2026-10-20T10:00:00Z', [berlin]).map((x) => x[2])).toEqual([
-      '2026-10-24T08:00:00.000Z', '2026-10-25T09:00:00.000Z', '2026-10-26T09:00:00.000Z',
+      '2026-10-24T08:00:00.000Z',
+      '2026-10-25T09:00:00.000Z',
+      '2026-10-26T09:00:00.000Z',
     ]);
   });
   it('returns nothing without due or for closed tasks', () => {
@@ -89,7 +127,10 @@ describe('planTaskNotifications', () => {
     expect(plan(task({ status: 'in_progress' }), '2026-09-23T09:00:00Z')).toHaveLength(3);
   });
   it('embeds the task version in dedupe keys (D6) and honours custom times', () => {
-    const r = plan(task({ version: 3 }), '2026-09-23T09:00:00Z', [owner], { ...reminders, preDueTime: '09:00' });
+    const r = plan(task({ version: 3 }), '2026-09-23T09:00:00Z', [owner], {
+      ...reminders,
+      preDueTime: '09:00',
+    });
     expect(r[0]).toEqual(['pre_due', 10, '2026-09-24T06:00:00.000Z', 'task:1:v3:pre_due:10:2026-09-24']);
   });
 });
@@ -109,6 +150,7 @@ describe('planTaskNotifications', () => {
 **Файлы:** создать `src/domain/notifications/recipients.ts`, `src/domain/notifications/schedule.ts`; изменить `src/app.ts` (зарегистрировать хук в `deps.taskHooks`); тест `tests/integration/domain/reschedule.test.ts`.
 
 **Интерфейсы:**
+
 - Produces:
   - `resolveRecipients(tx, task: TaskRow, settings: Settings): Promise<PlanRecipient[]>` — только owner (D40), если `dm_started_at` не пусто и `dm_blocked=false`; иначе пустой список. Пояс: `users.timezone`, иначе пояс workspace;
   - `remindersHook: TaskHook` — отменяет все `scheduled` уведомления задачи (включая snooze: «любое изменение → отмена всех», SPEC §13.2), затем вставляет план `ON CONFLICT (dedupe_key) DO NOTHING`.
@@ -127,6 +169,7 @@ describe('planTaskNotifications', () => {
 **Файлы:** создать `src/scheduler/jobs/notify.ts`, `src/bot/views/reminder.ts`; тесты `tests/unit/bot/views/reminder.test.ts`, `tests/integration/scheduler/notify.test.ts`.
 
 **Интерфейсы:**
+
 - Produces:
   - `notifyJob: Job`;
   - `renderReminder(v: { kind: 'pre_due' | 'due' | 'overdue' | 'snooze'; task: TaskListItem; viewerZone: string }): { text: string; buttons: Buttons }` — кнопки `[✅ Готово] [⏰ +1 час] [📅 Завтра] [🕐 Выбрать время]` (SPEC §13.3);
@@ -152,6 +195,7 @@ describe('planTaskNotifications', () => {
 **Файлы:** создать `src/domain/notifications/snooze.ts`, `src/bot/handlers/reminderCallbacks.ts`, `src/bot/conversations/snoozeInput.ts`; тесты `tests/unit/domain/snooze.test.ts`, `tests/integration/bot/reminderButtons.test.ts`.
 
 **Интерфейсы:**
+
 - Produces:
   - `type SnoozeOption = '1h' | 'tomorrow' | '3h' | 'today18' | 'dayafter'`;
   - `snoozeFireAt(option: SnoozeOption, now: Date, zone: string, reminders: Settings['reminders']): Date | null` — `null`, если вариант уже неприменим (например, «Сегодня 18:00» после 18:00);
@@ -177,6 +221,7 @@ describe('planTaskNotifications', () => {
 **Файлы:** создать `src/bot/views/summary.ts`, `src/scheduler/jobs/summary.ts`, `src/domain/tasks/queries.ts` (секции сводки); тесты `tests/unit/bot/views/summary.test.ts`, `tests/integration/scheduler/summary.test.ts`.
 
 **Интерфейсы:**
+
 - Produces:
   - `summarySections(db, { workspaceId, now, zone }): Promise<{ overdue: TaskListItem[]; today: TaskListItem[]; inboxCount: number; noDue: TaskListItem[]; noDueTotal: number }>` — секции «Ждут вашей проверки» нет (D40);
   - `renderSummary(s, { date: Date; zone: string }): { text: string; buttons: Buttons }`;
@@ -203,6 +248,7 @@ describe('planTaskNotifications', () => {
 **Файлы:** создать `src/bot/views/taskCard.ts`, `src/bot/views/history.ts`, `src/bot/handlers/taskCallbacks.ts`, `src/bot/conversations/editTask.ts`; изменить `src/domain/tasks/service.ts` (`cancel`, `restore`, `deleteForever`); тесты `tests/unit/bot/views/taskCard.test.ts`, `tests/integration/bot/taskActions.test.ts`.
 
 **Интерфейсы:**
+
 - Produces:
   - `renderTaskCard(t: TaskCardView, viewerZone: string): { text; buttons }` — формат SPEC §12.4;
   - `TaskService.cancel`, `restore` (→ `open`), `deleteForever` (удаляет задачу, события и уведомления);
@@ -232,6 +278,7 @@ describe('planTaskNotifications', () => {
 **Файлы:** изменить `src/domain/tasks/queries.ts`; создать `src/bot/views/taskList.ts`, `src/bot/handlers/lists.ts`; тесты `tests/unit/bot/views/taskList.test.ts`, `tests/integration/domain/taskQueries.test.ts`, `tests/integration/bot/lists.test.ts`.
 
 **Интерфейсы:**
+
 - Produces:
   - `type ListFilter = { kind: 'open' } | { kind: 'today' } | { kind: 'overdue' } | { kind: 'no_due' } | { kind: 'assignee'; userId: number | 'none' | 'all' } | { kind: 'chat'; chatId: number } | { kind: 'archive' } | { kind: 'today_and_overdue' }`;
   - Consumes: `TaskListItem` из 3.3;
@@ -265,6 +312,7 @@ describe('planTaskNotifications', () => {
 **Файлы:** создать `src/domain/tasks/search.ts`, `src/domain/tasks/stats.ts`, `src/bot/handlers/search.ts`, `src/bot/handlers/stats.ts`, `src/bot/views/stats.ts`; тесты `tests/integration/domain/search.test.ts`, `tests/integration/domain/stats.test.ts`.
 
 **Интерфейсы:**
+
 - Produces:
   - `searchTasks(db, { workspaceId, query, page }): Promise<{ items: TaskListItem[]; total: number }>` — по всем статусам (SPEC §12.2);
   - `taskStats(db, { workspaceId, periodDays: 7 | 30 | 90, now }): Promise<Array<{ key: { type: 'user'; userId: number; name: string } | { type: 'owner' } | { type: 'none' }; open: number; inProgress: number; overdueNow: number; done: number; onTimePct: number | null; avgLateHours: number | null }>>`.
@@ -294,6 +342,7 @@ describe('planTaskNotifications', () => {
 **Файлы:** создать `src/ai/pipeline/extractSingle.ts`, `src/bot/handlers/taskCommand.ts`, `src/bot/handlers/dmFreeText.ts`, `src/bot/handlers/forwards.ts`, `src/bot/conversations/newTask.ts`; изменить `src/bot/handlers/group.ts` (реальный `/task` вместо стаба), `src/bot/handlers/stubs.ts` (`/new` убран из стабов), `src/bot/handlers/normalize.ts`/`src/scheduler/jobs/cards.ts` (экспорт `forwardOriginName`/`markCardSent` для переиспользования), `src/domain/chats/messages.ts` (`getMessageByTgId`), `src/domain/proposals/repo.ts` (`createManualProposal`, `ProposalCategoryColumn`); тесты `tests/integration/bot/manualCreation.test.ts`, `tests/integration/bot/newTask.test.ts`, `tests/integration/ai/extractSingle.test.ts` (не `tests/unit/...` — см. шаг 1, пункт 11).
 
 **Интерфейсы:**
+
 - Produces:
   - `extractSingle(deps, { text: string; authorUserId: number; workspaceId: number; now: Date }): Promise<ResolvedAction & { kind: 'create' }>` — промпт `extractor.v1` + `extractor.single.v1`. Если действия нет или LLM недоступен, возвращает черновик с `title = первые 80 символов` (D19). Стоимость пишется как `analysis_batches` с `kind='manual'`;
   - `createManualProposal(deps, { workspaceId, chatId: number | null, action, origin: 'manual_group' | 'manual_dm' | 'forward', sourceMessageIds, quote, quoteAuthorName, createdByUserId })` — `category='manual'`, `policy_decision='shown'`, дальше обычный outbox (2.12).
@@ -318,6 +367,7 @@ describe('planTaskNotifications', () => {
 **Файлы:** создать `src/bot/handlers/settings.ts`, `src/bot/conversations/settings.ts`, `src/bot/views/settings.ts`, `src/time/parseRanges.ts`; тесты `tests/unit/time/parseRanges.test.ts`, `tests/integration/bot/settings.test.ts`.
 
 **Интерфейсы:**
+
 - Produces:
   - `parseDateRange(input: string, now: Date, zone: string): { from: string; to: string } | null`;
   - `parseTimeWindow(input: string): { from: string; to: string } | null`;
@@ -351,6 +401,7 @@ describe('planTaskNotifications', () => {
 **Файлы:** создать `src/domain/people/erase.ts`, `src/domain/workspaces/erase.ts`; изменить `src/bot/handlers/people.ts`, `src/bot/handlers/admin.ts`; тест `tests/integration/domain/erase.test.ts`.
 
 **Интерфейсы:**
+
 - Produces:
   - `eraseMember(deps, { workspaceId, userId, actor }): Promise<{ messages: number; tasksAnonymized: number; userDeleted: boolean }>`;
   - `eraseWorkspace(deps, { workspaceId, actor }): Promise<void>` — только superadmin, бот также покидает все чаты workspace.
@@ -404,7 +455,6 @@ describe('planTaskNotifications', () => {
   3. RC `v0.4.0-rc.1` → dev (👤 ручная проверка сценария в тестовой группе) — выявила D47 → Task 3.15 → RC `v0.4.0-rc.2` → dev → 👤 повторная проверка.
   4. PR `Phase 3: tasks, reminders and assignees` → 👤 → merge → тег `v0.4.0`. Выполнено 2026-10-03: PR #8 смержен (`246ea03`), тег `v0.4.0`. 👤 Пункты 1–3 повторной проверки на `rc.2` пройдены; сквозной сценарий напоминаний (п. 4) пользователь проверит позже на dev.
 
-
 ### Task 3.15: Новое поручение vs перенос существующей задачи (D47, приёмка v0.4.0-rc.1)
 
 **TDD (критичная задача: `ai/pipeline`, `domain/proposals`), ревью — Opus.** Файлы (ориентир): `prompts/extractor.v3.md` (копия v2 + правила D47; `prompt_version` → `extractor.v3`), `prompts/examples.school_ru.json` (синтетические примеры), `src/ai/schemas.ts`, `src/ai/pipeline/resolve.ts` и/или `processBatch.ts`, `src/ai/pipeline/dedup.ts`, `src/domain/proposals/decide.ts`, `src/bot/views/proposalCard.ts`, `src/bot/handlers/proposalCallbacks.ts`, `src/bot/keyboards/callbackCodec.ts`, `src/bot/texts/ru.ts`.
@@ -418,5 +468,3 @@ describe('planTaskNotifications', () => {
 - [x] **Шаг 2: реализация.** Схема: в `update` (local + wire) поля `explicit_transfer: boolean` и `new_task_title: string(3..120) | null` (wire — обязательные, nullable/boolean; local — с дефолтами, старые fixtures без полей остаются валидными). Промпт v3: правила D47 (1)–(3) + примеры. Реальные вызовы LLM/eval не запускать.
 - [x] **Шаг 3:** `pnpm format && pnpm lint && pnpm typecheck && pnpm test` зелёные; CHANGELOG (Phase 3, Unreleased) дополнен.
 - [x] **Шаг 4: коммит и push** в `phase-3-tasks` (PR #8 обновится сам).
-
-

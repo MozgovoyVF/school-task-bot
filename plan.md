@@ -204,16 +204,16 @@ export interface TaskHook { name: string; afterChange(tx: Tx, task: TaskRow | nu
 
 **Файлы:** изменить `scripts/backup.sh`, `scripts/restore.sh`; создать `scripts/test-backup-restore.sh`, `docs/OPERATIONS.md` (раздел «Бэкапы»).
 
-- [ ] **Шаг 1:** `scripts/test-backup-restore.sh` полностью в Docker:
+- [x] **Шаг 1:** `scripts/test-backup-restore.sh` полностью в Docker:
   1. Поднять временный Postgres 17 и заполнить его фикстурой.
   2. Выполнить `backup.sh` с тестовым age-ключом.
   3. Поднять второй временный Postgres и восстановить в него через `restore.sh`.
   4. Сравнить `count(*)` по всем таблицам.
 
   Скрипт должен падать, если в восстановленной БД чего-то не хватает: проверить это, удалив одну таблицу из дампа. После проверки вернуть исходное состояние.
-- [ ] **Шаг 2:** cron на сервере `0 3 * * * /opt/stb-prod/scripts/backup.sh >> /var/log/stb-backup.log 2>&1` (03:00 UTC, SPEC §27.10). При неудаче `backup.sh` отправляет оповещение superadmin через Bot API.
-- [ ] **Шаг 3:** описать в `docs/OPERATIONS.md` ротацию, где хранится приватный ключ (вне сервера) и пошаговое восстановление на чистом сервере.
-- [ ] **Шаг 4: коммит и push:** `chore(ops): verify backup and restore round-trip`.
+- [x] **Шаг 2:** cron на сервере `0 3 * * * /opt/stb-prod/scripts/backup.sh >> /var/log/stb-backup.log 2>&1` (03:00 UTC, SPEC §27.10). При неудаче `backup.sh` отправляет оповещение superadmin через Bot API. Строка задокументирована в `docs/OPERATIONS.md`; установка в реальный crontab прод-сервера — ручной шаг (👤), не выполнялась.
+- [x] **Шаг 3:** описать в `docs/OPERATIONS.md` ротацию, где хранится приватный ключ (вне сервера) и пошаговое восстановление на чистом сервере.
+- [x] **Шаг 4: коммит и push:** `chore(ops): verify backup and restore round-trip`.
 
 ### Task 4.2: Watchdog и финальный `/admin`
 
