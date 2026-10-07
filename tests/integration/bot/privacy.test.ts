@@ -1,6 +1,9 @@
+import { Writable } from 'node:stream';
 import { describe, it, expect } from 'vitest';
+import { HttpError } from 'grammy';
 import type { UserFromGetMe } from 'grammy/types';
 import { createBotHarness, type BotHarness } from '../../helpers/botHarness.js';
+import { createLogger } from '../../../src/ops/logger.js';
 import { dmText, groupText, callback, botKeyboardMessage } from '../../helpers/updates.js';
 import { texts } from '../../../src/bot/texts/ru.js';
 import { checkPrivacyMode } from '../../../src/bot/startupChecks.js';
@@ -220,6 +223,46 @@ describe('syncCommands', () => {
       { type: 'chat', chat_id: SUPERADMIN_ID },
       { type: 'chat', chat_id: SUPERADMIN_ID + 1 },
     ]);
+  });
+
+  it('logs a skipped chat-scope failure with the chat id but never the bot token', async () => {
+    const lines: string[] = [];
+    const destination = new Writable({
+      write(chunk: unknown, _enc, cb: () => void) {
+        lines.push(String(chunk));
+        cb();
+      },
+    });
+    const harness = await createBotHarness({ superadminIds: [SUPERADMIN_ID] });
+    const fakeToken = '123456789:AAFakeTokenValueForTheTest_abc-XYZ';
+    // A network-level failure: grammY wraps the fetch error, whose message carries the full request URL
+    // (and so the token) — logging the raw error would leak it.
+    const api: CommandsApi = {
+      setMyCommands: (_commands, other) =>
+        other?.scope?.type === 'chat'
+          ? Promise.reject(
+              new HttpError(
+                "Network request for 'setMyCommands' failed!",
+                new Error(`request to https://api.telegram.org/bot${fakeToken}/setMyCommands failed`),
+              ),
+            )
+          : Promise.resolve(true),
+    };
+
+    await syncCommands(
+      {
+        db: harness.db,
+        workspace: harness.deps.workspace,
+        superadminIds: [SUPERADMIN_ID],
+        logger: createLogger({ level: 'debug', destination }),
+      },
+      api,
+    );
+
+    const output = lines.join('');
+    expect(output).not.toContain(fakeToken);
+    expect(lines).toHaveLength(1);
+    expect(output).toContain(String(SUPERADMIN_ID));
   });
 
   it('still throws when a global scope call fails', async () => {

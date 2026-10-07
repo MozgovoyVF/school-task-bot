@@ -2,6 +2,7 @@ import type { BotCommand, BotCommandScope } from 'grammy/types';
 import type { DbOrTx } from '../db/client.js';
 import { getOwner } from '../domain/people/repo.js';
 import type { Logger } from '../ops/logger.js';
+import { toMessengerError } from './messenger.js';
 import { texts } from './texts/ru.js';
 
 /**
@@ -141,6 +142,12 @@ async function setChatCommands(
   try {
     await api.setMyCommands(commands, { scope: { type: 'chat', chat_id: chatId } });
   } catch (err) {
-    deps.logger.warn({ err, chatId }, 'setMyCommands for chat scope failed; skipped');
+    // Never log the raw error: a network-level grammY `HttpError` wraps the fetch error, whose message
+    // carries the request URL and so the bot token. `toMessengerError` keeps only the API description.
+    const e = toMessengerError(err);
+    deps.logger.warn(
+      { chatId, kind: e.kind, description: e.message },
+      'setMyCommands for chat scope failed; skipped',
+    );
   }
 }
