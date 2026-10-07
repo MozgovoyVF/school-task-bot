@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- Update-kind proposal cards (deadline move, assignee change, title change) no longer show the
+  "✏️ Изменить" button, which only answered that editing is available for new tasks (D48). The
+  card keeps "✅ Применить", "❌ Игнорировать" and "➕ Создать новой задачей"; to adjust the task
+  itself, open its card and use "✏️ Изменить" there. Cards sent earlier keep the button and the
+  same reply.
+
 ## [1.0.0] — 2026-10-07
 
 Phase 4 (production): verified backup/restore round-trip, a ticker-downtime watchdog and a

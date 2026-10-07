@@ -500,7 +500,6 @@ describe('cardsJob', () => {
     );
     expect(messenger.sent[0]?.opts?.buttons?.flat().map((b) => b.text)).toEqual([
       '✅ Применить',
-      '✏️ Изменить',
       '❌ Игнорировать',
       '➕ Создать новой задачей',
     ]);
