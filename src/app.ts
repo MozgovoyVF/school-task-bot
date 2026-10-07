@@ -181,7 +181,7 @@ export async function startApp(env: Env, overrides?: StartAppOverrides): Promise
   // `syncCommands` below both need (Task 1.11).
   await bot.init();
   await checkPrivacyMode(deps, bot.botInfo);
-  await syncCommands({ db, workspace, superadminIds: env.SUPERADMIN_TG_IDS }, bot.api);
+  await syncCommands({ db, workspace, superadminIds: env.SUPERADMIN_TG_IDS, logger }, bot.api);
 
   // Must run before `createTicker`/`ticker.tickOnce()` below: that first tick immediately
   // overwrites `app_state['ticker:heartbeat']` with the current time, so checking it any later would

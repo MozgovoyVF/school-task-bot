@@ -1,12 +1,14 @@
 # Changelog
 
-## [Unreleased]
+## [1.0.0] — 2026-10-07
 
-Phase 4 (production readiness): verified backup/restore round-trip, a ticker-downtime watchdog
-and a completed `/admin` error view, the operations runbook/owner-migration/legal document set,
-and a strict deployment profile B with a remote (RF-side) database. Task 4.5 (legal sign-off,
-production deploy, `/claim`, @BotFather ownership transfer, tag `v1.0.0`) is a manual (👤) step
-and not part of this entry.
+Phase 4 (production): verified backup/restore round-trip, a ticker-downtime watchdog and a
+completed `/admin` error view, the operations runbook/owner-migration/legal document set, and a
+strict deployment profile B with a remote (RF-side) database. Production launched on 2026-10-07
+(profile A, legal sign-off recorded in `docs/MIGRATION_TO_OWNER.md`): `/opt/stb-prod` with a clean
+database, Owner claimed via `/admin → Код владельца` + `/claim`, bot added to the working groups,
+a test assignment produced a card, the bot was transferred in @BotFather and its token reissued;
+daily encrypted backups run at 03:15 UTC.
 
 ### Added
 
@@ -40,6 +42,17 @@ and not part of this entry.
   app-only compose file (no local `db` service/`depends_on`) plus the RF-side Postgres 17 setup,
   TLS, WireGuard tunnel, connection check, backups and an EU-server no-data verification procedure.
 
+### Fixed
+
+- Startup no longer crash-loops when a chat-scope command menu can't be set:
+  `syncCommands` (`src/bot/commands.ts`) now logs and skips a failed `setMyCommands` for the
+  Owner's or a superadmin's own chat (400 "chat not found" — a fresh bot nobody has DM'd yet, or
+  a user who blocked it) instead of aborting `startApp`. Global-scope failures still throw. Found
+  on the first production start (`v1.0.0-rc.1`), fixed in `v1.0.0-rc.2`.
+- The bot token can no longer reach the logs from a network-level `setMyCommands` failure: the
+  skipped chat-scope warning logs only the chat id and the mapped error kind/description, and the
+  last-resort startup error print (`src/index.ts`) masks `bot<token>` in request URLs.
+
 ### Known open points (flagged for the user, not blocking)
 
 - `users.dm_blocked` has no automatic reset path: no code path ever sets it back to `false`, even
@@ -47,6 +60,8 @@ and not part of this entry.
   documented — not fixed — during Phase 4's final review; `docs/OPERATIONS.md`'s "Бот заблокирован
   пользователем" section now documents the manual SQL recovery (`UPDATE users SET dm_blocked =
 false WHERE tg_user_id = ...`) as the real, intended-for-now recovery path.
+- Task 4.5 step 3 (restore from backup on a clean server) is postponed by the user; the
+  backup/restore round-trip itself is covered by `scripts/test-backup-restore.sh`.
 
 ## [0.4.0] — 2026-10-03
 

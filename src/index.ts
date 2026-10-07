@@ -1,3 +1,4 @@
+import { inspect } from 'node:util';
 import { loadEnv } from './config/env.js';
 import { startApp } from './app.js';
 
@@ -26,6 +27,8 @@ async function main(): Promise<void> {
 main().catch((err: unknown) => {
   // The logger may not exist yet (e.g. `loadEnv()` rejected due to invalid env vars),
   // so this is the one legitimate last-resort use of the console in the whole app.
-  console.error('failed to start', err);
+  // A grammY `HttpError` wraps the fetch error, whose message and stack carry the request URL and so
+  // the bot token: mask it before printing.
+  console.error('failed to start', inspect(err, { depth: 5 }).replace(/bot\d+:[\w-]+/g, 'bot<redacted>'));
   process.exit(1);
 });
