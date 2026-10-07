@@ -88,9 +88,9 @@ describe('proposal card (SPEC §11.1)', () => {
     expect(upd.text).toContain(
       '🔄 Перенос срока: T12 «Подготовить расписание» · было пт, 25 сен → стало пн, 28 сен',
     );
+    // D48: no "✏️ Изменить" on an update card — the edit dialog only supports `create` proposals.
     expect(upd.buttons.flat().map((b) => b.text)).toEqual([
       '✅ Применить',
-      '✏️ Изменить',
       '❌ Игнорировать',
       '➕ Создать новой задачей',
     ]);
