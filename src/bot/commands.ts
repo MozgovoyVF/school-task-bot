@@ -1,6 +1,7 @@
 import type { BotCommand, BotCommandScope } from 'grammy/types';
 import type { DbOrTx } from '../db/client.js';
 import { getOwner } from '../domain/people/repo.js';
+import type { Logger } from '../ops/logger.js';
 import { texts } from './texts/ru.js';
 
 /**
@@ -27,6 +28,7 @@ export interface SyncCommandsDeps {
   /** The single default workspace (MVP, SPEC §5.2) whose Owner gets the full command scope. */
   workspace: { id: number };
   superadminIds: number[];
+  logger: Logger;
 }
 
 function cmd(name: string, description: string): BotCommand {
@@ -116,10 +118,29 @@ export async function syncCommands(deps: SyncCommandsDeps, api: CommandsApi): Pr
 
   const owner = await getOwner(deps.db, deps.workspace.id);
   if (owner) {
-    await api.setMyCommands(OWNER_COMMANDS, { scope: { type: 'chat', chat_id: owner.user.tgUserId } });
+    await setChatCommands(deps, api, OWNER_COMMANDS, owner.user.tgUserId);
   }
 
   for (const superadminId of dedupeIds(deps.superadminIds)) {
-    await api.setMyCommands(SUPERADMIN_COMMANDS, { scope: { type: 'chat', chat_id: superadminId } });
+    await setChatCommands(deps, api, SUPERADMIN_COMMANDS, superadminId);
+  }
+}
+
+/**
+ * A `chat`-scope call fails with 400 "chat not found" until that user has opened a DM with the bot
+ * (a fresh prod bot whose superadmin hasn't sent `/start` yet) or after they blocked it. That must
+ * not crash startup — the chat simply keeps the generic `all_private_chats` menu until the next sync
+ * (restart or `/claim`). Global-scope failures above still throw: they mean a broken token or API.
+ */
+async function setChatCommands(
+  deps: SyncCommandsDeps,
+  api: CommandsApi,
+  commands: readonly BotCommand[],
+  chatId: number,
+): Promise<void> {
+  try {
+    await api.setMyCommands(commands, { scope: { type: 'chat', chat_id: chatId } });
+  } catch (err) {
+    deps.logger.warn({ err, chatId }, 'setMyCommands for chat scope failed; skipped');
   }
 }

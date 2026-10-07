@@ -151,6 +151,7 @@ export function registerTransferHandlers(bot: Bot<BotContext>, deps: TransferHan
               db: deps.db,
               workspace: { id: result.workspaceId },
               superadminIds: deps.config.SUPERADMIN_TG_IDS,
+              logger: deps.logger,
             },
             ctx.api,
           ),

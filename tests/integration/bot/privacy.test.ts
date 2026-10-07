@@ -4,7 +4,7 @@ import { createBotHarness, type BotHarness } from '../../helpers/botHarness.js';
 import { dmText, groupText, callback, botKeyboardMessage } from '../../helpers/updates.js';
 import { texts } from '../../../src/bot/texts/ru.js';
 import { checkPrivacyMode } from '../../../src/bot/startupChecks.js';
-import { syncCommands } from '../../../src/bot/commands.js';
+import { syncCommands, type CommandsApi } from '../../../src/bot/commands.js';
 import { decodeCallback } from '../../../src/bot/keyboards/callbackCodec.js';
 import { upsertTelegramUser } from '../../../src/domain/people/repo.js';
 import { memberships } from '../../../src/db/schema/index.js';
@@ -124,7 +124,12 @@ describe('syncCommands', () => {
     await makeOwner(harness, OWNER);
 
     await syncCommands(
-      { db: harness.db, workspace: harness.deps.workspace, superadminIds: [SUPERADMIN_ID] },
+      {
+        db: harness.db,
+        workspace: harness.deps.workspace,
+        superadminIds: [SUPERADMIN_ID],
+        logger: harness.deps.logger,
+      },
       harness.bot.api,
     );
 
@@ -167,12 +172,73 @@ describe('syncCommands', () => {
     const harness = await createBotHarness({ superadminIds: [SUPERADMIN_ID] });
 
     await syncCommands(
-      { db: harness.db, workspace: harness.deps.workspace, superadminIds: [SUPERADMIN_ID] },
+      {
+        db: harness.db,
+        workspace: harness.deps.workspace,
+        superadminIds: [SUPERADMIN_ID],
+        logger: harness.deps.logger,
+      },
       harness.bot.api,
     );
 
     const calls = harness.calls.filter((c) => c.method === 'setMyCommands');
     expect(calls).toHaveLength(3);
+  });
+
+  it('does not throw when a chat-scope call fails (chat not found) and still syncs the other scopes', async () => {
+    const harness = await createBotHarness({ superadminIds: [SUPERADMIN_ID] });
+    await makeOwner(harness, OWNER);
+    const scopes: unknown[] = [];
+    // A brand-new prod bot: neither the Owner nor the superadmin has opened a DM with it yet, so
+    // Telegram rejects every `chat`-scope call with 400 "chat not found" (it used to crash startup).
+    const api: CommandsApi = {
+      setMyCommands: (_commands, other) => {
+        scopes.push(other?.scope);
+        if (other?.scope?.type === 'chat') {
+          return Promise.reject(new Error('Bad Request: chat not found'));
+        }
+        return Promise.resolve(true);
+      },
+    };
+
+    await expect(
+      syncCommands(
+        {
+          db: harness.db,
+          workspace: harness.deps.workspace,
+          superadminIds: [SUPERADMIN_ID, SUPERADMIN_ID + 1],
+          logger: harness.deps.logger,
+        },
+        api,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(scopes).toEqual([
+      { type: 'all_private_chats' },
+      { type: 'all_group_chats' },
+      { type: 'chat', chat_id: OWNER.id },
+      { type: 'chat', chat_id: SUPERADMIN_ID },
+      { type: 'chat', chat_id: SUPERADMIN_ID + 1 },
+    ]);
+  });
+
+  it('still throws when a global scope call fails', async () => {
+    const harness = await createBotHarness({ superadminIds: [SUPERADMIN_ID] });
+    const api: CommandsApi = {
+      setMyCommands: () => Promise.reject(new Error('Unauthorized')),
+    };
+
+    await expect(
+      syncCommands(
+        {
+          db: harness.db,
+          workspace: harness.deps.workspace,
+          superadminIds: [SUPERADMIN_ID],
+          logger: harness.deps.logger,
+        },
+        api,
+      ),
+    ).rejects.toThrow('Unauthorized');
   });
 });
 
