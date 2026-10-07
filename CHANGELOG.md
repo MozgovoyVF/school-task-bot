@@ -49,6 +49,9 @@ daily encrypted backups run at 03:15 UTC.
   Owner's or a superadmin's own chat (400 "chat not found" — a fresh bot nobody has DM'd yet, or
   a user who blocked it) instead of aborting `startApp`. Global-scope failures still throw. Found
   on the first production start (`v1.0.0-rc.1`), fixed in `v1.0.0-rc.2`.
+- The bot token can no longer reach the logs from a network-level `setMyCommands` failure: the
+  skipped chat-scope warning logs only the chat id and the mapped error kind/description, and the
+  last-resort startup error print (`src/index.ts`) masks `bot<token>` in request URLs.
 
 ### Known open points (flagged for the user, not blocking)
 
