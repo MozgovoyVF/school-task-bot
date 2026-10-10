@@ -191,8 +191,8 @@ importers:
         specifier: ^3.7.2
         version: 3.7.2
       openai:
-        specifier: ^7.23.0
-        version: 7.23.0(zod@4.6.5)
+        specifier: ^7.30.0
+        version: 7.30.0(zod@4.6.5)
       pino:
         specifier: ^10.3.1
         version: 10.3.1
@@ -1591,8 +1591,8 @@ packages:
     resolution: {integrity: sha512-0eJJY6hXLGf1udHwfNftBqH+g73EU4B504nZeKpz1sYRKafAghwxEJunB2O7rDZkL4PGfsMVnTXZ2EjibbqcsA==}
     engines: {node: '>=14.0.0'}
 
-  openai@7.23.0:
-    resolution: {integrity: sha512-0ecOXnFSMNWZq6cUBcTV6Lf93y+fm8BH/+QzFvpoP1UGNOE5pnytRa6HAPGCw+3IS9SIAW7rc1M8yyzN1PiBAQ==}
+  openai@7.30.0:
+    resolution: {integrity: sha512-tvvcPdhS56B/79o0mJS5h4JndAov5Sz78T7CFl4gJ+C9S3GoSqHNLO6lG/8kdK+/c13zWEI97Srf66ar0V242g==}
     engines: {node: '>=22.0.0'}
     peerDependencies:
       '@aws-sdk/credential-provider-node': '>=3.972.0 <4'
@@ -2987,7 +2987,7 @@ snapshots:
 
   on-exit-leak-free@2.1.2: {}
 
-  openai@7.23.0(zod@4.6.5):
+  openai@7.30.0(zod@4.6.5):
     optionalDependencies:
       zod: 4.6.5
 
